@@ -18,6 +18,7 @@ import {
   type SfxEntry,
 } from './sfx_manifest.generated';
 import { loadRuntimeSfxPack } from './sfx_runtime_pack';
+import { type RecentPlay, recordRecentPlay } from './sfx_recent_plays';
 
 const SAMPLE_GAIN = 0.85; // base level for sampled clips; sfxVolume multiplies this
 const MAX_VOICES = 24; // concurrent one-shot sources (frame-budget guard)
@@ -114,6 +115,12 @@ class Sfx {
   private footstepsOn = false; // off by default; driven by the footstepSfx setting
   private lx = 0;
   private lz = 0; // cached listener position
+  // Dev-only recent-plays log for the /dev sound panel. Off by default (zero
+  // cost for real players); the panel turns it on when it mounts. Loops,
+  // ambience, and music never touch this: it is only ever written from the
+  // two one-shot paths below, at the point each has its real resolved gain.
+  private devLogOn = false;
+  private recentPlays: RecentPlay[] = [];
 
   /** Set SFX volume (0..1). Shares the `sfxVolume` slider with `audio`. */
   setVolume(v: number): void {
@@ -204,6 +211,29 @@ class Sfx {
 
   private commitVariant(key: string, variantIndex: number): void {
     this.lastVariant.set(key, variantIndex);
+  }
+
+  /** Enable/disable the dev recent-plays log (see /dev sound). Off clears the
+   *  buffer so a later re-enable never shows stale entries from a prior session. */
+  setDevLogEnabled(on: boolean): void {
+    this.devLogOn = on;
+    if (!on) this.recentPlays = [];
+  }
+
+  /** Newest-first. Read-only snapshot for the dev panel to render/group. */
+  getRecentPlays(): readonly RecentPlay[] {
+    return this.recentPlays;
+  }
+
+  private recordDevPlay(key: string, variantIndex: number, gain: number): void {
+    if (!this.devLogOn || !this.ctx) return;
+    const variantId = this.entry(key)?.variants[variantIndex]?.id ?? String(variantIndex + 1);
+    this.recentPlays = recordRecentPlay(this.recentPlays, {
+      key,
+      variantId,
+      timestamp: this.ctx.currentTime * 1000,
+      gain,
+    });
   }
 
   private loadBuffer(key: string, variantIndex = 0): Promise<AudioBuffer | null> {
@@ -433,6 +463,7 @@ class Sfx {
       (opts?.gain ?? 1) *
       (this.entry(key)?.gain ?? 1) *
       (jitter ? 1 + (Math.random() * 2 - 1) * 0.1 : 1);
+    this.recordDevPlay(key, variantIndex, peak);
     const panner = this.makePanner(x, y, z);
     src.connect(g).connect(panner).connect(master);
     this.active++;
@@ -512,6 +543,7 @@ class Sfx {
       (jitter ? 1 + (Math.random() * 2 - 1) * 0.05 : 1);
     const g = ctx.createGain();
     g.gain.value = (opts?.gain ?? 1) * (this.entry(key)?.gain ?? 1);
+    this.recordDevPlay(key, variantIndex, g.gain.value);
     src.connect(g).connect(master);
     this.active++;
     src.onended = () => {
