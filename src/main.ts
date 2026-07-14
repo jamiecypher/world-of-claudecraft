@@ -57,6 +57,7 @@ import { mouselookReleaseFacing } from './game/mouselook_release';
 import { diagonalMovementVisualFacing } from './game/movement_visual';
 import { music } from './game/music';
 import { createPerfMonitor } from './game/perf';
+import { createSfxDevPanel } from './game/sfx_dev_panel';
 import { startPerfReporter } from './game/perf_reporter';
 import { adaptiveSelfAlphaLead } from './game/self_alpha_lead';
 import {
@@ -967,6 +968,16 @@ async function startGame(
   let hud!: Hud;
   const autoLoot = new AutoLoot();
   const perf = createPerfMonitor(null);
+  const sfxDevPanel = createSfxDevPanel();
+  if (sfxDevPanel.enabled) {
+    sfxDevPanel.refreshKeys();
+    sfxDevPanel.setPoseProvider(() => ({
+      x: world.player.pos.x,
+      y: world.player.pos.y,
+      z: world.player.pos.z,
+      facing: world.player.facing,
+    }));
+  }
   try {
     renderer = new Renderer(world, canvas, nameplates);
     renderer.setAudioSink(sfx);

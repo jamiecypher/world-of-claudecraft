@@ -66,6 +66,11 @@ export interface PlayOpts {
   // pile up and comb-filter into a metallic ring. 0 (default) plays the clip flat.
   attack?: number; // fade-in seconds (default 0 = instant)
   release?: number; // fade-out seconds; the clip is stopped once it ends
+  // Dev-only: force a specific variant index instead of the normal
+  // no-repeat-random pick. For the /dev sound panel's Sequential mode,
+  // where walking every take in a known order is the point, never used by
+  // real gameplay call sites.
+  forceVariantIndex?: number;
 }
 
 interface LoopSlot {
@@ -172,6 +177,19 @@ class Sfx {
 
   private entry(key: string): SfxEntry | undefined {
     return this.clips[key];
+  }
+
+  /** Every catalog key currently known to the client (fixed catalog plus
+   *  whatever the runtime pack/manifest has resolved). Dev-only listing for
+   *  the /dev sound panel's key picker, not used by any real playback path. */
+  listKeys(): string[] {
+    return Object.keys(this.clips);
+  }
+
+  /** Number of takes `key` has, at least 1 for any real key. Dev-only, for
+   *  the /dev sound panel's Sequential mode to know how many steps to walk. */
+  variantCount(key: string): number {
+    return Math.max(1, this.entry(key)?.variants.length ?? 1);
   }
 
   private authoredPlaybackRate(key: string): number {
@@ -428,7 +446,7 @@ class Sfx {
       master = this.master;
     if (!ctx || !master) return;
     if (this.tooFar(x, z)) return;
-    const variantIndex = this.nextVariantIndex(key);
+    const variantIndex = opts?.forceVariantIndex ?? this.nextVariantIndex(key);
     const cacheKey = assetCacheKey(key, variantIndex);
     const buf = this.buffers.get(cacheKey);
     if (!buf) {
