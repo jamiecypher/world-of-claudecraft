@@ -40,7 +40,7 @@ interface FlaggedPlay {
 }
 
 export class SfxDevPanel {
-  readonly enabled: boolean;
+  private visible = false;
   private root: HTMLDivElement | null = null;
   private collapsed = true;
   private keys: string[] = [];
@@ -68,18 +68,52 @@ export class SfxDevPanel {
 
   constructor() {
     const params = new URLSearchParams(location.search);
-    this.enabled = params.has('audiodev') || localStorage.getItem(STORAGE_KEY) === '1';
-    if (this.enabled) {
-      sfx.setDevLogEnabled(true);
-      this.mount();
+    const startVisible = params.has('audiodev') || localStorage.getItem(STORAGE_KEY) === '1';
+    if (startVisible) this.show();
+  }
+
+  /** Whether the panel is currently mounted/visible. Read by main.ts to
+   *  decide whether to keep feeding it a pose provider. */
+  get isVisible(): boolean {
+    return this.visible;
+  }
+
+  /** Toggled by the client-only `/dev sound` chat command (intercepted
+   *  before it ever reaches world.chat(), this is a pure UI concern, sim/
+   *  stays host-agnostic and never sees it) as well as the initial
+   *  ?audiodev query flag / localStorage state. */
+  toggle(): void {
+    if (this.visible) this.hide();
+    else this.show();
+  }
+
+  private show(): void {
+    this.visible = true;
+    localStorage.setItem(STORAGE_KEY, '1');
+    sfx.setDevLogEnabled(true);
+    if (!this.root) this.mount();
+    if (this.root) this.root.style.display = 'block';
+    if (!this.renderTimer) this.renderTimer = setInterval(() => this.renderLog(), LOG_REFRESH_MS);
+    this.refreshKeys();
+  }
+
+  private hide(): void {
+    this.visible = false;
+    localStorage.removeItem(STORAGE_KEY);
+    sfx.setDevLogEnabled(false);
+    this.stopLoop();
+    if (this.root) this.root.style.display = 'none';
+    if (this.renderTimer) {
+      clearInterval(this.renderTimer);
+      this.renderTimer = null;
     }
   }
 
-  /** main.ts calls this once, and again whenever the manifest's resolved
-   *  key set could have changed (it does not currently change post-load, but
-   *  cheap to keep this pull-based rather than assuming). */
+  /** main.ts calls this once on show, and again whenever the manifest's
+   *  resolved key set could have changed (it does not currently change
+   *  post-load, but cheap to keep this pull-based rather than assuming). */
   refreshKeys(): void {
-    if (!this.enabled) return;
+    if (!this.visible) return;
     this.keys = sfx.listKeys().sort();
     if (!this.keys.includes(this.selectedKey)) this.selectedKey = this.keys[0] ?? '';
     this.renderKeyOptions();
@@ -277,7 +311,6 @@ export class SfxDevPanel {
     this.root = root;
     this.updateModeToggle();
     this.updatePlayButton();
-    this.renderTimer = setInterval(() => this.renderLog(), LOG_REFRESH_MS);
   }
 
   private toggleCollapsed(): void {
@@ -319,6 +352,14 @@ export class SfxDevPanel {
     }
     this.logEl.textContent = lines.join('\n') || '(nothing played yet)';
   }
+}
+
+/** `/dev sound` toggles the panel. Pure match, client-only: this never
+ *  reaches the sim (sim/ stays host-agnostic and has no concept of a DOM
+ *  overlay), the caller intercepts it before world.chat(), same pattern as
+ *  hud.ts's maybeHandleQuestShareCommand for "/share". */
+export function isSfxDevPanelCommand(raw: string): boolean {
+  return /^\/dev\s+sound(?:\s|$)/i.test(raw.trim());
 }
 
 export function createSfxDevPanel(): SfxDevPanel {

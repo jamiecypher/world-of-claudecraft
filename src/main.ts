@@ -57,7 +57,7 @@ import { mouselookReleaseFacing } from './game/mouselook_release';
 import { diagonalMovementVisualFacing } from './game/movement_visual';
 import { music } from './game/music';
 import { createPerfMonitor } from './game/perf';
-import { createSfxDevPanel } from './game/sfx_dev_panel';
+import { createSfxDevPanel, isSfxDevPanelCommand } from './game/sfx_dev_panel';
 import { startPerfReporter } from './game/perf_reporter';
 import { adaptiveSelfAlphaLead } from './game/self_alpha_lead';
 import {
@@ -969,15 +969,12 @@ async function startGame(
   const autoLoot = new AutoLoot();
   const perf = createPerfMonitor(null);
   const sfxDevPanel = createSfxDevPanel();
-  if (sfxDevPanel.enabled) {
-    sfxDevPanel.refreshKeys();
-    sfxDevPanel.setPoseProvider(() => ({
-      x: world.player.pos.x,
-      y: world.player.pos.y,
-      z: world.player.pos.z,
-      facing: world.player.facing,
-    }));
-  }
+  sfxDevPanel.setPoseProvider(() => ({
+    x: world.player.pos.x,
+    y: world.player.pos.y,
+    z: world.player.pos.z,
+    facing: world.player.facing,
+  }));
   try {
     renderer = new Renderer(world, canvas, nameplates);
     renderer.setAudioSink(sfx);
@@ -1151,6 +1148,13 @@ async function startGame(
       // the active channel tab supplies the send prefix, so plain text goes to
       // that channel without the player retyping "/world" etc.
       const raw = chatInput.value;
+      // "/dev sound" toggles the audio dev panel, a pure client/UI concern
+      // (never sent to the sim, see isSfxDevPanelCommand's own comment).
+      if (isSfxDevPanelCommand(raw)) {
+        sfxDevPanel.toggle();
+        closeChat();
+        return;
+      }
       // "/share" links the selected quest into party chat; skip the normal send path.
       if (!hud.maybeHandleQuestShareCommand(raw)) {
         const text = hud.composeChatSend(raw);
