@@ -58,6 +58,7 @@ import { diagonalMovementVisualFacing } from './game/movement_visual';
 import { music } from './game/music';
 import { createPerfMonitor } from './game/perf';
 import { createSfxDevPanel, isSfxDevPanelCommand } from './game/sfx_dev_panel';
+import { createSfxGainLabPanel, isSfxGainLabPanelCommand } from './game/sfx_gain_lab_panel';
 import { startPerfReporter } from './game/perf_reporter';
 import { adaptiveSelfAlphaLead } from './game/self_alpha_lead';
 import {
@@ -975,6 +976,13 @@ async function startGame(
     z: world.player.pos.z,
     facing: world.player.facing,
   }));
+  const sfxGainLabPanel = createSfxGainLabPanel();
+  sfxGainLabPanel.setPoseProvider(() => ({
+    x: world.player.pos.x,
+    y: world.player.pos.y,
+    z: world.player.pos.z,
+    facing: world.player.facing,
+  }));
   try {
     renderer = new Renderer(world, canvas, nameplates);
     renderer.setAudioSink(sfx);
@@ -1152,6 +1160,14 @@ async function startGame(
       // (never sent to the sim, see isSfxDevPanelCommand's own comment).
       if (isSfxDevPanelCommand(raw)) {
         sfxDevPanel.toggle();
+        closeChat();
+        return;
+      }
+      // "/dev mix" toggles the throwaway gain-lab panel, same pure
+      // client/UI concern as "/dev sound" above (see
+      // isSfxGainLabPanelCommand's own comment).
+      if (isSfxGainLabPanelCommand(raw)) {
+        sfxGainLabPanel.toggle();
         closeChat();
         return;
       }
