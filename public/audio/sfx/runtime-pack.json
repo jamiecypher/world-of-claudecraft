@@ -1,7 +1,7 @@
 {
   "format": "woc-sfx-runtime-pack",
   "version": 1,
-  "bundleId": "0f08c240f956222d47c41f9b345724ee41ce59559accb7c8ffa7aea8e671dfcd",
+  "bundleId": "ddc399ebac6bf24cc9d0b7b7e49cb73faee9e626fb2d66f0c4e59b6cfb84a9d0",
   "catalogHash": "5465d5cc1ffb7d30921f47c5bc5b873659d81c63660e547e28bbc70888b32708",
   "clips": {
     "amb_birds": {
@@ -1838,9 +1838,9 @@
       "variants": [
         {
           "id": "main",
-          "url": "/audio/sfx/ui_level_up.mp3?v=61b1e4f944c8",
-          "bytes": 24493,
-          "sha256": "61b1e4f944c895ae0c2358e90093afb8a83b86af33647a0bc26cc1d6cb0937eb"
+          "url": "/audio/sfx/ui_level_up.mp3?v=8da8c7f6528d",
+          "bytes": 88397,
+          "sha256": "8da8c7f6528d31d4c99354d19d38c2e47afd5bfaaa519c074597c9230c3ee50e"
         }
       ],
       "gain": 1,

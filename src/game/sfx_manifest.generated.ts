@@ -2904,21 +2904,21 @@ export const SFX_CLIPS =
     ]
   },
   "ui_level_up": {
-    "url": "/audio/sfx/ui_level_up.mp3?v=61b1e4f944c8",
+    "url": "/audio/sfx/ui_level_up.mp3?v=8da8c7f6528d",
     "loop": false,
     "category": "ui",
     "preload": "startup",
     "spatial": false,
     "gain": 1,
     "playbackRate": 1,
-    "bytes": 24493,
-    "hash": "61b1e4f944c8",
+    "bytes": 88397,
+    "hash": "8da8c7f6528d",
     "variants": [
       {
         "id": "main",
-        "url": "/audio/sfx/ui_level_up.mp3?v=61b1e4f944c8",
-        "bytes": 24493,
-        "sha256": "61b1e4f944c895ae0c2358e90093afb8a83b86af33647a0bc26cc1d6cb0937eb"
+        "url": "/audio/sfx/ui_level_up.mp3?v=8da8c7f6528d",
+        "bytes": 88397,
+        "sha256": "8da8c7f6528d31d4c99354d19d38c2e47afd5bfaaa519c074597c9230c3ee50e"
       }
     ]
   },
