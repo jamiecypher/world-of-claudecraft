@@ -1,8 +1,8 @@
 {
   "format": "woc-sfx-runtime-pack",
   "version": 1,
-  "bundleId": "ddc399ebac6bf24cc9d0b7b7e49cb73faee9e626fb2d66f0c4e59b6cfb84a9d0",
-  "catalogHash": "5465d5cc1ffb7d30921f47c5bc5b873659d81c63660e547e28bbc70888b32708",
+  "bundleId": "53ee6bec63d569faee9ab8bcf801af5ab5f1e787a8dd60b50baf99a448098b5f",
+  "catalogHash": "b86ec1147febfdbc068b97a4eb70b733baaae3b1b673bdc687bf883dd1e0c5bb",
   "clips": {
     "amb_birds": {
       "variants": [
@@ -1901,6 +1901,42 @@
           "url": "/audio/sfx/ui_whisper.mp3?v=e2387affefec",
           "bytes": 13835,
           "sha256": "e2387affefec944ba197e0a069d5b146d2aef5681869ab1e099f40ff269f7cf8"
+        }
+      ],
+      "gain": 1,
+      "playbackRate": 1
+    },
+    "wand_arcane": {
+      "variants": [
+        {
+          "id": "main",
+          "url": "/audio/sfx/wand_arcane.mp3?v=e4c078b55459",
+          "bytes": 13208,
+          "sha256": "e4c078b55459bf1879599fdc5bf09a80b86da2dbed36fa0886220ef09aa17d87"
+        }
+      ],
+      "gain": 1,
+      "playbackRate": 1
+    },
+    "wand_holy": {
+      "variants": [
+        {
+          "id": "main",
+          "url": "/audio/sfx/wand_holy.mp3?v=c895abaf2f30",
+          "bytes": 13208,
+          "sha256": "c895abaf2f30650a1a09b0e427ff61f6ea3457c4b9e8a79c42163055c5448405"
+        }
+      ],
+      "gain": 1,
+      "playbackRate": 1
+    },
+    "wand_shadow": {
+      "variants": [
+        {
+          "id": "main",
+          "url": "/audio/sfx/wand_shadow.mp3?v=33725020b43c",
+          "bytes": 15716,
+          "sha256": "33725020b43cd3c36a22f21d1e61d33bcefcbd22b2b9de804c2f357f3a05b75b"
         }
       ],
       "gain": 1,
