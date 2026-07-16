@@ -11,7 +11,15 @@
 // writeSfxGainMap/writeSfxSpeedMap in scripts/sfx/playback_profile.mjs.
 
 import { sfx } from './sfx';
-import { actionsForFamily, familiesIn, keysInScope } from './sfx_gain_lab_hierarchy';
+import {
+  actionsForFamily,
+  ceilingForScope,
+  familiesIn,
+  keysInScope,
+  tightestKeyInScope,
+} from './sfx_gain_lab_hierarchy';
+
+const OVERSHOOT_RANGE_DB = 24; // how far past the real ceiling the panel lets you preview
 
 const STORAGE_KEY = 'woc_sfx_gain_lab';
 const MELEE_RANGE = 5; // yards; src/sim/types.ts MELEE_RANGE, duplicated deliberately, see sfx_dev_panel.ts
@@ -40,13 +48,18 @@ export class SfxGainLabPanel {
   private selectedAction: string | null = null;
   private gainDb = 0;
   private rateDelta = 0;
+  private allowOvershoot = false;
   private poseProvider: (() => PlayerPose | null) | null = null;
   private rows: WriteScopeRow[] = [];
 
   private strip: HTMLDivElement | null = null;
   private body: HTMLDivElement | null = null;
+  private familyLabel: HTMLDivElement | null = null;
   private familySelect: HTMLSelectElement | null = null;
+  private actionLabel: HTMLDivElement | null = null;
   private actionSelect: HTMLSelectElement | null = null;
+  private ceilingLabel: HTMLDivElement | null = null;
+  private overshootCheckbox: HTMLInputElement | null = null;
   private gainRange: HTMLInputElement | null = null;
   private gainNumber: HTMLInputElement | null = null;
   private rateRange: HTMLInputElement | null = null;
@@ -89,6 +102,7 @@ export class SfxGainLabPanel {
     if (!this.families.includes(this.selectedFamily)) this.selectedFamily = this.families[0] ?? '';
     this.renderFamilyOptions();
     this.refreshActions();
+    this.refreshGainRangeForScope();
   }
 
   setPoseProvider(provider: () => PlayerPose | null): void {
@@ -109,9 +123,46 @@ export class SfxGainLabPanel {
     return keysInScope(sfx.listKeys(), this.selectedFamily, this.selectedAction);
   }
 
+  /** The real production ceiling for the current scope, or undefined if the
+   *  scope is empty. */
+  private currentCeilingDb(): number | undefined {
+    return ceilingForScope(this.currentScopeKeys());
+  }
+
+  private renderCeilingLabel(): void {
+    if (!this.ceilingLabel) return;
+    const ceiling = this.currentCeilingDb();
+    if (ceiling === undefined) {
+      this.ceilingLabel.textContent = 'ceiling: (no keys in scope)';
+      return;
+    }
+    const over = this.gainDb > ceiling;
+    this.ceilingLabel.textContent = `ceiling: ${ceiling.toFixed(1)}dB${over ? '  (past ceiling, preview only)' : ''}`;
+    this.ceilingLabel.style.color = over ? '#f5a623' : '#9db4d4';
+  }
+
+  /** Extends the slider's usable max past the real ceiling when "test past
+   *  ceiling" is checked, so overshoot can be auditioned live without ever
+   *  affecting what write scope/export can actually produce. */
+  private refreshGainRangeForScope(): void {
+    const ceiling = this.currentCeilingDb() ?? 0;
+    const max = this.allowOvershoot ? ceiling + OVERSHOOT_RANGE_DB : Math.max(ceiling, 0);
+    if (this.gainRange) this.gainRange.max = String(max);
+    if (this.gainDb > max) {
+      this.gainDb = max;
+      if (this.gainRange) this.gainRange.value = String(max);
+      if (this.gainNumber) this.gainNumber.value = String(max);
+    }
+    this.renderCeilingLabel();
+  }
+
   private preview(): void {
     const keys = this.currentScopeKeys();
-    const key = keys[0];
+    // Play the key that actually SETS the scope's ceiling, not an arbitrary
+    // one: every key is already individually pinned to its own ceiling in
+    // the live gain map, so previewing a looser key than the scope's true
+    // (tightest) constraint would make the headroom look bigger than it is.
+    const key = tightestKeyInScope(keys);
     if (!key) return;
     const pos = this.meleeRangePosition();
     if (!pos) return;
@@ -185,27 +236,60 @@ export class SfxGainLabPanel {
     root.appendChild(body);
     this.body = body;
 
+    const familyLabel = document.createElement('div');
+    familyLabel.style.cssText = 'color:#9db4d4;margin-bottom:2px;';
+    body.appendChild(familyLabel);
+    this.familyLabel = familyLabel;
+
     const familySelect = document.createElement('select');
     familySelect.style.cssText = 'width:100%;background:#0b1320;color:#e6f0ff;border:1px solid #334;margin-bottom:6px;';
     familySelect.addEventListener('change', () => {
       this.selectedFamily = familySelect.value;
       this.selectedAction = null;
       this.refreshActions();
+      this.refreshGainRangeForScope();
     });
     body.appendChild(familySelect);
     this.familySelect = familySelect;
+
+    const actionLabel = document.createElement('div');
+    actionLabel.style.cssText = 'color:#9db4d4;margin-bottom:2px;';
+    body.appendChild(actionLabel);
+    this.actionLabel = actionLabel;
 
     const actionSelect = document.createElement('select');
     actionSelect.style.cssText = 'width:100%;background:#0b1320;color:#e6f0ff;border:1px solid #334;margin-bottom:6px;';
     actionSelect.addEventListener('change', () => {
       this.selectedAction = actionSelect.value || null;
+      this.refreshGainRangeForScope();
     });
     body.appendChild(actionSelect);
     this.actionSelect = actionSelect;
 
+    const ceilingLabel = document.createElement('div');
+    ceilingLabel.style.cssText = 'margin-bottom:4px;color:#9db4d4;';
+    body.appendChild(ceilingLabel);
+    this.ceilingLabel = ceilingLabel;
+
+    const overshootRow = document.createElement('label');
+    overshootRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:6px;cursor:pointer;';
+    const overshootCheckbox = document.createElement('input');
+    overshootCheckbox.type = 'checkbox';
+    overshootCheckbox.addEventListener('change', () => {
+      this.allowOvershoot = overshootCheckbox.checked;
+      this.refreshGainRangeForScope();
+    });
+    const overshootText = document.createElement('span');
+    overshootText.textContent = 'test past ceiling (preview only, write scope still clamps)';
+    overshootRow.appendChild(overshootCheckbox);
+    overshootRow.appendChild(overshootText);
+    body.appendChild(overshootRow);
+    this.overshootCheckbox = overshootCheckbox;
+
     const gainRow = this.buildSliderRow('gain dB', -24, 24, 0.5, (value) => {
       this.gainDb = value;
       this.preview();
+      this.renderCeilingLabel();
     });
     body.appendChild(gainRow.row);
     this.gainRange = gainRow.range;
@@ -310,8 +394,16 @@ export class SfxGainLabPanel {
   }
 
   private refreshActions(): void {
-    if (!this.actionSelect) return;
+    if (!this.actionSelect || !this.familyLabel || !this.actionLabel) return;
     const actions = actionsForFamily(sfx.listKeys(), this.selectedFamily);
+    const hasActions = actions.length > 0;
+    // A key with no action children (foot_grass, ui_click, ...) is not
+    // meaningfully a "family": label and treat it as a single flat key, and
+    // hide the action tier entirely rather than showing an empty/pointless
+    // "(whole family)"-only dropdown.
+    this.familyLabel.textContent = hasActions ? 'family' : 'key';
+    this.actionLabel.style.display = hasActions ? 'block' : 'none';
+    this.actionLabel.textContent = 'action (or whole family)';
     this.actionSelect.innerHTML = '';
     const anyOption = document.createElement('option');
     anyOption.value = '';
@@ -323,7 +415,7 @@ export class SfxGainLabPanel {
       option.textContent = action;
       this.actionSelect.appendChild(option);
     }
-    this.actionSelect.style.display = actions.length > 0 ? 'block' : 'none';
+    this.actionSelect.style.display = hasActions ? 'block' : 'none';
     this.selectedAction = null;
   }
 
@@ -336,11 +428,14 @@ export class SfxGainLabPanel {
     }
     for (const [index, row] of this.rows.entries()) {
       const scope = row.action ? `${row.family}+${row.action}` : row.family;
+      const ceiling = ceilingForScope(row.keys) ?? 0;
+      const over = row.gainDb > ceiling;
       const line = document.createElement('div');
       line.style.cssText = 'display:flex;gap:6px;align-items:center;';
       const text = document.createElement('span');
-      text.style.cssText = 'flex:1;';
-      text.textContent = `${scope}  g${row.gainDb.toFixed(1)}dB  r${row.rateDelta >= 0 ? '+' : ''}${row.rateDelta.toFixed(2)}  (${row.keys.length} keys)`;
+      text.style.cssText = `flex:1;${over ? 'color:#f5a623;' : ''}`;
+      const clampNote = over ? `  [clamps to ${ceiling.toFixed(1)}dB in production]` : '';
+      text.textContent = `${scope}  g${row.gainDb.toFixed(1)}dB  r${row.rateDelta >= 0 ? '+' : ''}${row.rateDelta.toFixed(2)}  (${row.keys.length} keys)${clampNote}`;
       const removeButton = document.createElement('button');
       removeButton.textContent = 'x';
       removeButton.addEventListener('click', () => this.removeRow(index));
