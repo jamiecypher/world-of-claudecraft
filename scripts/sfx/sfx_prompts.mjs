@@ -120,7 +120,15 @@ export const SFX = [
     custom: true,
   },
   {
+    key: 'mount_run_terrorspark_groundshaker_start',
+    custom: true,
+  },
+  {
     key: 'mount_run_terrorspark_groundshaker',
+    custom: true,
+  },
+  {
+    key: 'mount_run_terrorspark_groundshaker_stop',
     custom: true,
   },
   {
