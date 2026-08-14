@@ -1,0 +1,74 @@
+{
+  "assetId": "wooden_toy_train",
+  "sourceKind": "user-supplied AI-generated concept art",
+  "sourceTool": "not supplied",
+  "sourcePrompt": "not supplied",
+  "sourceInputs": "The user supplied the written mount brief, then choochoo.png and the clearer two-segment design sheet train2.png.",
+  "generationTimestamp": "not supplied",
+  "sourceRedistributed": false,
+  "confirmationDate": "2026-08-13",
+  "permissionContext": "The user supplied E:/choochoo.png and requested a World of ClaudeCraft mount derived from its visual direction.",
+  "shippingPolicy": "The source image and transient intake crops remain uncommitted. Full model and prompt lineage must be supplied or the visual must be regenerated with recorded lineage before shipping review.",
+  "source": {
+    "pathAtIntake": "/mnt/e/choochoo.png",
+    "sha256": "0d33280f648e594982ae1f71fad58791fa5400653d1789d43104ccf6c1010b16",
+    "bytes": 2613779,
+    "width": 1536,
+    "height": 1024,
+    "colorFormat": "PNG"
+  },
+  "secondarySource": {
+    "pathAtIntake": "/mnt/e/train2.png",
+    "sha256": "d3542c26f838dc49a4e85876e7ea13b672d6d17bad43c1ca2bf4b1585186244f",
+    "bytes": 2341538,
+    "width": 2000,
+    "height": 1016,
+    "colorFormat": "PNG",
+    "role": "authoritative segment separation, coupling gap, wheel hierarchy, and side-profile reference",
+    "admission": {
+      "ran": true,
+      "admitted": true,
+      "foregroundCoverage": 0.6634,
+      "largestComponentFraction": 0.9995,
+      "pHash": "15487915127989593999"
+    }
+  },
+  "admissionGate": {
+    "tool": "img2threejs forge/stage1_intake/check_reference_admission.py",
+    "ran": true,
+    "viewpoint": "three-quarter",
+    "admitted": true,
+    "reasons": [],
+    "foregroundCoverage": 0.8923,
+    "largestComponentFraction": 0.9999,
+    "pHash": "12340308553567714456",
+    "duplicateOfHash": null,
+    "technicalSuitability": "pass",
+    "semanticSuitability": "conditional: the target is clear, but it is one staged three-quarter scene with rider occlusion and inferred hidden surfaces"
+  },
+  "designBoundary": {
+    "kept": [
+      "black-painted wooden toy construction with red frame and trim",
+      "restrained brass bands, fasteners, bell, and hubs",
+      "chunky cylindrical boiler, round front, exaggerated smokestack, and small cowcatcher",
+      "open recessed driver pod immediately behind the boiler",
+      "short coupling and tiny open-top passenger wagon",
+      "forward recessed passenger pod and exposed rear-facing bench",
+      "slightly oversized riders relative to the enchanted toy",
+      "a visible open gap and short drawbar between independently framed engine and caboose",
+      "small front pilot wheel, medium center wheel, largest rear engine wheel, and two similarly sized caboose wheels"
+    ],
+    "excluded": [
+      "roof, enclosed cab, canopy, or overhead structure",
+      "realistic locomotive scale or engineering detail",
+      "background forest, path, rocks, smoke, and concept lighting",
+      "baked rider meshes, baked wheel animation, and baked coupling animation",
+      "real multiplayer passenger-system behavior in this mount asset pass"
+    ],
+    "inferred": [
+      "the hidden left side mirrors the visible construction language",
+      "the underside uses a minimal toy chassis and axle layout",
+      "the caboose rear bench remains completely open above and around the rider"
+    ]
+  }
+}

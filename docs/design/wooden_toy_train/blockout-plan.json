@@ -1,0 +1,111 @@
+{
+  "assetId": "wooden_toy_train",
+  "status": "proposed Stage 1 blockout envelope, pending visual approval",
+  "coordinateSystem": {
+    "front": "+Z",
+    "up": "+Y",
+    "centerline": "X=0"
+  },
+  "overallEnvelope": {
+    "width": 2.3,
+    "length": 6.14,
+    "maximumBodyHeight": 2.45,
+    "groundClearance": 0.18
+  },
+  "components": {
+    "engine": {
+      "bounds": {
+        "width": 2.3,
+        "length": 3.02,
+        "height": 2.27,
+        "zCenter": 1.16
+      },
+      "boiler": {
+        "radius": 0.58,
+        "length": 1.72,
+        "position": [0, 1.24, 1.78]
+      },
+      "driverPod": {
+        "interiorWidth": 1.5,
+        "interiorDepth": 1.4,
+        "wallHeightAboveSeat": 0.52,
+        "position": [0, 0.88, 0.38]
+      },
+      "wheelTreatment": {
+        "layout": "small front, medium middle, large rear",
+        "radii": [0.32, 0.56, 0.56],
+        "chassisWidth": 1.86,
+        "guardStyle": "broad dark wooden side frame with simple red top and bottom edge bands; wheels mounted outboard and overlapping the frame in profile; no individual fenders",
+        "minimumGuardClearanceAboveWheel": "not applicable; reference uses outboard wheels visually overlapping the side frame",
+        "driverLinkage": "two equal-radius drivers on a common axle height; red rigid coupling rod seated on matching off-center crank bosses and pins; compact cylinders, fixed-horizontal-guide crossheads, piston rods, and 0.780-unit red connecting rods fitted symmetrically on both sides; left and right crank phases quartered by 90 degrees; complete six-spoke fields with no counterweight fill"
+      }
+    },
+    "coupling": {
+      "pivot": [0, 0.55, -0.36],
+      "visibleLength": 0.72,
+      "openBodyGap": 0.47,
+      "futureYawLimitDegrees": 12
+    },
+    "caboose": {
+      "bounds": {
+        "width": 2.2,
+        "length": 2.64,
+        "height": 1.32,
+        "zCenter": -1.88
+      },
+      "forwardPod": {
+        "interiorWidth": 1.5,
+        "interiorDepth": 1.6,
+        "wallHeightAboveSeat": 0.5,
+        "position": [0, 0.86, -1.32]
+      },
+      "rearBench": {
+        "width": 1.64,
+        "depth": 0.43,
+        "position": [0, 1.04, -2.78]
+      },
+      "wheelTreatment": {
+        "layout": "two equal small wheels",
+        "radii": [0.38, 0.38],
+        "chassisWidth": 1.84,
+        "guardStyle": "broad dark wooden side frame with simple red top and bottom edge bands; wheels mounted outboard and overlapping the frame in profile; no individual fenders",
+        "minimumGuardClearanceAboveWheel": "not applicable; reference uses outboard wheels visually overlapping the side frame"
+      }
+    }
+  },
+  "riderSockets": [
+    {
+      "name": "Socket_Driver",
+      "position": [0.066, 1.18, 0.38],
+      "yawDegrees": 0,
+      "role": "forward-facing driver in recessed open pod"
+    },
+    {
+      "name": "Socket_Passenger_1",
+      "position": [0.066, 1.16, -1.32],
+      "yawDegrees": 0,
+      "role": "forward-facing passenger in recessed open pod"
+    },
+    {
+      "name": "Socket_Passenger_2",
+      "position": [-0.066, 1.16, -2.78],
+      "yawDegrees": 180,
+      "role": "rear-facing passenger on exposed rear bench; visible skinned hip envelope is centered between the physical seat edges"
+    }
+  ],
+  "measuredPlayerEnvelope": {
+    "width": 1.427,
+    "depth": 1.411,
+    "verticalSpan": 2.591,
+    "belowSeatOrigin": 0.354,
+    "horizontalBudgetPerOccupant": [1.45, 1.45]
+  },
+  "reviewQuestions": [
+    "Do all three torsos and heads remain readable without a roof or tall rail?",
+    "Do both pods conceal the awkward lower-body portion of Sit_Floor_Idle?",
+    "Do the rear passenger legs hang clear of the caboose and rear wheels?",
+    "Does the 2.30 unit width feel narrow enough while retaining shoulder clearance?",
+    "Does the 5.90 unit length still read as one small toy train rather than two full vehicles?"
+  ],
+  "approvalRule": "No detailed locomotive or caboose geometry begins until these dimensions and sockets pass real-player visual review."
+}

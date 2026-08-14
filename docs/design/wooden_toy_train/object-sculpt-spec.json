@@ -1,0 +1,1711 @@
+{
+  "targetName": "Wooden Toy Train",
+  "targetId": "wooden_toy_train",
+  "schemaVersion": "2.1",
+  "terminologyProfile": {
+    "domain": "real-time procedural Three.js mount asset",
+    "geometryTerms": [
+      "silhouette",
+      "primitive",
+      "pivot",
+      "socket",
+      "bounds",
+      "negative space",
+      "articulation"
+    ],
+    "materialTerms": [
+      "albedo",
+      "roughness",
+      "metalness",
+      "vertex color",
+      "normal",
+      "ambient occlusion"
+    ],
+    "lightingTerms": [
+      "key light",
+      "fill light",
+      "rim light",
+      "contact shadow",
+      "tone mapping"
+    ],
+    "descriptionRule": "Use measurable geometry, transform, material, and lighting terms."
+  },
+  "sourceImage": "user-supplied concept described by reference-metadata.json",
+  "suitability": "conditional",
+  "scores": {
+    "object_isolation": 2,
+    "silhouette_readability": 3,
+    "depth_inference": 2,
+    "primitive_decomposition": 3,
+    "material_procedurality": 3,
+    "occlusion_risk": 3,
+    "interaction_fit": 3
+  },
+  "designLocks": {
+    "mountClass": "standalone three-seat articulated toy vehicle",
+    "referencePolicy": "two user-supplied AI concept images; both admissions passed; train2.png is authoritative for segment gap and wheel hierarchy; exact prompt and model lineage remain unavailable and must be resolved before shipping",
+    "materialSystem": "vertex-color-first painted wood and metal buckets; any later surface maps require independent channels and KTX2 compression",
+    "locomotion": "rolling vehicle with procedural wheel rotation and coupling yaw, never baked clips",
+    "passBoundary": "Stage 1 is primitive blockout and real seated-rider fit only"
+  },
+  "stageScope": {
+    "thisPass": [
+      "complete primitive locomotive, visibly separated coupling, and caboose blockout",
+      "all wheel placeholders",
+      "Socket_Driver, Socket_Passenger_1, and Socket_Passenger_2",
+      "three real player models posed with Sit_Floor_Idle for authoring evidence",
+      "measured overall and rider bounds from the generated blockout"
+    ],
+    "deferred": [
+      "detailed locomotive geometry",
+      "detailed caboose geometry",
+      "surface materials, grain, wear, rivets, and brass polish",
+      "runtime passenger-system behavior",
+      "coupling articulation, wheel rotation, bob, steam, particles, and audio",
+      "content registration, item icon, Reliquary entry, and i18n"
+    ]
+  },
+  "preSpecAssessment": {
+    "objectClass": {
+      "primaryType": "whimsical ride-on wooden toy steam train",
+      "primaryDomain": "object",
+      "formLanguage": [
+        "stylized hard-surface",
+        "chunky toy construction",
+        "open ride-on vehicle"
+      ],
+      "structureKind": [
+        "compound object",
+        "articulated assembly",
+        "repeated wheel modules"
+      ],
+      "motionPotential": [
+        "whole-object transform",
+        "coupling yaw",
+        "wheel rotation",
+        "effect emitters"
+      ],
+      "materialFamilies": [
+        "black-painted wood",
+        "red-painted wood",
+        "aged brass",
+        "dark iron"
+      ],
+      "notes": "No roof, enclosed cab, canopy, or overhead structure. Riders should read slightly oversized relative to the toy."
+    },
+    "complexity": {
+      "tier": "complex",
+      "scores": {
+        "silhouetteComplexity": 2,
+        "componentCount": 3,
+        "hierarchyDepth": 3,
+        "repetitionDensity": 3,
+        "materialLayerCount": 2,
+        "localDetailDensity": 2,
+        "occlusionRisk": 3,
+        "actionReadinessNeed": 3
+      },
+      "estimatedCounts": {
+        "macroComponents": 3,
+        "mesoComponents": 14,
+        "microFeatureGroups": 10,
+        "materialLayers": 4,
+        "repetitionSystems": 4
+      },
+      "reasoning": [
+        "The engine, coupling, and caboose form a nested transform hierarchy with three rider sockets.",
+        "Rider occlusion makes fit and negative space more important than literal reference matching.",
+        "Wheels, bands, planks, and fasteners create repeated systems in later stages."
+      ]
+    },
+    "specDepthDecision": {
+      "requiredDepth": "complex",
+      "minimumComponentLevels": [
+        "macro",
+        "meso",
+        "micro"
+      ],
+      "needsRepetitionSystems": true,
+      "needsMaterialLocalOverrides": true,
+      "needsMultipleReviewViews": true,
+      "needsActionReadyHierarchy": true,
+      "rationale": "The vehicle must preserve rider, coupling, wheel, and effect attachment contracts across separately approved build stages."
+    },
+    "unknownsToResolveBeforeImplementation": [],
+    "detailInventory": {
+      "scanMethod": "grid-3x3",
+      "targetMinDetails": 10,
+      "details": [
+        {
+          "id": "round-front",
+          "kind": "ridge",
+          "description": "Layered circular locomotive face with a red outer band and central brass accent.",
+          "region": {
+            "x": 0.05,
+            "y": 0.37,
+            "width": 0.25,
+            "height": 0.35,
+            "units": "normalized"
+          },
+          "scale": "meso",
+          "affects": "engine front hierarchy",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "engine/round-front"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.95
+        },
+        {
+          "id": "cowcatcher-slats",
+          "kind": "ridge",
+          "description": "Small red cowcatcher uses a repeated fan of chunky wooden slats.",
+          "region": {
+            "x": 0.02,
+            "y": 0.62,
+            "width": 0.25,
+            "height": 0.25,
+            "units": "normalized"
+          },
+          "scale": "meso",
+          "affects": "front silhouette",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "engine/cowcatcher-slats"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.93
+        },
+        {
+          "id": "boiler-bands",
+          "kind": "ridge",
+          "description": "Restrained brass and red hoops segment the black wooden boiler.",
+          "region": {
+            "x": 0.18,
+            "y": 0.35,
+            "width": 0.35,
+            "height": 0.3,
+            "units": "normalized"
+          },
+          "scale": "meso",
+          "affects": "boiler rhythm",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "engine/boiler-bands"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.92
+        },
+        {
+          "id": "wood-grain",
+          "kind": "linework",
+          "description": "Visible directional grain breaks up the black and red painted boards.",
+          "region": {
+            "x": 0.12,
+            "y": 0.25,
+            "width": 0.78,
+            "height": 0.55,
+            "units": "normalized"
+          },
+          "scale": "micro",
+          "affects": "painted wood material",
+          "mapsTo": {
+            "type": "material.localOverrides",
+            "ref": "painted-wood/grain"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.9
+        },
+        {
+          "id": "smokestack-rings",
+          "kind": "ridge",
+          "description": "The exaggerated open smokestack uses stacked collars and a flared mouth.",
+          "region": {
+            "x": 0.08,
+            "y": 0.15,
+            "width": 0.24,
+            "height": 0.35,
+            "units": "normalized"
+          },
+          "scale": "meso",
+          "affects": "engine vertical silhouette",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "engine/smokestack-rings"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.94
+        },
+        {
+          "id": "brass-fasteners",
+          "kind": "fastener",
+          "description": "Small round brass fasteners repeat along red rails and black boards.",
+          "region": {
+            "x": 0.05,
+            "y": 0.28,
+            "width": 0.85,
+            "height": 0.5,
+            "units": "normalized"
+          },
+          "scale": "micro",
+          "affects": "construction rhythm",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "root/brass-fasteners"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.96
+        },
+        {
+          "id": "driver-pod",
+          "kind": "seam",
+          "description": "Low black and red bodywork wraps the driver's lower body without forming a cab.",
+          "region": {
+            "x": 0.35,
+            "y": 0.28,
+            "width": 0.25,
+            "height": 0.42,
+            "units": "normalized"
+          },
+          "scale": "macro",
+          "affects": "driver concealment",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "engine/driver-pod"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.88
+        },
+        {
+          "id": "passenger-pod",
+          "kind": "seam",
+          "description": "Low open caboose walls wrap the forward passenger's lower body.",
+          "region": {
+            "x": 0.54,
+            "y": 0.37,
+            "width": 0.27,
+            "height": 0.35,
+            "units": "normalized"
+          },
+          "scale": "macro",
+          "affects": "passenger concealment",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "caboose/passenger-pod"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.9
+        },
+        {
+          "id": "rear-bench",
+          "kind": "bevel",
+          "description": "An exposed rear-facing bench projects from the caboose with no overhead rail.",
+          "region": {
+            "x": 0.76,
+            "y": 0.28,
+            "width": 0.21,
+            "height": 0.42,
+            "units": "normalized"
+          },
+          "scale": "macro",
+          "affects": "third rider silhouette",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "caboose/rear-bench"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.94
+        },
+        {
+          "id": "wheel-spokes",
+          "kind": "ridge",
+          "description": "Red wooden spokes and dark rims repeat across the toy wheels.",
+          "region": {
+            "x": 0.18,
+            "y": 0.62,
+            "width": 0.7,
+            "height": 0.25,
+            "units": "normalized"
+          },
+          "scale": "meso",
+          "affects": "wheel readability",
+          "mapsTo": {
+            "type": "component.localFeatures",
+            "ref": "root/wheel-spokes"
+          },
+          "evidenceRef": "full-object",
+          "confidence": 0.96
+        }
+      ]
+    },
+    "anatomy": {
+      "applies": false,
+      "styleHeads": 0,
+      "proportions": {
+        "headUnit": 0,
+        "torso": 0,
+        "legs": 0,
+        "shoulderWidth": 0,
+        "hipWidth": 0
+      },
+      "pose": {
+        "type": "not applicable",
+        "jointAngles": {}
+      },
+      "faceLandmarks": {
+        "eyeLine": 0,
+        "eyeSpacing": 0,
+        "noseBase": 0,
+        "mouthLine": 0,
+        "hairline": 0
+      },
+      "features": [],
+      "confidence": 1,
+      "note": "The train is an object; rider rigs are validation fixtures, not modeled components."
+    }
+  },
+  "qualityContract": {
+    "qualityBar": "complex",
+    "definitionOfDone": [
+      "Stage 1 passes only when the entire primitive train stays within 2.30 width and about 6.10 length, all three real seated riders are legible, both pods conceal lower bodies, and the rear rider hangs clear.",
+      "Later stages preserve the approved sockets and overall envelope while matching the black, red, brass, and wooden toy language."
+    ],
+    "minimumSpecDepth": {
+      "macroComponents": 3,
+      "mesoComponents": 0,
+      "microFeatureGroups": 5,
+      "materialLayers": 3,
+      "repetitionSystems": 3,
+      "reviewViewpoints": 4
+    },
+    "featureGroups": [
+      {
+        "id": "rider-fit",
+        "name": "Three rider fit and visibility",
+        "required": true,
+        "qualityCriteria": [
+          "All riders use the real Sit_Floor_Idle pose.",
+          "Pod walls hide lower bodies without hiding torsos.",
+          "Rear rider faces backward and hangs clear."
+        ],
+        "evidenceRefs": [
+          "full-object"
+        ],
+        "failureModes": [
+          "floating rider",
+          "standing rider",
+          "bodywork intersects torso",
+          "rear legs intersect wheels"
+        ]
+      },
+      {
+        "id": "toy-silhouette",
+        "name": "Narrow whimsical toy silhouette",
+        "required": true,
+        "qualityCriteria": [
+          "Width stays at or below 2.30.",
+          "Body stays below 2.50 high.",
+          "Riders remain deliberately oversized."
+        ],
+        "evidenceRefs": [
+          "full-object"
+        ],
+        "failureModes": [
+          "realistic locomotive proportions",
+          "wide vehicle silhouette",
+          "roof or cab appears"
+        ]
+      },
+      {
+        "id": "articulation-hierarchy",
+        "name": "Engine and caboose transform hierarchy",
+        "required": true,
+        "qualityCriteria": [
+          "CouplingPivot parents the caboose.",
+          "Every rider socket belongs to the correct moving component."
+        ],
+        "evidenceRefs": [
+          "full-object"
+        ],
+        "failureModes": [
+          "caboose is baked into engine root",
+          "passenger sockets ignore future articulation"
+        ]
+      },
+      {
+        "id": "painted-wood-language",
+        "name": "Painted wood and restrained hardware",
+        "required": true,
+        "qualityCriteria": [
+          "Black and red surfaces retain visible wooden construction.",
+          "Brass stays an accent rather than the dominant read."
+        ],
+        "evidenceRefs": [
+          "full-object"
+        ],
+        "failureModes": [
+          "plastic material response",
+          "realistic steel locomotive read"
+        ]
+      }
+    ],
+    "visualDeltaChecks": [
+      "overall width and length",
+      "rider root and body bounds",
+      "pod concealment height",
+      "rear leg clearance",
+      "engine to caboose mass ratio"
+    ],
+    "antiShallowSpecRules": [
+      "Do not begin detailed geometry before Stage 1 user approval.",
+      "Do not move sockets to accommodate detail after approval without repeating rider-fit review.",
+      "Do not add a roof, cab, canopy, or overhead structure."
+    ]
+  },
+  "qualityTargets": {
+    "targetFidelity": 0.7,
+    "mustMatch": [
+      "approved full-train envelope",
+      "three real seated rider positions",
+      "open roofless toy silhouette",
+      "engine and caboose hierarchy"
+    ],
+    "niceToHave": [
+      "reference-like material lighting in later passes"
+    ],
+    "fpsTarget": 60,
+    "reviewViewpoints": [
+      "front",
+      "three-quarter",
+      "side",
+      "top"
+    ]
+  },
+  "selfCorrectLoop": {
+    "enabled": true,
+    "visualAcceptance": {
+      "reviewer": "user-and-ai-vision",
+      "threshold": 0.7,
+      "comparisonArtifactRequired": true,
+      "layerScoresRequired": true,
+      "codePixelDiffIsAcceptanceAuthority": false,
+      "scoringRule": "Review the full train and rider fit from matching multi-angle captures.",
+      "requiredLayerScores": [
+        "silhouetteProportion",
+        "componentStructure",
+        "riderFit",
+        "negativeSpace",
+        "camera"
+      ],
+      "featureReviewPolicy": {
+        "enabled": true,
+        "reviewUnit": "semantic-subsystem",
+        "maxCriticalFeaturesPerPass": 5,
+        "maxImportantFeaturesPerPass": 3,
+        "criticalDefaultThreshold": 0.8,
+        "importantAverageThreshold": 0.65,
+        "adaptiveEscalation": true,
+        "singleImagePairOnly": false,
+        "selectionRule": "Prioritize rider fit, scale, and roofless negative spaces in Stage 1."
+      }
+    },
+    "reviewAfterPasses": [
+      "blockout",
+      "structural-pass",
+      "form-refinement",
+      "material-pass",
+      "surface-pass",
+      "lighting-pass",
+      "interaction-pass",
+      "optimization-pass"
+    ],
+    "allowedActions": [
+      "continue",
+      "refine-spec",
+      "refine-code",
+      "request-input",
+      "stop"
+    ],
+    "specRefineTriggers": [
+      "wrong rider spacing",
+      "wrong envelope",
+      "missing component",
+      "wrong hierarchy"
+    ],
+    "codeRefineTriggers": [
+      "geometry does not match locked coordinates",
+      "player clipping",
+      "bounds exceed contract"
+    ],
+    "stopCriteria": [
+      "user approves the current pass",
+      "a required reference or lineage field blocks shipping"
+    ],
+    "screenshotPolicy": {
+      "requiredForPasses": [
+        "blockout",
+        "structural-pass",
+        "form-refinement",
+        "material-pass",
+        "surface-pass",
+        "lighting-pass",
+        "interaction-pass"
+      ],
+      "preferredCapture": "authoring-browser-screenshot",
+      "fallbackCapture": "user in-game screenshot",
+      "minimumEvidence": "Front, three-quarter, side, and top views with real seated riders for Stage 1.",
+      "reviewPairRule": "Use the same train orientation across revisions.",
+      "acceptanceAuthority": "User approval plus recorded visual review."
+    }
+  },
+  "featureReviewTargets": [
+    {
+      "id": "rider-fit",
+      "name": "Three real seated riders and lower-body concealment",
+      "tier": "critical",
+      "passIds": [
+        "blockout",
+        "interaction-pass"
+      ],
+      "minimumScore": 0.85,
+      "mustPass": true,
+      "componentRefs": [
+        "engine",
+        "caboose"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ]
+    },
+    {
+      "id": "toy-silhouette",
+      "name": "Narrow roofless toy-train silhouette",
+      "tier": "critical",
+      "passIds": [
+        "blockout",
+        "form-refinement"
+      ],
+      "minimumScore": 0.82,
+      "mustPass": true,
+      "componentRefs": [
+        "root",
+        "engine",
+        "caboose"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ]
+    },
+    {
+      "id": "articulation-hierarchy",
+      "name": "Engine, coupling pivot, caboose, and owned sockets",
+      "tier": "critical",
+      "passIds": [
+        "structural-pass",
+        "interaction-pass"
+      ],
+      "minimumScore": 0.82,
+      "mustPass": true,
+      "componentRefs": [
+        "root",
+        "coupling",
+        "caboose"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ]
+    },
+    {
+      "id": "painted-wood-language",
+      "name": "Black and red painted wood with restrained brass",
+      "tier": "important",
+      "passIds": [
+        "material-pass",
+        "surface-pass",
+        "lighting-pass"
+      ],
+      "minimumScore": 0.72,
+      "mustPass": true,
+      "componentRefs": [
+        "engine",
+        "caboose"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ]
+    }
+  ],
+  "sculptPipeline": {
+    "passGateMode": "locked-sequential",
+    "passOrder": [
+      "blockout",
+      "structural-pass",
+      "form-refinement",
+      "material-pass",
+      "surface-pass",
+      "lighting-pass",
+      "interaction-pass",
+      "optimization-pass"
+    ],
+    "currentPass": "blockout",
+    "completedPasses": [],
+    "lastCompletedPass": "",
+    "blockedReason": "Blockout awaits multi-angle real-rider evidence and user approval.",
+    "nextRequiredEvidence": [
+      "front, three-quarter, side, and top blockout renders",
+      "measured bounds",
+      "real Sit_Floor_Idle rider fit report",
+      "user approval"
+    ]
+  },
+  "lookDevTargets": {
+    "qualityPriority": "stylized-gameplay-readability",
+    "materialPass": {
+      "albedoPaletteRequired": true,
+      "roughnessVariationRequired": true,
+      "normalOrBumpRequired": true,
+      "localOverridesRequired": true,
+      "minimumTextureResolution": 0,
+      "preferredTextureResolution": 0,
+      "albedoPalette": {
+        "dominant": "#17191D",
+        "secondary": [
+          "#7A211C",
+          "#B98235"
+        ],
+        "accent": [
+          "#D2A34C",
+          "#33231B"
+        ]
+      },
+      "independentMapChannels": [
+        "vertex-color-albedo",
+        "procedural-roughness",
+        "procedural-normal",
+        "ambient-occlusion"
+      ],
+      "requiredSurfaceFrequencyBands": [
+        "macro",
+        "meso",
+        "micro"
+      ],
+      "geometryReliefRequiredWhenSilhouetteAffected": true,
+      "referencePbrExtraction": {
+        "requiredWhenSourceImagePresent": false,
+        "targetThreshold": 0.7,
+        "stopOnLowConfidence": false,
+        "script": "not used for painted concept lighting",
+        "acceptedLimitation": "Concept lighting is not physical surface evidence; vertex colors are the locked first choice."
+      },
+      "mustAvoid": [
+        "flat plastic",
+        "photoreal steel train",
+        "uncompressed embedded textures"
+      ]
+    },
+    "lightingPass": {
+      "keyLight": {
+        "color": "#FFE2BC",
+        "direction": [
+          -3,
+          6,
+          4
+        ],
+        "intensity": 3
+      },
+      "fillLight": {
+        "color": "#AFC8E8",
+        "direction": [
+          3,
+          3,
+          2
+        ],
+        "intensity": 1.3
+      },
+      "rimLight": {
+        "color": "#C3D3FF",
+        "direction": [
+          4,
+          3,
+          -4
+        ],
+        "intensity": 1
+      },
+      "environmentLight": {
+        "color": "#71809A",
+        "intensity": 0.55
+      },
+      "exposure": 1.05,
+      "toneMapping": "ACESFilmic",
+      "background": "#20252D",
+      "contactShadow": "soft ground-plane shadow under wheels",
+      "requiredTerms": [
+        "warm key light",
+        "cool fill light",
+        "restrained rim light",
+        "ACES tone mapping",
+        "neutral background",
+        "contact shadow"
+      ],
+      "mustAvoid": [
+        "ambient-only lighting",
+        "lighting that hides rider intersections"
+      ]
+    },
+    "screenshotReview": [
+      "neutral multi-angle train",
+      "grazing painted-wood view",
+      "in-game desktop and mobile views"
+    ]
+  },
+  "actionReadiness": {
+    "contract": "Stable named groups own every future runtime transform and rider socket.",
+    "defaultRigType": "action-ready-static-rig",
+    "rootMotionNode": "MountRoot",
+    "requiredComponentFields": [
+      "id",
+      "parent",
+      "transform",
+      "attachment",
+      "actionProfile"
+    ],
+    "transformChannels": [
+      "translate",
+      "rotate",
+      "visibility"
+    ],
+    "authoringRules": [
+      "CouplingPivot owns Caboose.",
+      "Sockets are empty named nodes.",
+      "Wheel nodes remain individually transformable."
+    ],
+    "destructionPolicy": {
+      "defaultBreakable": false,
+      "fractureGroupNaming": "not applicable",
+      "debrisStrategy": "none"
+    }
+  },
+  "coordinateFrame": {
+    "front": "+Z",
+    "up": "+Y",
+    "scaleReference": "world units from blockout-plan.json"
+  },
+  "silhouette": {
+    "boundingShape": "narrow two-part ride-on toy train",
+    "aspectRatios": [
+      "2.30 width to approximately 6.10 length",
+      "body height below 2.50"
+    ],
+    "symmetry": "bilateral across X except optional handcrafted detail",
+    "dominantCurves": [
+      "horizontal boiler cylinder",
+      "round engine face",
+      "flared smokestack",
+      "small-medium-large engine wheel progression"
+    ],
+    "negativeSpaces": [
+      "open driver torso volume",
+      "open passenger torso volume",
+      "open rear bench volume",
+      "visible body gap around the drawbar"
+    ],
+    "landmarks": [
+      "smokestack",
+      "round front",
+      "driver pod",
+      "open coupling gap",
+      "passenger pod",
+      "rear bench"
+    ]
+  },
+  "viewEvidence": [
+    {
+      "id": "full-object",
+      "view": "three-quarter",
+      "imageRegion": {
+        "x": 0,
+        "y": 0,
+        "width": 1,
+        "height": 1,
+        "units": "normalized"
+      },
+      "observations": [
+        "black and red wooden toy train",
+        "three open rider positions",
+        "no roof",
+        "restrained brass",
+        "chunky wheels"
+      ],
+      "confidence": 0.82
+    }
+  ],
+  "componentTree": [
+    {
+      "id": "root",
+      "name": "MountRoot",
+      "level": "macro",
+      "role": "vehicle root",
+      "importance": 1,
+      "confidence": 1,
+      "primitive": "box",
+      "topologyClass": "assembled-solid",
+      "topologyRationale": "Root transform for the compound mount.",
+      "parent": null,
+      "attachment": null,
+      "dimensions": {
+        "width": 2.3,
+        "height": 2.45,
+        "depth": 5.9,
+        "units": "world",
+        "confidence": 0.9
+      },
+      "transform": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "actionProfile": {
+        "animationRole": "root",
+        "pivot": {
+          "mode": "component-origin",
+          "localPosition": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "confidence": 1
+        },
+        "transformChannels": {
+          "translate": true,
+          "rotate": true,
+          "scale": true,
+          "bend": false,
+          "twist": false,
+          "detach": false,
+          "visibility": true,
+          "materialState": false
+        },
+        "sockets": [],
+        "collider": {
+          "type": "box",
+          "offset": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            2.3,
+            2.45,
+            5.9
+          ],
+          "isTrigger": false,
+          "notes": "authoring proxy only"
+        },
+        "constraints": [],
+        "destruction": {
+          "breakable": false,
+          "fractureGroup": "none",
+          "seamRefs": [],
+          "detachableFragments": [],
+          "breakImpulse": 0,
+          "debrisMaterial": "none"
+        }
+      },
+      "material": "blockout",
+      "materialLayers": [
+        "blockout"
+      ],
+      "colorMaterialRecipe": {
+        "dominantAlbedo": "rgba(135,144,155,1)",
+        "secondaryAlbedo": "rgba(198,90,74,1)",
+        "materialClass": "wood",
+        "materialClassConfidence": 1
+      },
+      "localFeatures": [
+        "brass-fasteners",
+        "wheel-spokes"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ],
+      "fidelityTier": "blockout"
+    },
+    {
+      "id": "engine",
+      "name": "Engine",
+      "level": "macro",
+      "role": "locomotive body and driver support",
+      "importance": 1,
+      "confidence": 0.9,
+      "primitive": "box",
+      "topologyClass": "assembled-solid",
+      "topologyRationale": "Separate chassis, boiler, stack, pod, and wheels preserve readable toy masses.",
+      "parent": "root",
+      "attachment": {
+        "parentSocket": "MountRoot",
+        "localStart": [
+          0,
+          0,
+          0
+        ],
+        "localEnd": [
+          0,
+          1.2,
+          1.2
+        ],
+        "contactType": "fixed",
+        "overlap": 0,
+        "gapTolerance": 0
+      },
+      "dimensions": {
+        "width": 2.3,
+        "height": 2.27,
+        "depth": 3.25,
+        "units": "world",
+        "confidence": 0.9
+      },
+      "transform": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "actionProfile": {
+        "animationRole": "static-runtime-driven",
+        "pivot": {
+          "mode": "component-origin",
+          "localPosition": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "confidence": 1
+        },
+        "transformChannels": {
+          "translate": false,
+          "rotate": false,
+          "scale": false,
+          "bend": false,
+          "twist": false,
+          "detach": false,
+          "visibility": true,
+          "materialState": false
+        },
+        "sockets": [
+          {
+            "id": "driver",
+            "name": "Socket_Driver",
+            "position": [
+              0.066,
+              1.18,
+              0.38
+            ],
+            "purpose": "forward-facing driver"
+          }
+        ],
+        "collider": {
+          "type": "box",
+          "offset": [
+            0,
+            1.1,
+            1.2
+          ],
+          "scale": [
+            2.3,
+            2.2,
+            3.25
+          ],
+          "isTrigger": false,
+          "notes": "authoring proxy only"
+        },
+        "constraints": [],
+        "destruction": {
+          "breakable": false,
+          "fractureGroup": "none",
+          "seamRefs": [],
+          "detachableFragments": [],
+          "breakImpulse": 0,
+          "debrisMaterial": "none"
+        }
+      },
+      "material": "blockout",
+      "materialLayers": [
+        "blockout"
+      ],
+      "colorMaterialRecipe": {
+        "dominantAlbedo": "rgba(135,144,155,1)",
+        "secondaryAlbedo": "rgba(198,90,74,1)",
+        "materialClass": "wood",
+        "materialClassConfidence": 1
+      },
+      "localFeatures": [
+        "round-front",
+        "cowcatcher-slats",
+        "boiler-bands",
+        "smokestack-rings",
+        "driver-pod"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ],
+      "fidelityTier": "blockout"
+    },
+    {
+      "id": "coupling",
+      "name": "CouplingPivot",
+      "level": "macro",
+      "role": "future cosmetic yaw pivot",
+      "importance": 0.9,
+      "confidence": 0.8,
+      "primitive": "box",
+      "topologyClass": "assembled-solid",
+      "topologyRationale": "An explicit rigid connector and pivot are required for later damped caboose yaw.",
+      "parent": "root",
+      "attachment": {
+        "parentSocket": "EngineRear",
+        "localStart": [
+          0,
+          0.55,
+          -0.52
+        ],
+        "localEnd": [
+          0,
+          0.55,
+          -0.86
+        ],
+        "contactType": "hinge",
+        "overlap": 0.02,
+        "gapTolerance": 0.02
+      },
+      "dimensions": {
+        "width": 0.28,
+        "height": 0.2,
+        "depth": 0.34,
+        "units": "world",
+        "confidence": 0.9
+      },
+      "transform": {
+        "position": [
+          0,
+          0.55,
+          -0.52
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "actionProfile": {
+        "animationRole": "yaw-pivot",
+        "pivot": {
+          "mode": "component-origin",
+          "localPosition": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "confidence": 1
+        },
+        "transformChannels": {
+          "translate": false,
+          "rotate": true,
+          "scale": false,
+          "bend": false,
+          "twist": false,
+          "detach": false,
+          "visibility": true,
+          "materialState": false
+        },
+        "sockets": [],
+        "collider": {
+          "type": "box",
+          "offset": [
+            0,
+            0,
+            0
+          ],
+          "scale": [
+            0.28,
+            0.2,
+            0.34
+          ],
+          "isTrigger": false,
+          "notes": "authoring proxy only"
+        },
+        "constraints": [
+          "yaw limited to 12 degrees"
+        ],
+        "destruction": {
+          "breakable": false,
+          "fractureGroup": "none",
+          "seamRefs": [],
+          "detachableFragments": [],
+          "breakImpulse": 0,
+          "debrisMaterial": "none"
+        }
+      },
+      "material": "blockout-accent",
+      "materialLayers": [
+        "blockout-accent"
+      ],
+      "colorMaterialRecipe": {
+        "dominantAlbedo": "rgba(198,90,74,1)",
+        "secondaryAlbedo": "rgba(135,144,155,1)",
+        "materialClass": "wood",
+        "materialClassConfidence": 1
+      },
+      "localFeatures": [],
+      "evidenceRefs": [
+        "full-object"
+      ],
+      "fidelityTier": "blockout"
+    },
+    {
+      "id": "caboose",
+      "name": "Caboose",
+      "level": "macro",
+      "role": "two-passenger wagon",
+      "importance": 1,
+      "confidence": 0.9,
+      "primitive": "box",
+      "topologyClass": "assembled-solid",
+      "topologyRationale": "Low sidewalls, pod, bench, and wheels remain independently legible.",
+      "parent": "coupling",
+      "attachment": {
+        "parentSocket": "CouplingPivot",
+        "localStart": [
+          0,
+          0,
+          0
+        ],
+        "localEnd": [
+          0,
+          0,
+          -1.25
+        ],
+        "contactType": "hinge-child",
+        "overlap": 0,
+        "gapTolerance": 0.03
+      },
+      "dimensions": {
+        "width": 2.2,
+        "height": 1.32,
+        "depth": 2.58,
+        "units": "world",
+        "confidence": 0.85
+      },
+      "transform": {
+        "position": [
+          0,
+          0,
+          -1.25
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "actionProfile": {
+        "animationRole": "articulated-child",
+        "pivot": {
+          "mode": "component-origin",
+          "localPosition": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "confidence": 1
+        },
+        "transformChannels": {
+          "translate": false,
+          "rotate": false,
+          "scale": false,
+          "bend": false,
+          "twist": false,
+          "detach": false,
+          "visibility": true,
+          "materialState": false
+        },
+        "sockets": [
+          {
+            "id": "passenger-1",
+            "name": "Socket_Passenger_1",
+            "position": [
+              0.066,
+              1.16,
+              -1.32
+            ],
+            "purpose": "forward-facing passenger"
+          },
+          {
+            "id": "passenger-2",
+            "name": "Socket_Passenger_2",
+            "position": [
+              -0.066,
+              1.2,
+              -2.86
+            ],
+            "purpose": "rear-facing passenger"
+          }
+        ],
+        "collider": {
+          "type": "box",
+          "offset": [
+            0,
+            0.7,
+            -1.25
+          ],
+          "scale": [
+            2.2,
+            1.32,
+            2.58
+          ],
+          "isTrigger": false,
+          "notes": "authoring proxy only"
+        },
+        "constraints": [],
+        "destruction": {
+          "breakable": false,
+          "fractureGroup": "none",
+          "seamRefs": [],
+          "detachableFragments": [],
+          "breakImpulse": 0,
+          "debrisMaterial": "none"
+        }
+      },
+      "material": "blockout",
+      "materialLayers": [
+        "blockout"
+      ],
+      "colorMaterialRecipe": {
+        "dominantAlbedo": "rgba(135,144,155,1)",
+        "secondaryAlbedo": "rgba(198,90,74,1)",
+        "materialClass": "wood",
+        "materialClassConfidence": 1
+      },
+      "localFeatures": [
+        "passenger-pod",
+        "rear-bench"
+      ],
+      "evidenceRefs": [
+        "full-object"
+      ],
+      "fidelityTier": "blockout"
+    }
+  ],
+  "materials": [
+    {
+      "id": "blockout",
+      "name": "Blockout primary",
+      "type": "standard",
+      "shaderModel": "MeshStandardMaterial",
+      "baseColor": "#87909B",
+      "color": "#87909B",
+      "roughness": {
+        "base": 0.8,
+        "variation": 0,
+        "map": "none",
+        "localResponse": "none"
+      },
+      "metalness": {
+        "base": 0,
+        "variation": 0
+      },
+      "localOverrides": [],
+      "notes": "Stage 1 neutral geometry only."
+    },
+    {
+      "id": "blockout-accent",
+      "name": "Blockout moving and socket accent",
+      "type": "standard",
+      "shaderModel": "MeshStandardMaterial",
+      "baseColor": "#C65A4A",
+      "color": "#C65A4A",
+      "roughness": {
+        "base": 0.75,
+        "variation": 0,
+        "map": "none",
+        "localResponse": "none"
+      },
+      "metalness": {
+        "base": 0,
+        "variation": 0
+      },
+      "localOverrides": [],
+      "notes": "Stage 1 hierarchy cue only."
+    },
+    {
+      "id": "painted-wood",
+      "name": "Painted wood cohesion contract",
+      "type": "standard",
+      "shaderModel": "MeshStandardMaterial",
+      "baseColor": "#505D70",
+      "color": "#505D70",
+      "albedo": {
+        "dominant": "#505D70",
+        "secondary": [
+          "#A44037",
+          "#784045",
+          "#626C76",
+          "#343B45",
+          "#CAA04E"
+        ],
+        "samplingNotes": "blue-charcoal paint dominates, crimson frames the construction, oxblood separates upholstery, dark iron grounds mechanics, and brass remains a focal accent"
+      },
+      "colorVariation": {
+        "palette": [
+          "#505D70",
+          "#A44037",
+          "#784045",
+          "#626C76",
+          "#343B45",
+          "#CAA04E"
+        ],
+        "pattern": "semantic body, structural trim, upholstery, mechanical iron, and brass zones",
+        "amplitude": 0.18,
+        "heightCorrelation": 0.1
+      },
+      "roughness": {
+        "base": 0.72,
+        "variation": 0.12,
+        "map": "independent-procedural-field",
+        "localResponse": "worn edges slightly lower"
+      },
+      "metalness": {
+        "base": 0,
+        "variation": 0
+      },
+      "localOverrides": [
+        {
+          "id": "grain",
+          "region": "black and red wooden boards",
+          "effect": "directional grain and restrained edge wear"
+        }
+      ],
+      "notes": "Solid-color cohesion contract for the controlled readability pass; directional wood grain remains deferred."
+    }
+  ],
+  "repetitionSystems": [
+    {
+      "id": "engine-wheels",
+      "componentRef": "engine",
+      "count": 6,
+      "distribution": "three axle positions mirrored across X",
+      "variation": "front wheels smaller than drive wheels"
+    },
+    {
+      "id": "caboose-wheels",
+      "componentRef": "caboose",
+      "count": 4,
+      "distribution": "two axle positions mirrored across X",
+      "variation": "uniform toy wheels"
+    },
+    {
+      "id": "brass-fasteners",
+      "componentRef": "root",
+      "count": 24,
+      "distribution": "later rows along red rails and black boards",
+      "variation": "small deterministic spacing jitter"
+    }
+  ],
+  "buildPasses": [
+    {
+      "id": "blockout",
+      "goal": "Prove full-train scale and all three real rider positions.",
+      "componentRefs": [
+        "root",
+        "engine",
+        "coupling",
+        "caboose"
+      ],
+      "acceptance": [
+        "Measured width at or below 2.30.",
+        "Measured length near 6.10.",
+        "All real riders visible and seated.",
+        "Pod walls conceal lower bodies.",
+        "Rear passenger hangs clear.",
+        "User approves before detailed geometry."
+      ]
+    },
+    {
+      "id": "structural-pass",
+      "goal": "Build and approve the detailed locomotive only, then the caboose hierarchy.",
+      "componentRefs": [
+        "engine",
+        "coupling",
+        "caboose"
+      ],
+      "acceptance": [
+        "Blockout sockets stay fixed.",
+        "Every attachment and pivot is explicit."
+      ]
+    },
+    {
+      "id": "form-refinement",
+      "goal": "Refine approved locomotive and caboose forms without scale drift.",
+      "componentRefs": [
+        "engine",
+        "caboose"
+      ],
+      "acceptance": [
+        "Toy silhouette and inherited geometry language read clearly."
+      ]
+    },
+    {
+      "id": "material-pass",
+      "goal": "Establish black and red painted wood with restrained brass.",
+      "componentRefs": [
+        "root"
+      ],
+      "acceptance": [
+        "Observed palette and independent roughness response are explicit."
+      ]
+    },
+    {
+      "id": "surface-pass",
+      "goal": "Add wood grain, seams, wear, spokes, and fasteners.",
+      "componentRefs": [
+        "root"
+      ],
+      "acceptance": [
+        "Macro, meso, and micro detail survive grazing light."
+      ]
+    },
+    {
+      "id": "lighting-pass",
+      "goal": "Prove form under neutral and reference-like light.",
+      "componentRefs": [
+        "root"
+      ],
+      "acceptance": [
+        "Warm key, cool fill, rim, ACES tone mapping, and contact shadow are recorded."
+      ]
+    },
+    {
+      "id": "interaction-pass",
+      "goal": "Add bounded procedural articulation and motion.",
+      "componentRefs": [
+        "coupling",
+        "engine",
+        "caboose"
+      ],
+      "acceptance": [
+        "Coupling yaw remains within 10 to 15 degrees.",
+        "Wheel rotation and articulation use runtime transforms, not baked clips."
+      ]
+    },
+    {
+      "id": "optimization-pass",
+      "goal": "Consolidate primitives and pin the asset contract.",
+      "componentRefs": [
+        "root"
+      ],
+      "acceptance": [
+        "Triangle, byte, material, node, socket, extension, and bounds contracts pass."
+      ]
+    }
+  ],
+  "performanceBudget": {
+    "qualityPriority": "premium-mount-within-budget",
+    "targetTriangles": 9000,
+    "hardTriangleCeiling": 12000,
+    "maxDrawCalls": 18,
+    "maxMaterials": 6,
+    "shippingByteCeiling": 524288,
+    "textureSize": 0,
+    "fpsTarget": 60,
+    "optimizationPolicy": "Use vertex colors first, merge by material while preserving named pivots and sockets."
+  },
+  "animationAnchors": [
+    "MountRoot",
+    "CouplingPivot",
+    "Socket_Driver",
+    "Socket_Passenger_1",
+    "Socket_Passenger_2",
+    "wheel nodes",
+    "future steam socket"
+  ],
+  "proceduralStrategy": [
+    "Build the complete primitive train first.",
+    "Validate three real seated riders before detail.",
+    "Lock locomotive visual language before building the caboose.",
+    "Preserve separate pivots and named sockets through optimization."
+  ],
+  "lightingFromPhoto": [
+    {
+      "role": "key light",
+      "direction": [
+        -3,
+        6,
+        4
+      ],
+      "color": "#FFE2BC",
+      "intensity": 3,
+      "notes": "warm upper-left modeling light"
+    },
+    {
+      "role": "fill light",
+      "direction": [
+        3,
+        3,
+        2
+      ],
+      "color": "#AFC8E8",
+      "intensity": 1.3,
+      "notes": "cool shadow fill"
+    },
+    {
+      "role": "rim and environment light",
+      "direction": [
+        4,
+        3,
+        -4
+      ],
+      "color": "#C3D3FF",
+      "intensity": 1,
+      "exposure": 1.05,
+      "toneMapping": "ACESFilmic",
+      "contactShadow": "soft ground shadow under wheels"
+    }
+  ],
+  "risks": [
+    "Opposing caboose riders may require spacing refinement after real-pose review.",
+    "Manifest height normalization can silently undo scale changes, so every major export requires a fresh GLB bounds measurement.",
+    "Single-view hidden surfaces are inferred.",
+    "Concept lineage is incomplete and blocks final shipping provenance."
+  ],
+  "reviewHistory": [],
+  "tier1Results": [
+    {
+      "passed": false,
+      "checks": {
+        "silhouetteIoU": 0.5533,
+        "aspectRatioDelta": 0.2376,
+        "scaleDelta": 0.192,
+        "bilateralSymmetryError": 0.038,
+        "colorDelta": {
+          "checked": 4,
+          "maxDeltaE": 15.06,
+          "perComponent": [
+            {
+              "componentId": null,
+              "deltaE": 15.06
+            },
+            {
+              "componentId": null,
+              "deltaE": 15.06
+            },
+            {
+              "componentId": null,
+              "deltaE": 9.34
+            },
+            {
+              "componentId": null,
+              "deltaE": 15.06
+            }
+          ],
+          "gated": false
+        }
+      },
+      "failures": [
+        "silhouette IoU 0.553 is below threshold 0.85",
+        "aspect-ratio delta 0.238 exceeds threshold 0.05",
+        "scale delta 0.192 exceeds threshold 0.08"
+      ],
+      "renderHash": "dccaee53bd18e52c",
+      "passId": "blockout"
+    },
+    {
+      "passed": false,
+      "checks": {
+        "silhouetteIoU": 0.5791,
+        "aspectRatioDelta": 0.0134,
+        "scaleDelta": 0.0136,
+        "bilateralSymmetryError": 0.0371,
+        "colorDelta": {
+          "checked": 4,
+          "maxDeltaE": 14.8,
+          "perComponent": [
+            {
+              "componentId": null,
+              "deltaE": 14.8
+            },
+            {
+              "componentId": null,
+              "deltaE": 14.8
+            },
+            {
+              "componentId": null,
+              "deltaE": 9.98
+            },
+            {
+              "componentId": null,
+              "deltaE": 14.8
+            }
+          ],
+          "gated": false
+        }
+      },
+      "failures": [
+        "silhouette IoU 0.579 is below threshold 0.85"
+      ],
+      "renderHash": "7c1ad8e7d725bf71",
+      "passId": "blockout"
+    }
+  ]
+}
