@@ -31,6 +31,15 @@ export interface MountVisualSpec {
   /** Ambient particle effect the renderer emits for this mount: the snail's
    *  slime path while moving, the hover cycle's aether exhaust. */
   fx: 'slime' | 'exhaust' | null;
+  /** Optional rig bone the rider is pinned to. Pick the bone that actually
+   *  DRIVES the saddle surface (check the skin weights), not the nearest torso
+   *  joint: a bone contributing little of the saddle's motion carries the rider
+   *  on a different curve than the seat, which reads as floating. */
+  riderBone: string | null;
+  /** How much of the saddle bone's rotation the rider inherits: 1 = welded to
+   *  the saddle through every twist and pitch, 0 = stays upright and follows
+   *  position only. Ignored without a riderBone. */
+  riderTilt: number;
 }
 
 const spec = (
@@ -40,6 +49,8 @@ const spec = (
   bob?: { amp: number; hz: number; idle?: boolean; shape?: 'hover' | 'hop' },
   seatFwd = 0,
   fx: 'slime' | 'exhaust' | null = null,
+  riderBone: string | null = null,
+  riderTilt = 1,
 ): MountVisualSpec => ({
   visualKey,
   seat,
@@ -50,6 +61,8 @@ const spec = (
   bobIdle: bob?.idle ?? false,
   bobShape: bob?.shape ?? 'hop',
   fx,
+  riderBone,
+  riderTilt,
 });
 
 export const MOUNT_VISUAL_SPECS: Record<MountKey, MountVisualSpec> = {
@@ -81,6 +94,21 @@ export const MOUNT_VISUAL_SPECS: Record<MountKey, MountVisualSpec> = {
   // The Drakemaw Raptor: authored saddle sits over the hips behind the neck
   // spines (hence the slight rear shift), gait-rigged Walk/Run cycles.
   drakemaw_raptor: spec('mount_drakemaw_raptor', 2.35, true, undefined, -0.1),
+  // The authored saddle is over the hips. The mount ships at 120% of its
+  // initial world fit, so the world-space socket offsets scale with it and
+  // keep the rider on the same authored point of the saddle.
+  //
+  // The rider pins to `bone_52`, the rig's own saddle bone, NOT to a spine
+  // joint. Measured against the deformed seat surface across all four clips
+  // (scripts in ~/avian-animation-working, report in
+  // E:/avian-rig-diagnostics/animation/saddle-rigidity-report.json): the seat
+  // is 58% bone_52 + 40% tripo::Root + 1% Spine_0, and because bone_52 is
+  // unkeyed and parented straight to the root, the whole saddle is RIGID
+  // relative to it. Worst-case rider drift over every frame is 0.0007 world
+  // units on bone_52 versus 0.09 on Spine_0 (which reads as a floating rider,
+  // the original defect). Tilt is 1: the saddle turns as one piece, so the
+  // rider inherits its rotation whole and stays square in the seat.
+  avian_strider: spec('mount_avian_strider', 2.62, true, undefined, 0.2, null, 'bone_52', 1),
 };
 
 /** Spec for an entity's active mountKey, or null when dismounted/unknown. */

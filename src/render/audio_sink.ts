@@ -88,6 +88,12 @@ export interface SpatialAudioSink {
    *  e.g. on the mountKey transition that also calls mountEngineReset. A
    *  no-op for a mount with no engine take set. */
   preloadMountEngine(mountKey: string): void;
+  /** The one-shot call a mount makes as it appears, on the summon channel's
+   *  completion edge. A no-op for a mount with no authored summon take. */
+  mountSummon(x: number, y: number, z: number, mountKey: string, self: boolean): void;
+  /** Warm a mount's summon clip ahead of the completion edge, e.g. when its
+   *  summon channel begins. A no-op for a mount with no authored take. */
+  preloadMountSummon(mountKey: string): void;
   /** A discrete movement event (jump / land / water entry / swim stroke). */
   movement(
     kind: 'jump' | 'land' | 'splash' | 'swim',

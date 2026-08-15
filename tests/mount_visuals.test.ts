@@ -166,6 +166,42 @@ describe('procedural bob math', () => {
     expect(mountBobY(spec, 0.7, true)).toBe(0);
   });
 
+  it('the avian mount keeps its authored forward, reverse, and jump clips', () => {
+    const spec = MOUNT_VISUAL_SPECS.avian_strider;
+    const def = VISUALS.mount_avian_strider;
+    expect(spec).toMatchObject({
+      visualKey: 'mount_avian_strider',
+      seat: 2.62,
+      seatFwd: 0.2,
+      rigged: true,
+      bobAmp: 0,
+      fx: null,
+      // pinned to the rig's saddle bone, and welded to its rotation: see the
+      // rigidity measurement in mount_visuals.ts
+      riderBone: 'bone_52',
+      riderTilt: 1,
+    });
+    expect(def).toMatchObject({
+      url: 'models/mounts/avian_strider.glb',
+      height: 4.32,
+      yaw: Math.PI / 2,
+      walkRef: 5.52,
+      runRef: 7.16,
+      // raised from the stock 1.8/1.6: at a mount's fixed speed the ceiling,
+      // not the reference, is what binds (see manifest.ts)
+      walkTimeScaleMax: 2.0,
+      runTimeScaleMax: 2.0,
+      lazyPreload: true,
+      clips: {
+        idle: 'Idle',
+        walk: 'Run',
+        run: 'Run',
+        walkBack: 'WalkBackward',
+        jump: 'Jump',
+      },
+    });
+  });
+
   it('the snail glides flat (no bob at all)', () => {
     const spec = MOUNT_VISUAL_SPECS.stalkglider_snail;
     expect(mountBobY(spec, 0.5, true)).toBe(0);

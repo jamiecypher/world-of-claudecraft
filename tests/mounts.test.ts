@@ -103,8 +103,8 @@ function ride(sim: Sim, pid: number, key: string): void {
 }
 
 describe('mount catalog', () => {
-  it('has exactly nine mounts with the horse first and the developer tank last', () => {
-    expect(MOUNT_KEYS).toHaveLength(9);
+  it('has exactly ten mounts with the horse first and the developer tank last', () => {
+    expect(MOUNT_KEYS).toHaveLength(10);
     expect(MOUNT_KEYS[0]).toBe('valorsteed');
     expect(MOUNT_KEYS.at(-1)).toBe('terrorspark_groundshaker');
     expect(DEFAULT_MOUNT).toBe('valorsteed');
@@ -170,14 +170,15 @@ describe('mount reins items (the collection: owning the item is owning the mount
   const reinsFor = (key: string) =>
     Object.values(ITEMS).filter((d) => d.kind === 'mount' && d.mount === key) as MountItemDef[];
 
-  it('every mount has exactly one reins item; player reins are unbound, the dev tank stays bound', () => {
+  it('every mount has exactly one reins item; player reins are unbound, dev mounts stay bound', () => {
+    const developerOnly = new Set(['avian_strider', 'terrorspark_groundshaker']);
     for (const key of MOUNT_KEYS) {
       const items = reinsFor(key);
       expect(items).toHaveLength(1);
       const item = items[0];
       expect(mountItemId(key)).toBe(item.id);
-      if (key === 'terrorspark_groundshaker') {
-        // The developer-only tank stays soulbound: it has no player acquisition
+      if (developerOnly.has(key)) {
+        // Developer-only mounts stay soulbound: they have no player acquisition
         // path, and tradability would turn a dev grant into a leak vector.
         expect(item.soulbound).toBe(true);
       } else {
@@ -253,7 +254,7 @@ describe('mount reins items (the collection: owning the item is owning the mount
 
     for (const key of MOUNT_KEYS) {
       if (key === 'valorsteed') continue; // the purchase, not a drop
-      if (key === 'terrorspark_groundshaker') continue; // developer-only, pinned separately below
+      if (key === 'terrorspark_groundshaker' || key === 'avian_strider') continue;
       const itemId = mountItemId(key)!;
       const rarity = MOUNTS[key].rarity;
       // No mount is ever on a NORMAL mob table, at any rarity.

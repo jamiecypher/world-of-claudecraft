@@ -2469,6 +2469,17 @@
       }
     ]
   },
+  "mount_summon_avian_strider": {
+    "ceilingDb": 7,
+    "tracks": [
+      {
+        "filename": "mount_summon_avian_strider.mp3",
+        "sha256": "027e86bcf442e89459c2e0a0b9d39c2f4febe4053df6173ebfb9c9d46ceb2d51",
+        "size": 30763,
+        "peakDb": -8
+      }
+    ]
+  },
   "move_jump": {
     "ceilingDb": 4.6,
     "tracks": [

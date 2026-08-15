@@ -1,8 +1,8 @@
 {
   "format": "woc-sfx-runtime-pack",
   "version": 1,
-  "bundleId": "2074fac9f3d7a778014af595331a137a7c1f44acb53ebe2250d901044d89da52",
-  "catalogHash": "3955e4baa75a2d284a7a67b26d653aaed5bd61d5f8b82fd048bcbeb1b07239a1",
+  "bundleId": "bbad233d4f19b30887edef747a99f8344b0291a8fe6a73c95f635b32fc04ad28",
+  "catalogHash": "8f8f48eaf5f4193fda97a45e454130daa554169574ddb4f72558889bafa98079",
   "clips": {
     "amb_birds": {
       "variants": [
@@ -2984,6 +2984,18 @@
         }
       ],
       "gain": 1,
+      "playbackRate": 1
+    },
+    "mount_summon_avian_strider": {
+      "variants": [
+        {
+          "id": "main",
+          "url": "/audio/sfx/mount_summon_avian_strider.mp3?v=027e86bcf442",
+          "bytes": 30763,
+          "sha256": "027e86bcf442e89459c2e0a0b9d39c2f4febe4053df6173ebfb9c9d46ceb2d51"
+        }
+      ],
+      "gain": 2.238721,
       "playbackRate": 1
     },
     "move_jump": {

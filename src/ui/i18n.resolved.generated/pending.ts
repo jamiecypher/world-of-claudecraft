@@ -12,82 +12,147 @@ export const pending: Record<string, readonly string[]> = {
   "es": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "es_ES": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "fr_FR": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "fr_CA": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "en_CA": [],
   "it_IT": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "de_DE": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
-  "zh_CN": [],
-  "zh_TW": [],
-  "ko_KR": [],
-  "ja_JP": [],
+  "zh_CN": [
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
+  ],
+  "zh_TW": [
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
+  ],
+  "ko_KR": [
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
+  ],
+  "ja_JP": [
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
+  ],
   "pt_BR": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
-  "ru_RU": [],
+  "ru_RU": [
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
+  ],
   "cs_CZ": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "nl_NL": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "pl_PL": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "id_ID": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "tr_TR": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "sv_SE": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "vi_VN": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ],
   "da_DK": [
     "entities.abilities.challenging_roar.description",
     "entities.abilities.challenging_roar.name",
-    "entities.abilities.cheap_shot.descriptionNoStealth"
+    "entities.abilities.cheap_shot.descriptionNoStealth",
+    "entities.items.reins_avian_strider.name",
+    "hudChrome.mounts.desc_avian_strider",
+    "hudChrome.mounts.name_avian_strider"
   ]
 };

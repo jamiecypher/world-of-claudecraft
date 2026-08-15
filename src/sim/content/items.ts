@@ -414,6 +414,18 @@ export const BASE_ITEMS: Record<string, ItemDef> = {
     noDiscard: true,
     sellValue: 0,
   },
+  // Developer-only working mount. It has no acquisition path outside the
+  // explicit dev grant while rider fit and locomotion are being tuned.
+  reins_avian_strider: {
+    id: 'reins_avian_strider',
+    name: 'Reins of the Viridian Valestrider',
+    kind: 'mount',
+    mount: 'avian_strider',
+    quality: 'epic',
+    soulbound: true,
+    noDiscard: true,
+    sellValue: 0,
+  },
   mistveil_cord: {
     id: 'mistveil_cord',
     name: 'Mistveil Cord',

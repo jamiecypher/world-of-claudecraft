@@ -160,6 +160,7 @@ import {
   preloadTrainingDummyAssets,
   trainingDummyAssetsReady,
 } from './characters/assets';
+import type { BoneMotionAnchor } from './characters/bone_motion_anchor';
 import {
   activeCharacterFormVisual,
   characterFormMaskForAura,
@@ -1070,6 +1071,10 @@ export interface EntityView {
   travelVisual: CharacterVisual | null; // druid travel form (chicken-cow), built lazily
   mountVisual: CharacterVisual | null; // rideable mount under a player, built lazily
   mountVisualKey: string; // '' = none; diffed each frame for live mount swaps
+  mountRiderAnchor: BoneMotionAnchor | null;
+  /** Whether the rider's local rotation currently holds a saddle tilt, so it
+   *  is cleared exactly once when the rider leaves the saddle. */
+  riderRotated: boolean;
   /** world-unit rider saddle lift while mounted (0 dismounted); the nameplate,
    *  chat-bubble, and sloppy-pick overhead anchors add it (scaled by e.scale) */
   mountLift: number;
@@ -1525,6 +1530,9 @@ export class Renderer {
   // brightness without moving anything across BLOOM_THRESHOLD.
   private baseExposure = 1;
   private tmpV = new THREE.Vector3();
+  /** Scratch for the mounted rider's saddle tilt; kept off tmpV's pool because
+   *  both are live in the same statement. */
+  private tmpQuat = new THREE.Quaternion();
   private tmpPuff = new THREE.Vector3();
   private viewCandidates: ViewCandidate[] = [];
   private viewCandidatePool: ViewCandidate[] = [];
@@ -8779,6 +8787,8 @@ export class Renderer {
       travelVisual: null,
       mountVisual: null,
       mountVisualKey: '',
+      mountRiderAnchor: null,
+      riderRotated: false,
       mountLift: 0,
       metamorphVisual: null,
       fireballTravelVisual: null,
@@ -11288,11 +11298,32 @@ export class Renderer {
           v.group.remove(v.mountVisual.root);
           v.mountVisual.dispose();
           v.mountVisual = null;
+          v.mountRiderAnchor = null;
         }
         v.mountVisualKey = '';
         if (mountAssetsReady(mountSpec.visualKey)) {
           v.mountVisual = createMountVisual(mountSpec.visualKey);
           v.group.add(v.mountVisual.root); // group.scale already carries e.scale
+          // Anchor the rider to the AUTHORED SADDLE POINT, not to the bone's
+          // own origin: `(0, seat, seatFwd)` is where the rider already sits at
+          // rest (see the mountLift/seatFwd placement below), so the anchor
+          // reports how far that exact point of the saddle travels as the rig
+          // animates, and the tuned seat values stay the source of truth.
+          v.mountRiderAnchor = mountSpec.riderBone
+            ? v.mountVisual.createBoneMotionAnchor(
+                mountSpec.riderBone,
+                this.tmpV.set(0, mountSpec.seat, mountSpec.seatFwd),
+              )
+            : null;
+          // A spec that NAMES a rider bone but resolves nothing is a content
+          // defect (a renamed joint, a re-export that sanitized the name), and
+          // its only symptom in game is a rider that silently ignores the rig
+          // exactly as if no anchor were configured. Say so instead.
+          if (mountSpec.riderBone && !v.mountRiderAnchor) {
+            console.warn(
+              `Mount ${mountSpec.visualKey}: rider bone "${mountSpec.riderBone}" not found in the rig; the rider will not follow the saddle.`,
+            );
+          }
           v.mountVisualKey = mountSpec.visualKey;
           // A newly summoned mount is exactly a brand-new rig's materials
           // linking for the first time; gate it like a gear swap instead of
@@ -11310,6 +11341,7 @@ export class Renderer {
         v.group.remove(v.mountVisual.root);
         v.mountVisual.dispose();
         v.mountVisual = null;
+        v.mountRiderAnchor = null;
         v.mountVisualKey = '';
       }
       if (v.mountVisual) v.mountVisual.root.visible = mountShown && !v.mountCompilePending;
@@ -11362,6 +11394,16 @@ export class Renderer {
       // model origin (the toad's is well back toward the tail).
       v.visual.root.position.y = v.mountLift;
       v.visual.root.position.z = v.mountLift > 0 && mountSpec ? mountSpec.seatFwd : 0;
+      // Clear any saddle tilt from the previous frame on the SAME unconditional
+      // pass that rebases the seat offsets. A dismount, a swap to a mount with
+      // no rider bone, a hidden mount, or a far-LOD frame that stops sampling
+      // would otherwise leave the rider frozen at whatever angle the saddle
+      // last held; the mounted branch below re-applies it when it still
+      // applies. Latched so an unmounted rig is not written to every frame.
+      if (v.riderRotated) {
+        v.visual.root.quaternion.identity();
+        v.riderRotated = false;
+      }
       // distant rigs swap to the single-draw baked idle-pose mesh
       v.visual.setFar(v.isFar && active === v.visual && resolvedForm !== 'fireball');
       v.sheepVisual?.setFar(v.isFar && active === v.sheepVisual);
@@ -11946,7 +11988,22 @@ export class Renderer {
           // float), not just the mount body
           const bob = mountBobY(mountSpec, this.time, moving);
           v.mountVisual.root.position.y = bob;
-          v.visual.root.position.y = v.mountLift + bob;
+          const riderMotion = v.mountRiderAnchor?.sampleOffset(this.tmpV) ?? this.tmpV.set(0, 0, 0);
+          v.visual.root.position.set(
+            riderMotion.x,
+            v.mountLift + bob + riderMotion.y,
+            mountSpec.seatFwd + riderMotion.z,
+          );
+          // Carry the saddle's TURN as well as its travel, or the rider stays
+          // bolt upright while the mount pitches and twists underneath them.
+          // Position and rotation together are what read as one rigid piece.
+          // The rider's own facing lives on v.group, so this local rotation is
+          // free to spend on the saddle (restoreRiderRotation puts it back).
+          if (v.mountRiderAnchor) {
+            v.mountRiderAnchor.sampleRotation(this.tmpQuat, mountSpec.riderTilt);
+            v.visual.root.quaternion.copy(this.tmpQuat);
+            v.riderRotated = true;
+          }
           // ambient mount particles: the snail paints its slime path while
           // gliding, the hover cycle streams aether exhaust off its tail
           if (mountSpec.fx === 'slime') {
@@ -11993,6 +12050,14 @@ export class Renderer {
         ) {
           active.playCallPose(e.mountCastRemaining);
         }
+        // Warm the summoned mount's call on the SAME idle -> summoning edge,
+        // ungated by presentation: the channel is the only warning the cue
+        // gets, and its clip preloads lazily (category 'other'), so warming it
+        // at completion instead would drop the first summon of a session
+        // through playAt's cold path. A no-op for a mount with no summon take.
+        if (mountCasting && !v.wasMountCasting && e.mountCastKey !== '') {
+          this.audioSink?.preloadMountSummon(e.mountCastKey);
+        }
         v.wasMountCasting = mountCasting;
         // mountKey change = summon completed, dismount completed, or a live swap:
         // fire the shimmer at the rider. Tracked separately from mountVisualKey,
@@ -12000,6 +12065,14 @@ export class Renderer {
         if (e.mountKey !== v.lastMountKey) {
           v.lastMountKey = e.mountKey;
           if (runCharacterPresentation) this.vfx.mountSummonGlow(e.id);
+          // The mount's own call, on the same edge as the glow but only when a
+          // mount actually APPEARED: e.mountKey === '' is a dismount, which
+          // keeps the glow and gets no call. A live swap is a genuine
+          // appearance and does play the new mount's call. lastMountKey is
+          // seeded from the entity's current state at view creation, so a
+          // rider already mounted when they enter interest range (or at login)
+          // never reaches this edge and stays silent.
+          if (e.mountKey !== '') this.audioSink?.mountSummon(ax, ay, az, e.mountKey, isSelf);
           // A mountKey change (dismount, a live mount swap, or a fresh summon
           // reusing this entity id) must drop any engine mount's windup/loop
           // state; otherwise the old loop node stays connected forever once

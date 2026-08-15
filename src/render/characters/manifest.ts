@@ -112,6 +112,18 @@ export interface VisualDef {
   /** u/s at which the walk/run cycles look right (timeScale matching) */
   walkRef?: number;
   runRef?: number;
+  /** Cadence ceilings (defaults 1.8 walk / 1.6 run, anim_state.ts). Raise for a
+   *  rig whose authored gait is slower than the body it carries: a mount runs
+   *  at ONE fixed speed, so its time scale is a constant and the ceiling is
+   *  what binds, making the reference look like a dead knob past that point. */
+  walkTimeScaleMax?: number;
+  runTimeScaleMax?: number;
+  /** Wind the outgoing gait's cadence down across a crossfade instead of
+   *  letting it hold its last speed while it dissolves. Opt-in per rig: it
+   *  changes how every stop and gait change reads, so rigs adopt it one at a
+   *  time on their own review rather than all at once. Most valuable on a rig
+   *  whose cadence is pushed well past 1 (see runTimeScaleMax). */
+  gaitWindDown?: boolean;
   attackTimeScale?: number;
   deathTimeScale?: number;
   /** Skip the boot preload sweep (manifestUrls); the asset is fetched on demand
@@ -232,6 +244,20 @@ const MOUNT_RIGGED: ClipMap = {
   run: 'Run',
   attack: [],
   death: 'Death',
+};
+
+// The Viridian Valestrider is authored as a mount-specific four-clip rig. It
+// only runs forward, has a deliberate look-behind reverse gait, and carries
+// its own full-body jump. Death falls back to Idle because mounts never die
+// independently of their riders.
+const AVIAN_MOUNT_RIGGED: ClipMap = {
+  idle: 'Idle',
+  walk: 'Run',
+  run: 'Run',
+  walkBack: 'WalkBackward',
+  jump: 'Jump',
+  attack: [],
+  death: 'Idle',
 };
 
 // The Drakelands dragonkin brood (tmp/dragonkin_build.mjs bakes): artist
@@ -1704,6 +1730,46 @@ export const VISUALS: Record<string, VisualDef> = {
     // inside what the other baked mounts already ship (grag_bear's 3.58 yd/s
     // natural against the same 12.6 leaves it sliding over half its travel).
     runRef: 12.6,
+    lazyPreload: true,
+  },
+  // Tall two-legged fantasy bird authored on its own avian skeleton. The
+  // source faces -X, so +90 degrees maps its beak to the renderer's +Z
+  // facing convention. Forward movement intentionally uses Run for both
+  // locomotion bands: this mount never presents a walking forward gait.
+  mount_avian_strider: {
+    url: `${MOUNTS_DIR}/avian_strider.glb`,
+    height: 4.32,
+    yaw: Math.PI / 2,
+    clips: AVIAN_MOUNT_RIGGED,
+    // Cadence, tuned by eye. A mounted rider moves at ONE speed, so both time
+    // scales are constants: forward is RUN_SPEED 7 * (1 + moveSpeedPct 0.8) =
+    // 12.6 yd/s, reverse is that * BACKPEDAL_MULT 0.65 = 8.19. That makes the
+    // refs below exact dials rather than speed-matching curves.
+    //
+    //   reverse  8.19 / walkRef 5.52 = 1.484
+    //   forward 12.6  / runRef  7.16 = 1.760
+    //
+    // walkRef is the only reference walkBack reads; it is shared with the
+    // forward walk band, which this mount only enters when slowed below the
+    // run threshold. History: 4.5 -> 6.0 -> 6.67 -> 5.80 -> 5.52.
+    walkRef: 5.52,
+    // 12.6 -> 10.5 -> 8.4 -> 7.64 -> 7.28 -> 7.16, cumulatively 76% up on the
+    // authored cadence. The stock 1.6 run ceiling silently bound this from
+    // 7.64 down (7.64 and 7.28 both resolved to 1.6, so the second change did
+    // nothing), hence the raised ceilings below.
+    runRef: 7.16,
+    // Raised from the stock 1.8/1.6 so the refs above stay live. The authored
+    // gaits were built for a calmer bird than the one the sim actually moves,
+    // and clamping at stock turns further tuning into a dead knob rather than
+    // a slower mount. 2.0 leaves room to keep dialing before the clip itself
+    // needs re-timing at the source.
+    walkTimeScaleMax: 2.0,
+    runTimeScaleMax: 2.0,
+    // Opted in BECAUSE of the pushed cadence above: at 1.76 the outgoing run
+    // otherwise keeps sprinting for the whole 0.22s crossfade while the body
+    // has already stopped, and the harder the gait is driven the worse that
+    // exit reads. No other rig is affected.
+    gaitWindDown: true,
     lazyPreload: true,
   },
 

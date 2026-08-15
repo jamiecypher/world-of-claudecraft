@@ -1061,6 +1061,7 @@ export const ru_RU: EnTranslations = {
       "name_thunderstrut_gobbler": "Громоступ, великий индюк",
       "name_terrorspark_groundshaker": "Страхоискр, сотрясатель земли",
       "name_drakemaw_raptor": "Раптор Дрейкмо",
+      "name_avian_strider": "Viridian Valestrider",
       "desc_valorsteed": "Выносливый и твердо стоящий на ногах скакун, повышающий скорость передвижения.",
       "desc_grag_bear": "Выносливый и твердо стоящий на лапах медведь, повышающий скорость передвижения.",
       "desc_stalkglider_snail": "Стойкая неторопливая улитка, повышающая скорость передвижения.",
@@ -1069,7 +1070,8 @@ export const ru_RU: EnTranslations = {
       "desc_stormfeather_griffin": "Величавый штормовой грифон, ступающий по земле на рунных когтях со сложенными крыльями.",
       "desc_thunderstrut_gobbler": "Исполинский индюк, рожденный бурей: он важно спускается с Пробуждающегося пика, распустив хвост, словно грозовой фронт.",
       "desc_terrorspark_groundshaker": "Компактная бронированная машина с тяжёлыми гусеницами, крупнокалиберной пушкой и седлом для бесстрашных пилотов.",
-      "desc_drakemaw_raptor": "Приученный к седлу выводковый раптор из кальдеры Дрейкмо: сплошные жилы и бег, и от него всё ещё едва пахнет пеплом."
+      "desc_drakemaw_raptor": "Приученный к седлу выводковый раптор из кальдеры Дрейкмо: сплошные жилы и бег, и от него всё ещё едва пахнет пеплом.",
+      "desc_avian_strider": "A towering saddle-bird whose heavy talons and folded wings turn every journey into a thundering sprint."
     },
     "mountTraining": {
       "mountPrompt": "Нажми {key}, чтобы оседлать учебного Доблестного скакуна.",
@@ -12325,6 +12327,9 @@ export const ru_RU: EnTranslations = {
       },
       "reins_terrorspark_groundshaker": {
         "name": "Ключ зажигания Страхоискра"
+      },
+      "reins_avian_strider": {
+        "name": "Reins of the Viridian Valestrider"
       },
       "reins_drakemaw_raptor": {
         "name": "Поводья раптора Дрейкмо"

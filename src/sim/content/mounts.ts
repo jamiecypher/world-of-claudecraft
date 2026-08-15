@@ -20,6 +20,7 @@ export type MountKey =
   | 'stormfeather_griffin'
   | 'thunderstrut_gobbler'
   | 'drakemaw_raptor'
+  | 'avian_strider'
   | 'terrorspark_groundshaker';
 
 export type MountRarity = 'common' | 'uncommon' | 'rare' | 'epic';
@@ -100,6 +101,17 @@ export const MOUNTS: Record<MountKey, MountDef> = {
   drakemaw_raptor: {
     key: 'drakemaw_raptor',
     name: 'Drakemaw Raptor',
+    rarity: 'epic',
+    moveSpeedPct: 0.8,
+  },
+  // Developer mount while its acquisition path is art-directed; the display
+  // name is final. The internal key stays `avian_strider` because the shipped
+  // GLB, icon, asset spec, and KTX2 seals are all named from it. The soulbound
+  // reins live in content/items.ts so /dev mounts can exercise the complete
+  // ownership/summon path in-world.
+  avian_strider: {
+    key: 'avian_strider',
+    name: 'Viridian Valestrider',
     rarity: 'epic',
     moveSpeedPct: 0.8,
   },

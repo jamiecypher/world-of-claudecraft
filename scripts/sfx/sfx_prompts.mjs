@@ -143,6 +143,15 @@ export const SFX = [
     custom: true,
   },
   {
+    // The Viridian Valestrider's summon call: an authored bird cry played once
+    // when the 1.5s summon channel completes and the mount appears. The only
+    // `mount_summon_*` key so far; Sfx.mountSummon resolves the key per mount
+    // and stays silent for a mount with no authored take, so the other mounts
+    // are unaffected.
+    key: 'mount_summon_avian_strider',
+    custom: true,
+  },
+  {
     key: 'move_jump',
     custom: true,
     duration: 0.5,

@@ -90,6 +90,13 @@ const FOOTSTEP_CUES: Partial<Record<string, string>> = {
   water: 'foot_water',
 };
 
+/** The authored summon-call clip key for a mount, whether or not one exists.
+ *  Callers check membership in SFX_CLIPS, so a mount without a take is silent
+ *  rather than an error. */
+function summonClipKey(mountKey: string): string {
+  return `mount_summon_${mountKey}`;
+}
+
 function assetCacheKey(key: string, variantIndex: number): string {
   return variantIndex === 0 ? key : `${key}:${variantIndex}`;
 }
@@ -998,6 +1005,41 @@ class Sfx {
     this.preload(keys.startKey);
     this.preload(keys.loopKey);
     this.preload(keys.stopKey);
+  }
+
+  /** The mount's own call as it appears, fired once on the summon channel's
+   *  completion edge. Keyed per mount (`mount_summon_<mountKey>`) and silent
+   *  for a mount with no authored take, so this stays opt-in per mount exactly
+   *  like the engine take set above. No cooldown: the edge that drives it
+   *  already fires at most once per summon. */
+  mountSummon(x: number, y: number, z: number, mountKey: string, self: boolean): void {
+    const key = summonClipKey(mountKey);
+    if (!(key in SFX_CLIPS)) return;
+    // Gain 1, not the ~0.85 the per-stride gait cues use: this is a
+    // once-per-summon hero cue, and the level it actually plays at comes from
+    // the key's authored trim in sfx_gain_map.json (bounded by its measured
+    // true-peak headroom), which is the right place to shape it.
+    //
+    // YOUR OWN summon is personal feedback and plays flat, like the UI cues it
+    // sits next to in the mix. The positional path would dock it twice over
+    // for something that is happening directly under you: the audio listener
+    // is the CAMERA (see FORGE_MAX_DISTANCE's note), which trails the player
+    // by 3-22 units, so a linear-model source at the player is already past
+    // refDistance 5 and attenuating before the equalpower panner also spreads
+    // it off-centre. Somebody ELSE's mount is a world event and stays spatial,
+    // so it arrives from where they are and falls off with distance.
+    if (self) this.playUi(key, { gain: 1, rate: 1, release: 0.6 });
+    else this.playAt(key, x, y, z, { gain: 1, rate: 1, release: 0.6 });
+  }
+
+  /** Warm a mount's summon clip while its channel is still running. The cue is
+   *  category 'other', so it preloads lazily: without this the very first
+   *  summon of a session would hit playAt's cold path (silently dropped past a
+   *  0.12s fetch/decode window) and the mount would appear in silence. The
+   *  1.5s channel is ample warning. A no-op for a mount with no authored take. */
+  preloadMountSummon(mountKey: string): void {
+    const key = summonClipKey(mountKey);
+    if (key in SFX_CLIPS) this.preload(key);
   }
 
   /** Jump / land / water-entry / swim-stroke. */

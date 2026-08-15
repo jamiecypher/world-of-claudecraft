@@ -28,6 +28,7 @@ import {
   type BaseState,
   desiredBaseState,
   drivesPose,
+  gaitWindDownTimeScale,
   locomotionTimeScale,
   pickProxyHeight,
   scanAnimRepair,
@@ -53,6 +54,7 @@ import {
   takeFarBakeBudget,
   tintedFarMaterials,
 } from './assets';
+import { BoneMotionAnchor } from './bone_motion_anchor';
 import { HairSwayDriver } from './hair_sway';
 import { buildHalo } from './halo';
 import type { EmoteClipSpec, VisualDef, WeaponLayoutOverride } from './manifest';
@@ -406,6 +408,16 @@ export class CharacterVisual {
   /** The composition this visual was built from (null for a fixed class rig). */
   get modularLook(): ModularLook | null {
     return this.look;
+  }
+
+  /** Capture a rig bone as a root-relative motion source for an external prop
+   *  or rider. `rootSpacePoint` is the point to follow, in this visual's root
+   *  space (for a mount rider, its authored saddle coordinates): the anchor
+   *  reports how far that point travels, NOT how far the bone origin travels.
+   *  Returns null for rigs that do not carry the requested bone. */
+  createBoneMotionAnchor(boneName: string, rootSpacePoint: THREE.Vector3): BoneMotionAnchor | null {
+    const bone = this.model.getObjectByName(boneName);
+    return bone ? new BoneMotionAnchor(this.root, bone, rootSpacePoint) : null;
   }
 
   /** Move the face/body sliders on the LIVE body: morph influences are
@@ -852,7 +864,14 @@ export class CharacterVisual {
       }
       // foot-speed matching on locomotion cycles
       if (!this.currentIsOneShot && this.current) {
-        const timeScale = locomotionTimeScale(this.baseState, s, this.def.walkRef, this.def.runRef);
+        const timeScale = locomotionTimeScale(
+          this.baseState,
+          s,
+          this.def.walkRef,
+          this.def.runRef,
+          this.def.walkTimeScaleMax,
+          this.def.runTimeScaleMax,
+        );
         if (timeScale !== null) {
           if (timeScale < 0 && this.current.time <= 1e-3)
             this.current.time = Math.max(0, this.current.getClip().duration - 1e-3);
@@ -861,6 +880,7 @@ export class CharacterVisual {
         if (this.baseState === 'spin') this.current.timeScale = SPIN_ATTACK_TIMESCALE;
       }
     }
+    this.advanceGaitWindDown(dt);
 
     // Zero-weight watchdog. The fades above only run on a base-state EDGE, so
     // any transient that leaves NO action driving the rig keeps it in bind pose
@@ -2795,6 +2815,35 @@ export class CharacterVisual {
     return s.moving || s.airborne || s.swimming || s.casting || !!s.spinning || s.sitting || s.dead;
   }
 
+  /** The outgoing gait currently winding down, if this rig opted in. Cleared
+   *  when the fade completes, or the moment the action is re-driven. */
+  private windDown: {
+    action: THREE.AnimationAction;
+    from: number;
+    fade: number;
+    elapsed: number;
+  } | null = null;
+
+  /** Decay the outgoing gait's cadence alongside its crossfade, so a stop
+   *  settles instead of sprinting out under a dissolving pose. A no-op for a
+   *  rig that has not opted in, and for the whole of the rest of the game. */
+  private advanceGaitWindDown(dt: number): void {
+    const w = this.windDown;
+    if (!w) return;
+    // Re-driven as the live pose (a stop that immediately becomes a start), or
+    // stopped out from under us: hand it back, the per-frame speed matching
+    // owns its cadence again. isScheduled(), NOT isRunning(): three reports a
+    // timeScale-0 action as not running, so isRunning would call the freeze
+    // this very function just applied a reason to stop tracking it.
+    if (w.action === this.current || !w.action.isScheduled()) {
+      this.windDown = null;
+      return;
+    }
+    w.elapsed += dt;
+    w.action.timeScale = gaitWindDownTimeScale(w.from, w.elapsed, w.fade);
+    if (w.elapsed >= w.fade) this.windDown = null;
+  }
+
   private fadeTo(next: THREE.AnimationAction | null, fade: number, oneShot: boolean): void {
     if (!next) return;
     if (next === this.current && !oneShot) return;
@@ -2848,9 +2897,20 @@ export class CharacterVisual {
     }
     if (prev && prev !== next && drivesPose(readActionWeight(prev))) {
       prev.fadeOut(fade);
+      // Arm the cadence wind-down on the SAME action the mixer is fading, and
+      // only for a gait that was actually running forward: a reversed
+      // backpedal (negative scale) or an already-idle clip has nothing to wind
+      // down, and one-shots own their own timing.
+      this.windDown =
+        this.def.gaitWindDown && !this.currentIsOneShot && prev.timeScale > 0
+          ? { action: prev, from: prev.timeScale, fade, elapsed: 0 }
+          : null;
       next.fadeIn(fade).play();
       return;
     }
+    // The snap path stops `prev` outright, so there is no outgoing cadence left
+    // to decay; drop any wind-down still pointing at it.
+    this.windDown = null;
     // A prev below the pose-drive threshold still needs its scheduled fades
     // cancelled: it is excluded from the sweep above (as prev) and from the
     // crossfade (below threshold), so a fade-in it was carrying would

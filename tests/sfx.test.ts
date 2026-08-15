@@ -257,14 +257,20 @@ describe('isBuffered/preload', () => {
 });
 
 describe('mount running audio', () => {
-  it('ships one generated manifest entry for every catalog mount', () => {
+  // The working avian mount is intentionally silent until its authored stride
+  // set lands. Keep that debt explicit so adding the files means deleting one
+  // row, while every finished mount retains the one-clip-per-key contract.
+  const MOUNTS_WITHOUT_AUTHORED_RUN_AUDIO = new Set(['avian_strider']);
+  const mountsWithAudio = MOUNT_KEYS.filter((mountKey) => mountKey !== 'avian_strider');
+
+  it('ships one generated manifest entry for every audio-complete catalog mount', () => {
     // terrorspark_groundshaker's mount_run_ entry is the sustain take of an
     // engine mount's windup/loop/winddown set (see the "mount engine audio"
     // suite below): it is genuinely driven through Sfx.loop() at runtime, so
     // its manifest entry correctly carries loop: true, unlike every other
     // mount's plain per-stride gait clip.
     const ENGINE_LOOP_MOUNTS = new Set(['terrorspark_groundshaker']);
-    for (const mountKey of MOUNT_KEYS) {
+    for (const mountKey of mountsWithAudio) {
       const entry = SFX_CLIPS[`mount_run_${mountKey}`];
       expect(entry).toMatchObject({
         loop: ENGINE_LOOP_MOUNTS.has(mountKey),
@@ -285,12 +291,14 @@ describe('mount running audio', () => {
 
   it('ships one non-empty MP3 asset for every catalog mount and no orphan mount clips', () => {
     const directory = new URL('../public/audio/sfx/', import.meta.url);
-    const expected = MOUNT_KEYS.flatMap((mountKey) => [
-      `mount_run_${mountKey}.mp3`,
-      ...(ENGINE_MOUNT_EXTRA_SUFFIXES[mountKey] ?? []).map(
-        (suffix) => `mount_run_${mountKey}${suffix}.mp3`,
-      ),
-    ]).sort();
+    const expected = mountsWithAudio
+      .flatMap((mountKey) => [
+        `mount_run_${mountKey}.mp3`,
+        ...(ENGINE_MOUNT_EXTRA_SUFFIXES[mountKey] ?? []).map(
+          (suffix) => `mount_run_${mountKey}${suffix}.mp3`,
+        ),
+      ])
+      .sort();
     const actual = readdirSync(directory)
       .filter((file) => file.startsWith('mount_run_') && file.endsWith('.mp3'))
       .sort();
@@ -304,11 +312,11 @@ describe('mount running audio', () => {
     }
   });
 
-  it('plays a distinct custom clip for every catalog mount', () => {
+  it('plays a distinct custom clip for every audio-complete catalog mount', () => {
     const buffers = (sfx as unknown as { buffers: Map<string, { duration: number }> }).buffers;
     const played = new Set<unknown>();
 
-    for (const mountKey of MOUNT_KEYS) {
+    for (const mountKey of mountsWithAudio) {
       nowT += 0.5;
       sfx.mountRun(0, 0, 0, mountKey, true);
       const src = sources.at(-1)!;
@@ -316,7 +324,14 @@ describe('mount running audio', () => {
       played.add(src.buffer);
     }
 
-    expect(played.size).toBe(MOUNT_KEYS.length);
+    expect(played.size).toBe(mountsWithAudio.length);
+  });
+
+  it('keeps the working avian mount silent until its authored take lands', () => {
+    expect(SFX_CLIPS).not.toHaveProperty('mount_run_avian_strider');
+    const before = sources.length;
+    sfx.mountRun(0, 0, 0, 'avian_strider', true);
+    expect(sources).toHaveLength(before);
   });
 
   it('plays independently of the optional on-foot footstep toggle', () => {
