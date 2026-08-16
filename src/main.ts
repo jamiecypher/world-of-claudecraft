@@ -1781,6 +1781,34 @@ async function startGame(
     hud.refreshDayNightDial();
     return true;
   };
+  // THROWAWAY, DEV ONLY, DO NOT SHIP: "/cc" spins the camera around the player
+  // at whatever distance and pitch it already has, for filming a clean orbit
+  // without hand-driving the mouse. Holds the orbit rate only; updateCamera does
+  // the driving and bypasses follow while this is set.
+  let filmOrbit: { rate: number } | null = null;
+  const tryCamOrbitDevCommand = (raw: string): boolean => {
+    const m = raw.trim().match(/^\/cc\b\s*(.*)$/i);
+    if (!m) return false;
+    if (!import.meta.env.DEV) return false;
+    const arg = m[1].trim().toLowerCase();
+    if (['stop', 'off', 'end', 'clear'].includes(arg)) {
+      filmOrbit = null;
+      hud.log('[dev] camera orbit off', '#8fd0ff');
+      return true;
+    }
+    // The argument is SECONDS PER REVOLUTION (not a speed), because that is what
+    // you actually plan a shot against. Negative reverses.
+    const secs = Number.parseFloat(arg);
+    const period = Number.isFinite(secs) && secs !== 0 ? secs : 20;
+    filmOrbit = { rate: (Math.PI * 2) / period };
+    hud.log(
+      `[dev] camera orbit on: ${Math.abs(period)}s per revolution, ${
+        period < 0 ? 'clockwise' : 'counter-clockwise'
+      }. "/cc stop" to end.`,
+      '#8fd0ff',
+    );
+    return true;
+  };
   chatInput.addEventListener('keydown', (e) => {
     e.stopPropagation();
     // While the "!" command dropdown is open it owns Arrows/Enter/Tab/Escape.
@@ -1797,6 +1825,12 @@ async function startGame(
       const raw = chatInput.value;
       // dev-only day/night scrub command, intercepted before the chat send path
       if (import.meta.env.DEV && tryDayNightDevCommand(raw)) {
+        chatInput.value = '';
+        closeChat();
+        return;
+      }
+      // throwaway filming orbit, same interception point as the day/night scrub
+      if (import.meta.env.DEV && tryCamOrbitDevCommand(raw)) {
         chatInput.value = '';
         closeChat();
         return;
@@ -3873,6 +3907,17 @@ async function startGame(
     frameDt: 0,
   };
   function updateCamera(frameDt: number, interpFacing: number): void {
+    // THROWAWAY, DEV ONLY: the "/cc" filming orbit owns the yaw outright and
+    // skips follow, so nothing settles the camera back behind the character
+    // mid-shot. Distance and pitch are untouched, so the shot keeps whatever
+    // framing was on screen when the command was typed.
+    if (filmOrbit) {
+      input.camYaw = wrapAngle(input.camYaw + filmOrbit.rate * frameDt);
+      // Keep the follow reference current, or stopping the orbit hands a stale
+      // facing delta to the rigid follow term and it rings out as a shake.
+      lastInterpFacing = interpFacing;
+      return;
+    }
     const mi = input.readMoveInput();
     const clickMoving = !!input.clickMoveTarget && !input.suspendMovement && !movementFrozen();
     // When click-to-move ends, the player's facing snaps from the (camera-lagging)
