@@ -953,6 +953,22 @@ export const nl_NL: EnTranslations = {
       "clockMs": "{minutes}:{seconds}",
       "clockHms": "{hours}:{minutes}:{seconds}"
     },
+    "lastkeepMap": {
+      "title": "{keep}: {story}",
+      "story": {
+        "undercroft": "The Undercroft",
+        "state": "The State Floor",
+        "residence": "The Residence",
+        "tower": "The Watch Tower"
+      }
+    },
+    "dawnholdMap": {
+      "title": "{keep}: {story}",
+      "story": {
+        "ground": "The Garden Floor",
+        "solar": "The Solar"
+      }
+    },
     "compass": {
       "N": "N",
       "NE": "NO",
@@ -1369,6 +1385,10 @@ export const nl_NL: EnTranslations = {
       "showWalletOnCharacterScreen": "Portemonnee tonen op personagescherm",
       "showWalletOnPlayerCard": "Portemonnee tonen op spelerskaart",
       "showPlaytime": "Speeltijd tonen op personagescherm",
+      "forceHighPerfGpu": "Toegewijde game-GPU gebruiken",
+      "forceHighPerfGpuNote": "Standaard aan: de desktop-app vraagt deze computer om zijn toegewijde game-GPU. Zet dit uit als het spel niet opstart of met een zwart scherm opent, of als het laptopscherm leeg blijft. Wordt toegepast bij de volgende start van het spel.",
+      "discordPresence": "Discord-activiteit",
+      "discordPresenceNote": "Toont de zone waarin je je bevindt en hoelang je deze sessie al speelt als je Discord-activiteit, en iedereen die je Discord-profiel kan zien, kan beide zien. Alleen de zonenaam, je sessietijd en het spel worden gedeeld, nooit je personage, je account, of met wie je speelt. Vereist dat de Discord-app op deze computer actief is.",
       "showDevBadges": "Ontwikkelaarsinsignes tonen",
       "showOwnNameplate": "Mijn naambordje tonen",
       "showPlayerNameplates": "Spelersnamen Tonen",
@@ -7791,7 +7811,15 @@ export const nl_NL: EnTranslations = {
       "readyBody": "Deze wordt geïnstalleerd wanneer je afsluit, of herstart nu.",
       "restart": "Nu herstarten",
       "later": "Later",
-      "dismiss": "Sluiten"
+      "dismiss": "Sluiten",
+      "whatsNew": "Bekijk wat er is veranderd in je browser"
+    },
+    "notify": {
+      "updateReadyTitle": "Update {version} is klaar",
+      "updateReadyTitleNoVersion": "Update is klaar",
+      "updateReadyBody": "Herstart World of ClaudeCraft om de update toe te passen.",
+      "partyInviteTitle": "Groepsuitnodiging",
+      "partyInviteBody": "{name} heeft je uitgenodigd voor een groep."
     },
     "crash": {
       "title": "World of ClaudeCraft",
@@ -7803,6 +7831,7 @@ export const nl_NL: EnTranslations = {
   },
   "gpuNotice": {
     "bodyDesktop": "Het spel draait zonder GPU-versnelling en zal traag zijn. Werk je grafische stuurprogramma's bij en herstart het spel. Stel op Windows ook het spel in op Hoge prestaties via Instellingen, Systeem, Beeldscherm, Afbeeldingen.",
+    "bodyDiscreteInactive": "Het spel gebruikt niet de game-GPU en draait in plaats daarvan op de energiezuinige GPU, waardoor de prestaties zullen lijden. Werk je grafische stuurprogramma's bij en herstart het spel. Stel op Windows ook het spel in op Hoge prestaties via Instellingen, Systeem, Beeldscherm, Afbeeldingen.",
     "bodyWeb": "Het spel draait zonder GPU-versnelling en zal traag zijn. Schakel hardwareversnelling in je browserinstellingen in, werk je grafische stuurprogramma's bij en herstart je browser.",
     "hybridBodyWindows": "Deze sessie wordt weergegeven op de geïntegreerde (energiezuinige) GPU. Heeft deze computer ook een game-GPU, stel je browser dan in op Hoge prestaties via Instellingen > Systeem > Beeldscherm > Beeldinstellingen, en herstart hem daarna. De desktop-app kiest de game-GPU automatisch.",
     "hybridBodyLinux": "Deze sessie wordt weergegeven op de geïntegreerde (energiezuinige) GPU. Heeft deze computer ook een game-GPU, dan biedt je browser of grafische stuurprogramma mogelijk een eigen GPU-keuze-instelling, of biedt je distributie een GPU-wisselhulpmiddel (zoals PRIME of optimus-manager). De desktop-app kiest de game-GPU automatisch.",
@@ -8170,6 +8199,9 @@ export const nl_NL: EnTranslations = {
       "graphicsReloadNote": "Beeldkwaliteit en Terreindetail worden na een herlaadbeurt toegepast.",
       "reloadNow": "Nu herladen",
       "fullscreen": "Volledig scherm",
+      "displayMode": "Schermmodus",
+      "displayModeBorderless": "Randloos volledig scherm",
+      "displayModeWindowed": "Venster",
       "touchLookSpeed": "Kijksnelheid bij aanraking",
       "joystickSize": "Joystickgrootte",
       "buttonSize": "Knopgrootte",
@@ -9509,7 +9541,7 @@ export const nl_NL: EnTranslations = {
       "cheap_shot": {
         "name": "Buikstoot",
         "description": "Treft het doelwit voor {damage} schade en verdooft het 4 sec. Moet in sluiptocht zijn. Levert 2 combopunten op.",
-        "descriptionNoStealth": "Strike the target for {damage} damage, stunning it for 4 sec. Awards 2 combo points.",
+        "descriptionNoStealth": "Treft het doelwit voor {damage} schade en verdooft het 4 sec. Levert 2 combopunten op.",
         "specNote_subtlety": "Vanuit Schemersluier gebruikt voegt dit 1 Schemer toe (max 3). Bij 3 Schemer kun je het gebruiken ZONDER sluiptocht: dat gebruik kost niets, verbruikt alle 3 Schemer, en start de schaduwsluier van 6 sec."
       },
       "sap": {
@@ -10029,8 +10061,8 @@ export const nl_NL: EnTranslations = {
         "description": "Gromt naar het doelwit: je dreiging stijgt tot het niveau van zijn meest gehate vijand en het wordt gedwongen je 3 sec aan te vallen. Alleen in Bruingedaante."
       },
       "challenging_roar": {
-        "name": "Baleful Roar",
-        "description": "A baleful roar: every enemy within 10 yards is taunted, its threat toward you rising to match its most hated enemy, and it is compelled to attack you for 3 sec. Bruin Form only."
+        "name": "Onheilspellend Gebrul",
+        "description": "Een onheilspellend gebrul: elke vijand binnen 10 m wordt bedreigd, zijn dreiging jegens jou stijgt tot het niveau van zijn meest gehate vijand, en wordt gedwongen je 3 sec aan te vallen. Alleen in Bruingedaante."
       },
       "cat_form": {
         "name": "Wolfsgedaante",
@@ -10044,7 +10076,7 @@ export const nl_NL: EnTranslations = {
       "ferocious_bite": {
         "name": "Bloedbeet",
         "description": "Afmaakactie die {damage} veroorzaakt. Alleen in Wolfsgedaante.",
-        "specNote_feral": "Elke slag die raakt voegt 1 Oud Bloed toe; bij 3 Oud Bloed wordt deze knop Rode Oogst: een beet voor 70 plus 43 per combopunt die ook meteen alle schade toebrengt die je Villen en Verscheuren nog zouden hebben toegebracht, en 30 energie herstelt."
+        "specNote_feral": "Elke slag die raakt voegt 1 Oud Bloed toe; bij 3 Oud Bloed wordt deze knop Rode Oogst, die je Oude Bloed verbruikt voor een krachtigere slag die ook meteen alle schade toebrengt die je Villen en Verscheuren nog zouden hebben toegebracht, en energie herstelt."
       },
       "swipe": {
         "name": "Vegende Klauwen",
@@ -10107,7 +10139,7 @@ export const nl_NL: EnTranslations = {
       },
       "tigers_fury": {
         "name": "Wolvenbloed",
-        "description": "Verhoogt de aanvalskracht met {buff} gedurende {duration} sec. Alleen in Wolfsgedaante."
+        "description": "Wekt {rage} energie op en verhoogt de aanvalskracht met {buff} gedurende {duration} sec. Alleen in Wolfsgedaante."
       },
       "rip": {
         "name": "Bloedscheur",
@@ -10328,7 +10360,7 @@ export const nl_NL: EnTranslations = {
       },
       "redharvest": {
         "name": "Rode Oogst",
-        "description": "Verbruikt je 3 Oud Bloed: een slag voor {damage} die meteen alle schade toebrengt die je Villen en Verscheuren nog zouden hebben toegebracht, beide bloedingen verwijdert en 30 energie herstelt. Werkt ook zonder combopunten."
+        "description": "Verbruikt je 3 Oud Bloed: een slag voor {damage} die meteen alle schade toebrengt die je Villen en Verscheuren nog zouden hebben toegebracht, beide bloedingen verwijdert en {rage} energie herstelt. Werkt ook zonder combopunten."
       },
       "marrowbreak": {
         "name": "Mergbreker",
@@ -10576,7 +10608,7 @@ export const nl_NL: EnTranslations = {
       },
       "frenzied_regeneration": {
         "name": "Wilde genezing",
-        "description": "Herstelt 180 gezondheid gedurende 10 sec. Alleen in Berenvorm. (druïdetalent)"
+        "description": "Herstelt 40% van je maximale gezondheid gedurende 10 sec. Alleen in Berenvorm. (druïdetalent)"
       },
       "frost_trap": {
         "name": "Rijpval",
@@ -10809,7 +10841,7 @@ export const nl_NL: EnTranslations = {
       },
       "prowl": {
         "name": "Besluipen",
-        "description": "Ga in sluiptocht terwijl je in Wolfsgedaante bent en beweeg 50% trager. Kan niet in gevecht worden gebruikt."
+        "description": "Ga in sluiptocht terwijl je in Wolfsgedaante bent en beweeg 5% trager. Kan niet in gevecht worden gebruikt."
       },
       "rake": {
         "name": "Villen",
@@ -12366,6 +12398,9 @@ export const nl_NL: EnTranslations = {
       },
       "pristine_claw": {
         "name": "Ongerepte Klauw"
+      },
+      "dawnhold_posy": {
+        "name": "Dawnhold Garden Posy"
       },
       "conjured_water4": {
         "name": "Getoverd bronwater"
@@ -16850,6 +16885,11 @@ export const nl_NL: EnTranslations = {
         "name": "De Laatste Burcht",
         "enterText": "Je stapt de koude, stille hallen van de Laatste Burcht binnen.",
         "leaveText": "Je trekt de burchtdeur dicht en stapt terug de wind van de Drakenlanden in."
+      },
+      "dawnhold_castle": {
+        "name": "Dawnhold Castle",
+        "enterText": "You step into the warm, flower-scented halls of Dawnhold Castle.",
+        "leaveText": "You slip back out onto the sunlit garden lawn."
       },
       "drowned_temple": {
         "name": "De Verdronken Tempel",
