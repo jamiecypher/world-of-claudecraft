@@ -190,6 +190,8 @@
     "vanish": 6.3,
     "wand_arcane": 5.2,
     "wand_holy": 5.3,
-    "wand_shadow": 5.2
+    "wand_shadow": 5.2,
+    "mount_squawk_avian_strider": 4.5,
+    "mount_flap_avian_strider": 4.5
   }
 }

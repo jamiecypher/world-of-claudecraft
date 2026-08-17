@@ -152,6 +152,34 @@ export const SFX = [
     custom: true,
   },
   {
+    // The Valestrider's gait beat, six variants. Rotated per stride by playAt's
+    // variant pool, which is what stops a bird jogging past sounding like a
+    // metronome. This REPLACES the rider's own footsteps while mounted: it is
+    // part of the world mix and does not answer to the on-foot footstep toggle.
+    key: 'mount_run_avian_strider',
+    custom: true,
+  },
+  {
+    // Takeoff and touchdown, on the airborne edges.
+    key: 'mount_jump_avian_strider',
+    custom: true,
+  },
+  {
+    key: 'mount_land_avian_strider',
+    custom: true,
+  },
+  {
+    // Fired together at the APEX of a jump, not at takeoff: the bird calls out
+    // and beats its wings at the top of the arc. Two keys rather than one baked
+    // pair so the variants rotate independently and the mix can be tuned apart.
+    key: 'mount_squawk_avian_strider',
+    custom: true,
+  },
+  {
+    key: 'mount_flap_avian_strider',
+    custom: true,
+  },
+  {
     key: 'move_jump',
     custom: true,
     duration: 0.5,

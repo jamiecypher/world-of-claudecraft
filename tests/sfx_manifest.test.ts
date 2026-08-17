@@ -164,9 +164,9 @@ describe('buildManifest', () => {
     expect(manifest).toContain('cast_lightning_bolt');
   });
 
-  it('keeps the release catalog, all 9 mount cues, the mount summon call, and all 63 UI cues in one 266-key inventory', () => {
+  it('keeps the release catalog, all 10 mount gait cues, the Valestrider set, and all 63 UI cues in one 271-key inventory', () => {
     const keys = new Set(SFX.map((entry) => entry.key));
-    expect(keys.size).toBe(266);
+    expect(keys.size).toBe(271);
     expect([...keys].filter((key) => key.startsWith('ui_'))).toHaveLength(63);
     expect(keys.has('ui_craft_cast')).toBe(true);
     for (const key of [
@@ -189,9 +189,17 @@ describe('buildManifest', () => {
       'mount_run_terrorspark_groundshaker',
       // the Drakemaw Raptor, the ninth mount cue (the brood rework's legendary)
       'mount_run_drakemaw_raptor',
-      // the first mount_summon_* cue: the Viridian Valestrider's call on the
-      // summon channel's completion edge (every other mount appears silently)
+      // The Viridian Valestrider's authored set, the first mount to carry more
+      // than a gait cue: its call on the summon channel's completion edge
+      // (every other mount appears silently), a gait beat pinned to the
+      // animation's own foot contacts, takeoff and touchdown on the airborne
+      // edges, and a squawk plus a wingbeat fired together at the jump's apex.
       'mount_summon_avian_strider',
+      'mount_run_avian_strider',
+      'mount_jump_avian_strider',
+      'mount_land_avian_strider',
+      'mount_squawk_avian_strider',
+      'mount_flap_avian_strider',
       'fear_shout',
       'fear',
       'intimidating_shout',
@@ -247,7 +255,7 @@ describe('buildManifest', () => {
     // purely filesystem-discovered.
     const mobFamilyKeys = [...keys].filter((key) => key.startsWith('mob_'));
     expect(mobFamilyKeys).toHaveLength(65); // 13 families x 5 actions
-    expect(SFX_FIXED_CATALOG_KEYS).toHaveLength(266);
+    expect(SFX_FIXED_CATALOG_KEYS).toHaveLength(271);
   });
 });
 

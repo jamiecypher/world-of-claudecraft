@@ -49,6 +49,19 @@ export interface ClipMap {
   wade?: string;
   /** airborne base pose while jumping/falling */
   jump?: string;
+  /** Airborne pose for a jump taken while MOVING, in either direction.
+   *
+   *  A launch clip can have anticipation or an instant takeoff, never both: a
+   *  visible wind-up needs frames going down before it goes up, and those
+   *  frames are exactly the delay a moving jump must not have. So a rig may
+   *  author two, with `jump` carrying the standing version.
+   *
+   *  Which one plays is latched AT TAKEOFF, and has to be: forward momentum
+   *  persists into the air, so "moving" is still true mid-jump and the takeoff
+   *  is no longer observable by the time the pose is chosen.
+   *
+   *  Absent = `jump` is used from any takeoff, as it always was. */
+  jumpMoving?: string;
   /** long-fall flail (arms windmilling, legs kicking), played once the body
    *  is dropping faster than any hop can (anim_state.isFallingAtSpeed).
    *  Absent = the jump pose holds for the whole fall, as it always did. */
@@ -256,6 +269,11 @@ const AVIAN_MOUNT_RIGGED: ClipMap = {
   run: 'Run',
   walkBack: 'WalkBackward',
   jump: 'Jump',
+  // Two launches on purpose. `Jump` squats 80mm over 180ms before it springs,
+  // which reads right from a standstill; `Jump_Running` opens already crouched
+  // and launches at once, which reads right off a run and stiff when still.
+  // Anticipation and an instant takeoff cannot live in one clip.
+  jumpMoving: 'Jump_Running',
   attack: [],
   death: 'Idle',
 };

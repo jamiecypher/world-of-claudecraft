@@ -29,6 +29,8 @@ import { loadRuntimeSfxPack } from './sfx_runtime_pack';
 import { type WaterElementalCue, waterElementalSamples } from './water_elemental_audio';
 
 const SAMPLE_GAIN = 0.85; // base level for sampled clips; sfxVolume multiplies this
+/** Per-call level for a mount's own takeoff/touchdown/apex one-shots. */
+const MOUNT_MOVE_GAIN = 0.8;
 const MAX_VOICES = 24; // concurrent one-shot sources (frame-budget guard)
 // Per-ability synth layer (abilityAudio): its own small voice pool, separate
 // from MAX_VOICES so ability spam can never starve footsteps/UI one-shots,
@@ -911,6 +913,32 @@ class Sfx {
       cooldown: 0.05,
       release: 0.44,
     });
+  }
+
+  /** A mount's own takeoff, touchdown, and apex calls.
+   *
+   *  Keyed per mount and silent for any mount without the take, the same way
+   *  mountRun and mountSummon resolve, so adding these for another mount is a
+   *  matter of dropping in files and registering keys with nothing to wire.
+   *
+   *  `apex` deliberately plays TWO keys at once: on the avian that is a squawk
+   *  and a wingbeat. They stay separate keys rather than one baked pair so the
+   *  variants rotate independently and the two can be balanced against each
+   *  other in the gain map. */
+  mountMove(
+    kind: 'jump' | 'land' | 'squawk' | 'flap',
+    x: number,
+    y: number,
+    z: number,
+    mountKey: string,
+  ): boolean {
+    const key = `mount_${kind}_${mountKey}`;
+    // Reports whether it played, so the caller can suppress the RIDER's own
+    // takeoff or landing rather than stacking both. A mount without the take
+    // returns false and the rider's cue is heard exactly as before.
+    if (!(key in SFX_CLIPS)) return false;
+    this.playAt(key, x, y, z, { gain: MOUNT_MOVE_GAIN, cooldown: 0.05 });
+    return true;
   }
 
   /** Windup/loop/winddown engine audio for a mount with a dedicated take set

@@ -551,6 +551,8 @@ export class CharacterVisual {
   private wasDead = false;
   /** previous frame's airborne flag, for the touchdown edge (see ClipMap.land) */
   private wasAirborne = false;
+  /** Was the body moving at takeoff? See the ClipMap's jumpMoving. */
+  private jumpWhileMoving = false;
   private initialized = false;
   private attackIdx = 0;
   private hitCooldown = 0;
@@ -846,6 +848,10 @@ export class CharacterVisual {
       shouldPlayLanding(this.wasAirborne, s.airborne, s.dead, !!this.action(landClip))
     )
       this.playOneShot(landClip, 1);
+    // Latch WHY we are airborne, on the takeoff edge. It cannot be read later:
+    // a moving jump keeps `moving` true the whole time it is in the air, so by
+    // the time the pose is chosen the takeoff is no longer observable.
+    if (!this.wasAirborne && s.airborne) this.jumpWhileMoving = s.moving;
     this.wasAirborne = s.airborne;
 
     this.castingAbility = s.casting ? (s.castingAbility ?? null) : null;
@@ -2582,6 +2588,23 @@ export class CharacterVisual {
     this.fadeTo(this.baseAction(), FADE, false);
   }
 
+  /**
+   * Normalized phase of the base locomotion clip, 0..1, or null when no base
+   * action is running.
+   *
+   * Exposed so audio can be pinned to events INSIDE the animation (a foot
+   * meeting the ground) rather than to distance travelled. A distance
+   * accumulator drifts against the clip whenever playback rate and ground speed
+   * disagree, and then footfalls land between the visible steps.
+   */
+  baseClipPhase(): number | null {
+    const a = this.current ?? this.baseAction();
+    const clip = a?.getClip?.();
+    if (!a || !clip || clip.duration <= 0) return null;
+    const t = a.time % clip.duration;
+    return (t < 0 ? t + clip.duration : t) / clip.duration;
+  }
+
   private baseTransitionFade(next: BaseState): number {
     // A winged form without an authored Jump clip must leave its locomotion
     // stride almost immediately. The normal crossfade preserves too much of a
@@ -2800,8 +2823,10 @@ export class CharacterVisual {
         return this.action(c.wade) ?? this.action(c.walk) ?? this.action(c.idle);
       case 'sit':
         return this.action(c.sitDown) ?? this.action(c.sitIdle) ?? this.action(c.idle);
-      case 'jump':
-        return this.action(c.jump) ?? this.action(c.idle);
+      case 'jump': {
+        const moving = this.jumpWhileMoving ? this.action(c.jumpMoving) : null;
+        return moving ?? this.action(c.jump) ?? this.action(c.idle);
+      }
       case 'fall':
         // Rigs without the authored flail (mobs, creatures) hold the jump
         // pose for the whole fall, which is what every rig did before it.
@@ -3106,6 +3131,7 @@ function clipNamesOf(def: VisualDef): string[] {
     c.swimIdle,
     c.wade,
     c.jump,
+    c.jumpMoving,
     c.fall,
     c.land,
     c.walkBack,

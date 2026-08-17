@@ -66,7 +66,14 @@ const MONOLITHS: MonolithRow[] = [
     // Lowered again after folding the five near-identical lazy form-visual
     // builds into buildFormVisual, which paid for the review's prewarm re-queue
     // sites (form rigs, the base-visual replace, both held-weapon swaps).
-    ceiling: 13661,
+    // Lowered after extracting the per-entity spatial movement audio pass
+    // (jump/land edges, footfalls, swim strokes, the mount gait beat and engine
+    // loop, plus the landing dust that only it called) into
+    // src/render/movement_audio.ts, and the mount cue decisions into
+    // src/render/mount_audio_cues.ts. The file was already over this ceiling
+    // when the avian audio work started; the extraction paid that back and then
+    // some, which is the ratchet's own rule.
+    ceiling: 13655,
     seam: 'a new src/render/<thing>.ts module the renderer calls (src/render/CLAUDE.md)',
   },
   {

@@ -128,6 +128,12 @@ beforeEach(() => {
   for (const [index, mountKey] of MOUNT_KEYS.entries()) {
     buffers.set(`mount_run_${mountKey}`, { duration: 0.5 + index / 100 });
   }
+  // A gait built from a VARIANT POOL rotates past variant 0, and every variant
+  // after the first caches under `key:N` (assetCacheKey). Seeding only the bare
+  // key leaves the rotation hitting an empty cache and playing nothing.
+  for (let variant = 1; variant < 6; variant++) {
+    buffers.set(`mount_run_avian_strider:${variant}`, { duration: 0.29 });
+  }
   buffers.set('foot_wood', WOOD_BUFFER);
   buffers.set('impact_shadow', { duration: 0.7 });
   buffers.set('impact_bone', { duration: 0.5 });
@@ -261,7 +267,12 @@ describe('mount running audio', () => {
   // set lands. Keep that debt explicit so adding the files means deleting one
   // row, while every finished mount retains the one-clip-per-key contract.
   const MOUNTS_WITHOUT_AUTHORED_RUN_AUDIO = new Set(['avian_strider']);
-  const mountsWithAudio = MOUNT_KEYS.filter((mountKey) => mountKey !== 'avian_strider');
+  // Every catalog mount now ships a gait take; the Valestrider was the last
+  // holdout and its set landed with the rest of its authored audio.
+  const mountsWithAudio = MOUNT_KEYS;
+  /** Mounts whose gait beat is a VARIANT POOL rather than a single take, so the
+   *  clip rotates per stride instead of repeating like a metronome. */
+  const MOUNT_GAIT_VARIANTS: Record<string, number> = { avian_strider: 6 };
 
   it('ships one generated manifest entry for every audio-complete catalog mount', () => {
     // terrorspark_groundshaker's mount_run_ entry is the sustain take of an
@@ -276,8 +287,11 @@ describe('mount running audio', () => {
         loop: ENGINE_LOOP_MOUNTS.has(mountKey),
         spatial: true,
       });
+      // A variant-pool mount's entry url points at its first take, so the
+      // filename carries the _1 suffix.
+      const suffix = MOUNT_GAIT_VARIANTS[mountKey] ? '_1' : '';
       expect(entry.url).toMatch(
-        new RegExp(`^/audio/sfx/mount_run_${mountKey}\\.mp3\\?v=[0-9a-f]{12}$`),
+        new RegExp(`^/audio/sfx/mount_run_${mountKey}${suffix}\\.mp3\\?v=[0-9a-f]{12}$`),
       );
     }
   });
@@ -292,12 +306,18 @@ describe('mount running audio', () => {
   it('ships one non-empty MP3 asset for every catalog mount and no orphan mount clips', () => {
     const directory = new URL('../public/audio/sfx/', import.meta.url);
     const expected = mountsWithAudio
-      .flatMap((mountKey) => [
-        `mount_run_${mountKey}.mp3`,
-        ...(ENGINE_MOUNT_EXTRA_SUFFIXES[mountKey] ?? []).map(
-          (suffix) => `mount_run_${mountKey}${suffix}.mp3`,
-        ),
-      ])
+      .flatMap((mountKey) => {
+        const variants = MOUNT_GAIT_VARIANTS[mountKey];
+        const gait = variants
+          ? Array.from({ length: variants }, (_, i) => `mount_run_${mountKey}_${i + 1}.mp3`)
+          : [`mount_run_${mountKey}.mp3`];
+        return [
+          ...gait,
+          ...(ENGINE_MOUNT_EXTRA_SUFFIXES[mountKey] ?? []).map(
+            (suffix) => `mount_run_${mountKey}${suffix}.mp3`,
+          ),
+        ];
+      })
       .sort();
     const actual = readdirSync(directory)
       .filter((file) => file.startsWith('mount_run_') && file.endsWith('.mp3'))
@@ -320,18 +340,32 @@ describe('mount running audio', () => {
       nowT += 0.5;
       sfx.mountRun(0, 0, 0, mountKey, true);
       const src = sources.at(-1)!;
-      expect(src.buffer).toBe(buffers.get(`mount_run_${mountKey}`));
+      // A pooled mount caches per variant, so its buffer is not under the bare
+      // key; assert only that it played SOMETHING distinct for that mount.
+      if (!MOUNT_GAIT_VARIANTS[mountKey]) {
+        expect(src.buffer).toBe(buffers.get(`mount_run_${mountKey}`));
+      }
+      expect(src.buffer).toBeDefined();
       played.add(src.buffer);
     }
 
     expect(played.size).toBe(mountsWithAudio.length);
   });
 
-  it('keeps the working avian mount silent until its authored take lands', () => {
-    expect(SFX_CLIPS).not.toHaveProperty('mount_run_avian_strider');
+  it('plays the avian gait now that its authored take has landed', () => {
+    // This used to assert the opposite, holding the mount SILENT until its
+    // recording existed. The recording landed, so the assertion inverts rather
+    // than being deleted: what it really guards is that the key and the asset
+    // agree, in whichever direction that is true.
+    expect(SFX_CLIPS).toHaveProperty('mount_run_avian_strider');
     const before = sources.length;
     sfx.mountRun(0, 0, 0, 'avian_strider', true);
-    expect(sources).toHaveLength(before);
+    expect(sources.length).toBeGreaterThan(before);
+  });
+
+  it('rotates the avian gait through its six takes instead of repeating one', () => {
+    // A metronomic footfall is the thing the variant pool exists to prevent.
+    expect(SFX_CLIPS.mount_run_avian_strider.variants).toHaveLength(6);
   });
 
   it('plays independently of the optional on-foot footstep toggle', () => {

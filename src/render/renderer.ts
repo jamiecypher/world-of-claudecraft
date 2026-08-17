@@ -355,6 +355,12 @@ import { buildMobNightGlow, type MobNightGlowView } from './mob_night_glow';
 import { buildMotes, type MotesView } from './motes';
 import { MountBeacon } from './mount_beacon';
 import { mountBobY, mountVisualSpec } from './mount_visuals';
+import {
+  emitMovementAudio,
+  FOOT_RUN_SPEED,
+  FOOT_STRIDE_WALK,
+  SFX_MOVE_RANGE_SQ,
+} from './movement_audio';
 import { NameplatePainter } from './nameplate_painter';
 import {
   isProjectedNameplateAnchorVisible,
@@ -790,19 +796,13 @@ const AIRBORNE_EPS = 0.4;
  * jump from flat ground lands near 6 yd/s, so this sits under that: catching
  * a boulder part way up the arc, or settling off a kerb, stays a footfall.
  */
-const SOFT_LANDING_SPEED = 4.5;
 const TILT_SAMPLE_INTERVAL = 0.06;
 const TILT_SAMPLE_SPAN = 0.55;
 // Beyond this (squared) an entity's footsteps/movement are inaudible, so we skip
 // the surface sample + dispatch entirely. Kept under the engine's own cutoff (46u).
-const SFX_MOVE_RANGE_SQ = 42 * 42;
 // Stride length (world units travelled) between footfalls, longer at a run.
-const FOOT_STRIDE_WALK = 0.95;
-const FOOT_STRIDE_RUN = 1.55;
 // Mount clips contain a full gait beat (usually two contacts), so their cadence
 // is intentionally longer than an on-foot stride and leaves the one-shot tail clear.
-const MOUNT_STRIDE_RUN = 5.8;
-const SWIM_STRIDE = 2.4;
 // Surface kick: beats per second at a standstill, quickening with swim speed,
 // and how far behind the pivot the prone body's feet trail (as a fraction of
 // stand height — the authored stroke lays the legs out behind the hips).
@@ -812,7 +812,6 @@ const SWIM_FOOT_TRAIL = 0.19;
 const UNDERWATER_FADE_DEPTH = 0.45;
 // How far under the line the chase camera is pulled while the player is submerged.
 const UNDERWATER_CAMERA_DIP = 0.5;
-const FOOT_RUN_SPEED = 4.5; // u/s — matches the run threshold in characters/anim_state.ts
 // fire/torch point lights beyond this never shine (their falloff range is
 // shorter anyway); the nearest GFX.maxPointLights within it win the budget
 const LIGHT_BUDGET_RANGE_SQ = 55 * 55;
@@ -1159,6 +1158,10 @@ export interface EntityView {
   waterContactZ: number;
   waterContactAccum: number;
   wasAirborne: boolean;
+  /** Mount gait-clip phase last frame, and the once-per-jump apex latch. Both
+   *  are read by mount_audio_cues. */
+  mountGaitPhase: number;
+  mountApexArmed: boolean;
   wasSwimming: boolean;
   // feet under the waterline but the ground still under them (the wade latch)
   wasWading: boolean;
@@ -1981,6 +1984,9 @@ export class Renderer {
   // seed-bound ground sampler, built once so the per-frame Vale Cup ring update
   // allocates no closure (see the drape path in vale_cup_team_ring.ts).
   private groundSample = (x: number, z: number): number => groundHeight(x, z, this.sim.cfg.seed);
+  /** Bound once: emitMovementAudio runs per entity per frame and must not
+   *  allocate a closure on every call. */
+  private movementSurfaceAt = (x: number, z: number, y: number) => this.surfaceAt(x, z, y);
   private selectionDrapeSupportY = 0;
   private selectionGroundSample = (x: number, z: number): number =>
     Math.max(this.groundSample(x, z), this.selectionDrapeSupportY);
@@ -4239,24 +4245,6 @@ export class Renderer {
   // Ground impact dust at a body's feet, coloured by the surface underfoot.
   // Water is skipped: splashes are the water system's job, and dust on a lake
   // reads as a bug. Power below the floor emits nothing at all.
-  private emitGroundPuff(x: number, y: number, z: number, power: number): void {
-    const p = Math.min(1, power);
-    if (p <= 0.02) return;
-    const surface = this.surfaceAt(x, z, y);
-    if (surface === 'water') return;
-    const color =
-      surface === 'stone'
-        ? 0x9b9a95
-        : surface === 'wood'
-          ? 0xa8895f
-          : surface === 'snow'
-            ? 0xe6eef5
-            : surface === 'dirt'
-              ? 0xa38257
-              : 0x8d9a63;
-    this.tmpPuff.set(x, y, z);
-    this.vfx.groundPuff(this.tmpPuff, p, color);
-  }
 
   private surfaceAt(x: number, z: number, y: number): Surface {
     return footstepSurfaceAt(this.sim.cfg.seed, x, y, z, this.weatherOn);
@@ -8849,6 +8837,8 @@ export class Renderer {
       waterContactZ: e.pos.z,
       waterContactAccum: 0,
       wasAirborne: false,
+      mountGaitPhase: -1,
+      mountApexArmed: false,
       wasSwimming: false,
       wasSubmerged: false,
       wasFalling: false,
@@ -11684,98 +11674,29 @@ export class Renderer {
       // --- spatial movement audio (self + others) --------------------------
       // All gated by audibility (squared distance) so far entities cost nothing.
       const sink = this.audioSink;
-      if (sink && d2 < SFX_MOVE_RANGE_SQ) {
-        // jump / land / water-entry edges
-        if (airborne && !v.wasAirborne && !visuallyDead) sink.movement('jump', ax, ay, az, isSelf);
-        else if (!airborne && v.wasAirborne && !visuallyDead) {
-          // A flight that ends by catching a ledge is not a fall, and the
-          // heavy landing thud on one reads as a bug: you hopped onto a rock
-          // mid-arc and the game played a crash. Anything softer than a plain
-          // jump's own landing speed gets a footfall instead.
-          if (v.fallSpeed >= SOFT_LANDING_SPEED) {
-            sink.movement('land', ax, ay, az, isSelf);
-          } else {
-            sink.footstep(ax, ay, az, this.surfaceAt(ax, az, ay), false, isSelf);
-          }
-          // Impact dust, scaled by how hard the body actually came down and
-          // tinted by what it came down on. This is the visual half of the
-          // landing the camera already thumps for.
-          this.emitGroundPuff(ax, ay, az, (v.fallSpeed - 5) / 14);
-        }
-        // Striding up onto a ledge scuffs the surface: a wisp, not a landing.
-        if (settled && dyRaw > 0.28 && !visuallyDead) {
-          this.emitGroundPuff(ax, ay, az, 0.08);
-        }
-        if (swimming && !v.wasSwimming && !visuallyDead)
-          sink.movement('splash', ax, ay, az, isSelf);
-        // footfalls / swim strokes via a distance accumulator (no timers)
-        if (visuallyDead || (st.sitting && !riderMounted)) {
-          v.stepAccum = 0;
-        } else if (swimming) {
-          v.stepAccum += loco.speed * dt;
-          if (v.stepAccum >= SWIM_STRIDE) {
-            v.stepAccum = 0;
-            sink.movement('swim', ax, ay, az, isSelf);
-          }
-        } else if (logicallyMounted && moving && !airborne) {
-          // An engine mount (windup/loop/winddown take set, e.g. the tank
-          // mount) drives its own state machine every frame instead of the
-          // per-stride gait beat below; mountEngine reports whether this
-          // mountKey actually has one, so ordinary mounts fall through.
-          if (sink.mountEngine(ax, ay, az, e.mountKey, true, e.id)) {
-            // handled entirely by mountEngine
-          } else if (loco.speed >= FOOT_RUN_SPEED) {
-            v.stepAccum += loco.speed * dt;
-            if (v.stepAccum >= MOUNT_STRIDE_RUN) {
-              v.stepAccum = 0;
-              sink.mountRun(ax, ay, az, e.mountKey, isSelf);
-            }
-          } else {
-            v.stepAccum = MOUNT_STRIDE_RUN * 0.6;
-          }
-        } else if (logicallyMounted && airborne) {
-          // Airborne while mounted (a jump, or hopping over a ledge): HOLD
-          // whatever engine-audio phase was already playing rather than
-          // polling mountEngine with moving=false, which would read the hop
-          // as a stop and run a full winddown-then-windup cycle for every
-          // little bump in the road. Skipping the poll entirely leaves the
-          // state machine (and any active loop) exactly where it was; the
-          // next grounded frame picks the state back up on its own branch.
-        } else if (logicallyMounted && !visuallyDead && !(st.sitting && !riderMounted)) {
-          // Not moving while mounted (grounded and stopped): still poll an
-          // engine mount every frame so the winddown fires on the stop edge;
-          // a non-engine mount has nothing to do here (mountEngine no-ops).
-          sink.mountEngine(ax, ay, az, e.mountKey, false, e.id);
-        } else if (moving && !airborne) {
-          v.stepAccum += loco.speed * dt;
-          const stride = loco.speed >= FOOT_RUN_SPEED ? FOOT_STRIDE_RUN : FOOT_STRIDE_WALK;
-          if (v.stepAccum >= stride) {
-            v.stepAccum = 0;
-            sink.footstep(
-              ax,
-              ay,
-              az,
-              this.surfaceAt(ax, az, ay),
-              loco.speed >= FOOT_RUN_SPEED,
-              isSelf,
-            );
-          }
-        } else {
-          // standing still, prime the accumulator so the first step after moving
-          // lands promptly rather than after a full stride of travel.
-          v.stepAccum = FOOT_STRIDE_WALK * 0.6;
-        }
-      } else if (sink && logicallyMounted) {
-        // Every other cue in the block above is a one-shot; an engine
-        // mount's loop is not, and this gate (SFX_MOVE_RANGE_SQ, 42yd) sits
-        // inside the panner's own audible falloff (MAX_DISTANCE, 46yd in
-        // sfx.ts). Without this, a rider who moves out of the 42yd gate
-        // while still moving leaves a frozen, never-advancing loop node
-        // playing at its last polled position until dismount or view
-        // removal. mountEngineReset is a safe no-op with no active engine
-        // state (an ordinary mount, or the loop already stopped).
-        sink.mountEngineReset(e.id);
-      }
+      emitMovementAudio(v, {
+        sink,
+        d2,
+        entityId: e.id,
+        mountKey: e.mountKey,
+        isSelf,
+        logicallyMounted,
+        riderMounted,
+        visuallyDead,
+        airborne,
+        swimming,
+        sitting: st.sitting,
+        moving,
+        settled,
+        speed: loco.speed,
+        dyRaw,
+        ax,
+        ay,
+        az,
+        dt,
+        surfaceAt: this.movementSurfaceAt,
+        vfx: this.vfx,
+      });
       // Capture the flight's peak fall speed before the landing reset: the
       // water-entry splash below scales with how hard the body came down.
       const entryFallSpeed = v.fallSpeed;
