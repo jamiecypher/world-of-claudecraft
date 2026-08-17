@@ -1786,6 +1786,8 @@ async function startGame(
   // without hand-driving the mouse. Holds the orbit rate only; updateCamera does
   // the driving and bypasses follow while this is set.
   let filmOrbit: { rate: number } | null = null;
+  /** Rate the orbit last ran at, so the "\" toggle can resume it. */
+  let filmOrbitLastRate = (Math.PI * 2) / 20;
   const tryCamOrbitDevCommand = (raw: string): boolean => {
     const m = raw.trim().match(/^\/cc\b\s*(.*)$/i);
     if (!m) return false;
@@ -1800,15 +1802,35 @@ async function startGame(
     // you actually plan a shot against. Negative reverses.
     const secs = Number.parseFloat(arg);
     const period = Number.isFinite(secs) && secs !== 0 ? secs : 20;
-    filmOrbit = { rate: (Math.PI * 2) / period };
+    filmOrbitLastRate = (Math.PI * 2) / period;
+    filmOrbit = { rate: filmOrbitLastRate };
     hud.log(
       `[dev] camera orbit on: ${Math.abs(period)}s per revolution, ${
         period < 0 ? 'clockwise' : 'counter-clockwise'
-      }. "/cc stop" to end.`,
+      }. "\\" toggles, "/cc stop" ends.`,
       '#8fd0ff',
     );
     return true;
   };
+  // "\" toggles the orbit while filming. A keybind rather than only the chat
+  // command because the point is to run this with the UI hidden: opening chat
+  // to type /cc would put the UI back on screen in the middle of a shot.
+  //
+  // Deliberately NOT routed through Keybinds: this is throwaway filming
+  // tooling, and a real binding would need a BIND_ACTIONS entry, persistence
+  // and a rebind row in the settings UI for something that must never ship.
+  window.addEventListener('keydown', (e) => {
+    if (!import.meta.env.DEV || e.code !== 'Backslash' || e.repeat) return;
+    // Never while typing: chat, the search box, any text field.
+    const el = document.activeElement;
+    const tag = el?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement | null)?.isContentEditable) {
+      return;
+    }
+    e.preventDefault();
+    filmOrbit = filmOrbit ? null : { rate: filmOrbitLastRate };
+    hud.log(`[dev] camera orbit ${filmOrbit ? 'on' : 'off'}`, '#8fd0ff');
+  });
   chatInput.addEventListener('keydown', (e) => {
     e.stopPropagation();
     // While the "!" command dropdown is open it owns Arrows/Enter/Tab/Escape.
