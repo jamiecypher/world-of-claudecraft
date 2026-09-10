@@ -2,13 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { updateRiddenMountAudio } from '../src/render/ridden_mount_audio';
 import { MOUNT_SKIN_IDS, mountPresentationKey } from '../src/sim/content/mount_skins';
 
-function setup(
-  look: string,
-  moving = true,
-  airborne = false,
-  engine = false,
-  idles = false,
-) {
+function setup(look: string, moving = true, airborne = false, engine = false, idles = false) {
   const sink = {
     mountIdle: vi.fn(),
     mountEngine: vi.fn(() => engine),
