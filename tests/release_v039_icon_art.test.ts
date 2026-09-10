@@ -489,11 +489,12 @@ describe('release v0.39 icon-art second-pass lineage', () => {
     // (reins_goblin_rocket_sled, reins_rallycart_rxt) each ship committed
     // painted art and are never ITEM_ART_PENDING, so they join the
     // art-subject set directly: 102. Converting all five premium mounts to
-    // skins retires their unusable reins from the hotbar: 102 - 5 = 97.
+    // skins retires their unusable reins from the hotbar: 102 - 5 = 97. The
+    // Viridian Valestrider's reins ship painted art the same way: 98.
     expect(
       artSubjectHotbarItemIds,
       'production isHotbarItemId art-subject inventory (live minus ITEM_ART_PENDING)',
-    ).toHaveLength(97);
+    ).toHaveLength(98);
     expect(pendingHotbarItemIds, 'ITEM_ART_PENDING hotbar items').toHaveLength(0);
     expect(
       pendingHotbarItemIds.filter((id) => shippingImageExists(`/ui/items/${id}.webp`)),

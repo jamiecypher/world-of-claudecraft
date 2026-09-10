@@ -2255,6 +2255,9 @@ export const VISUALS: Record<string, VisualDef> = {
     url: `${MOUNTS_DIR}/avian_strider.glb`,
     height: 4.32,
     yaw: Math.PI / 2,
+    // Baked Tripo atlas: the low-tier uniform emissive floor would grey out
+    // every dark texel of the plumage, so scale the floor by the atlas.
+    authoredAtlas: true,
     clips: AVIAN_MOUNT_RIGGED,
     // Cadence, tuned by eye. A mounted rider moves at ONE speed, so both time
     // scales are constants: forward is RUN_SPEED 7 * (1 + moveSpeedPct 0.8) =

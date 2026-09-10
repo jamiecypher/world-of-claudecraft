@@ -12,11 +12,14 @@ type MountAudio = Pick<
 >;
 
 /** The airborne bookkeeping this pass owns: whether the mount was off the
- *  ground last frame, and whether this jump's apex is still to come. Kept here
- *  rather than in the caller because nothing else reads them. */
+ *  ground last frame, whether this jump's apex is still to come, and the
+ *  height it was at last frame. Kept here rather than in the caller because
+ *  nothing else reads them, and tracking the height here rather than taking a
+ *  delta argument keeps the renderer out of it entirely. */
 export interface MountAirborneState {
   mountAirborne?: boolean;
   mountApexArmed?: boolean;
+  mountPrevY?: number;
 }
 export function updateRiddenMountAudio(
   sink: MountAudio,
@@ -33,20 +36,26 @@ export function updateRiddenMountAudio(
   dt: number,
   self: boolean,
   surfaceAt: (x: number, z: number, y: number) => Surface,
-  /** Raw vertical delta this frame; the sign is what dates the apex. */
-  verticalDelta = 0,
 ): void {
   // The top of a jump, once per jump. Armed on the takeoff edge and spent the
   // first frame the climb stops, so a mount with a voice calls out at the peak
   // rather than on the way up. A mount with no takes is silent and pays only
-  // these two booleans.
+  // this bookkeeping.
+  //
+  // The rise is measured from the height this pass saw last frame rather than
+  // taken as an argument: the caller already hands us y every frame, and the
+  // apex is the only thing in the game that wants the sign of its delta.
+  // `undefined` on the takeoff frame reads as no rise yet, which is right: the
+  // apex cannot be the frame the body leaves the ground.
+  const rose = state.mountPrevY === undefined ? 0 : y - state.mountPrevY;
   if (airborne && !state.mountAirborne) state.mountApexArmed = true;
-  if (airborne && state.mountApexArmed && verticalDelta <= 0) {
+  if (airborne && state.mountApexArmed && state.mountAirborne && rose <= 0) {
     state.mountApexArmed = false;
     sink.mountApex(x, y, z, look);
   }
   if (!airborne) state.mountApexArmed = false;
   state.mountAirborne = airborne;
+  state.mountPrevY = y;
   if (airborne) {
     sink.mountIdle(x, y, z, look, false, id);
     // Hold an ordinary engine phase across hops. Vehicles with an airborne

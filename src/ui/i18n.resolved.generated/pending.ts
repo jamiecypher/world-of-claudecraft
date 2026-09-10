@@ -40,36 +40,16 @@ export const pending: Record<string, readonly string[]> = {
     "hudChrome.mounts.desc_avian_strider",
     "hudChrome.mounts.name_avian_strider"
   ],
-  "zh_CN": [
-    "entities.items.reins_avian_strider.name",
-    "hudChrome.mounts.desc_avian_strider",
-    "hudChrome.mounts.name_avian_strider"
-  ],
-  "zh_TW": [
-    "entities.items.reins_avian_strider.name",
-    "hudChrome.mounts.desc_avian_strider",
-    "hudChrome.mounts.name_avian_strider"
-  ],
-  "ko_KR": [
-    "entities.items.reins_avian_strider.name",
-    "hudChrome.mounts.desc_avian_strider",
-    "hudChrome.mounts.name_avian_strider"
-  ],
-  "ja_JP": [
-    "entities.items.reins_avian_strider.name",
-    "hudChrome.mounts.desc_avian_strider",
-    "hudChrome.mounts.name_avian_strider"
-  ],
+  "zh_CN": [],
+  "zh_TW": [],
+  "ko_KR": [],
+  "ja_JP": [],
   "pt_BR": [
     "entities.items.reins_avian_strider.name",
     "hudChrome.mounts.desc_avian_strider",
     "hudChrome.mounts.name_avian_strider"
   ],
-  "ru_RU": [
-    "entities.items.reins_avian_strider.name",
-    "hudChrome.mounts.desc_avian_strider",
-    "hudChrome.mounts.name_avian_strider"
-  ],
+  "ru_RU": [],
   "cs_CZ": [
     "entities.items.reins_avian_strider.name",
     "hudChrome.mounts.desc_avian_strider",

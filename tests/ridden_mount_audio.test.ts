@@ -8,7 +8,6 @@ function setup(
   airborne = false,
   engine = false,
   idles = false,
-  verticalDelta = 0,
 ) {
   const sink = {
     mountIdle: vi.fn(),
@@ -34,7 +33,6 @@ function setup(
     0.1,
     true,
     surface,
-    verticalDelta,
   );
   return { sink, state, surface };
 }
@@ -104,14 +102,16 @@ describe('ridden mount audio', () => {
       };
       const surface = vi.fn(() => 'stone' as const);
       const state = { stepAccum: 0, mountPivot: false };
-      const frame = (airborne: boolean, verticalDelta: number) =>
+      // y is the driver: the pass takes the rise from the height it saw last
+      // frame, so a jump is expressed as the arc the body actually travels.
+      const frame = (airborne: boolean, y: number) =>
         updateRiddenMountAudio(
           sink,
           state,
           look,
           9,
           1,
-          2,
+          y,
           3,
           true,
           airborne,
@@ -120,7 +120,6 @@ describe('ridden mount audio', () => {
           0.1,
           true,
           surface,
-          verticalDelta,
         );
       return { sink, frame };
     }
@@ -128,26 +127,28 @@ describe('ridden mount audio', () => {
     it('fires once, at the frame the climb stops', () => {
       const { sink, frame } = jump('avian_strider');
       frame(false, 0); // grounded
-      frame(true, 0.4); // takeoff, still climbing
+      frame(true, 0.4); // takeoff
       expect(sink.mountApex).not.toHaveBeenCalled();
-      frame(true, 0.1);
+      frame(true, 0.7); // still climbing
       expect(sink.mountApex).not.toHaveBeenCalled();
-      frame(true, -0.05); // the arc turns over
+      frame(true, 0.7); // the arc turns over
       expect(sink.mountApex).toHaveBeenCalledTimes(1);
-      expect(sink.mountApex).toHaveBeenCalledWith(1, 2, 3, 'avian_strider');
-      frame(true, -0.3); // falling: not a second apex
+      expect(sink.mountApex).toHaveBeenCalledWith(1, 0.7, 3, 'avian_strider');
+      frame(true, 0.3); // falling: not a second apex
       expect(sink.mountApex).toHaveBeenCalledTimes(1);
     });
 
     it('re-arms for the next jump but never fires while grounded', () => {
       const { sink, frame } = jump('avian_strider');
       frame(true, 0.4);
-      frame(true, -0.1);
+      frame(true, 0.6);
+      frame(true, 0.6); // apex
       frame(false, 0); // land
-      frame(false, -0.2); // standing still, sinking down a slope
+      frame(false, -0.2); // standing still, walking down a slope
       expect(sink.mountApex).toHaveBeenCalledTimes(1);
       frame(true, 0.4); // a second jump
-      frame(true, -0.1);
+      frame(true, 0.6);
+      frame(true, 0.6);
       expect(sink.mountApex).toHaveBeenCalledTimes(2);
     });
   });

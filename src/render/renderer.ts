@@ -1926,6 +1926,8 @@ export class Renderer {
   // seed-bound ground sampler, built once so per-frame drape updates
   // allocate no closure.
   private groundSample = (x: number, z: number): number => groundHeight(x, z, this.sim.cfg.seed);
+  /** Bound once: the puff runs per landing and must not allocate a closure. */
+  private surfaceAtForPuff = (x: number, z: number, y: number) => this.surfaceAt(x, z, y);
   private selectionDrapeSupportY = 0;
   private selectionGroundSample = (x: number, z: number): number =>
     Math.max(this.groundSample(x, z), this.selectionDrapeSupportY);
@@ -11003,11 +11005,11 @@ export class Renderer {
           // Impact dust, scaled by how hard the body actually came down and
           // tinted by what it came down on. This is the visual half of the
           // landing the camera already thumps for.
-          emitGroundPuff(this.vfx, this.surfaceAtForAudio, ax, ay, az, (v.fallSpeed - 5) / 14);
+          emitGroundPuff(this.vfx, this.surfaceAtForPuff, ax, ay, az, (v.fallSpeed - 5) / 14);
         }
         // Striding up onto a ledge scuffs the surface: a wisp, not a landing.
         if (settled && dyRaw > 0.28 && !visuallyDead) {
-          emitGroundPuff(this.vfx, this.surfaceAtForAudio, ax, ay, az, 0.08);
+          emitGroundPuff(this.vfx, this.surfaceAtForPuff, ax, ay, az, 0.08);
         }
         if (swimming && !v.wasSwimming && !visuallyDead)
           sink.movement('splash', ax, ay, az, isSelf);
@@ -11033,7 +11035,6 @@ export class Renderer {
             dt,
             isSelf,
             this.surfaceAtForAudio,
-            dyRaw,
           );
         } else if (moving && !airborne) {
           const running = loco.speed >= FOOT_RUN_SPEED;
