@@ -1,9 +1,9 @@
 // Significant-activity feed: the game loop detects notable moments (a character
-// reaching max level, a rare drop, a duel result, an arena win, a decided Vale
-// Cup match, a masterwork craft, a feed-worthy deed) and enqueues a structured
-// item here; the bot drains it through the consolidated GET
-// /internal/discord/outbox poll and posts a rich card to the activity channel,
-// tagging the linked Discord user(s) involved.
+// reaching max level, a rare drop, a duel result, an arena win, a masterwork
+// craft, a legendary forging, a feed-worthy deed, a golden harvest) and
+// enqueues a structured item here; the bot drains it through the consolidated
+// GET /internal/discord/outbox poll and posts a rich card to the activity
+// channel, tagging the linked Discord user(s) involved.
 //
 // Pure + dependency-free (no Discord IO, no DB), so it is trivially testable. The
 // outbox drain resolves accountIds to Discord identities; this layer is just the
@@ -14,9 +14,10 @@ export type ActivityKind =
   | 'rareloot'
   | 'duel'
   | 'arena'
-  | 'vale_cup'
   | 'masterwork'
-  | 'deed';
+  | 'legendary'
+  | 'deed'
+  | 'golden_harvest';
 
 export interface QueuedActivity {
   kind: ActivityKind;
@@ -30,15 +31,17 @@ export interface QueuedActivity {
   profileUrl: string | null;
   // Type-specific payload (only the relevant fields are set):
   level?: number; // levelup
-  itemName?: string; // rareloot; masterwork; the first-koi deed's catch name
+  // rareloot; masterwork; the first-koi deed's catch name; for
+  // 'golden_harvest' the crop's item name (resolved from the server's ITEMS
+  // table). For 'legendary' (Masterwrought phase 13) this is the PLAYER-CHOSEN
+  // legendary name: player-authored text carried as data; the bot renders it
+  // as plain embed text at masterwork parity (bot/logic.ts
+  // buildActivityMessage).
+  itemName?: string;
   quality?: string; // rareloot ('epic' | 'legendary')
   winnerName?: string; // duel
   loserName?: string; // duel
   ratingDelta?: number; // arena (signed)
-  bracket?: number; // vale_cup (1..5, an NvN bout)
-  scoreA?: number; // vale_cup
-  scoreB?: number; // vale_cup
-  winnerNation?: string; // vale_cup (VcNationId banner of the winning side)
   deedId?: string; // deed
   deedName?: string; // deed (English deed name; the bot posts English)
   deedTitle?: string; // deed, when the deed rewards a title
@@ -56,7 +59,7 @@ const MAX_QUEUE = ACTIVITY_MAX_QUEUE;
 const DEDUPE_TTL_MS = 30_000;
 // Sized for the 1,000-concurrent load target the packet was measured
 // against, not for comfort at today's population: the map is SHARED across
-// every activity kind (rareloot per roll id, duel, vale_cup, deed,
+// every activity kind (rareloot per roll id, duel, deed,
 // masterwork per account), so at the old 512 cap a sustained rate above
 // about 17 keyed events per second would keep the live set at the cap and
 // the oldest-first backstop would evict aged masterwork windows still

@@ -1,8 +1,11 @@
 import { stoneboundThreatMultiplier } from '../src/sim/combat/shaman_warspirit';
+import { RIFT_GEAR_ITEM_ID_SET } from '../src/sim/content/rift/items';
 import type { TalentAllocation } from '../src/sim/content/talents';
 import { ITEMS, MOBS } from '../src/sim/data';
 import { createMob } from '../src/sim/entity';
 import { updateMobTarget } from '../src/sim/mob/targeting';
+import { RIFT_BAND_GEM_SLOTS, RIFT_BAND_MAX_UPGRADE } from '../src/sim/rift/band_ladder';
+import { sanitizeRiftGearInstance } from '../src/sim/rift/progression';
 import { Sim } from '../src/sim/sim';
 import {
   dist2d,
@@ -273,19 +276,24 @@ const THUNDERCALL_PBE_LOADOUT: PbeLoadout = {
   ring2: 'architects_cornerstone',
 };
 
+// The 200 DPS convergence sweep (2026-08-23) re-anchored this fixture on the
+// kit the top live Warspirits actually wear now that the Bonewrought mail
+// carries its shaman tag: Thronebane plus the crownforged/deathlord strength
+// pieces. The old caster-mail loadout no longer represents best-in-slot, and
+// the tripwire guards the real ceiling.
 const WARSPIRIT_PBE_LOADOUT: PbeLoadout = {
-  mainhand: 'gravewyrm_cleaver',
+  mainhand: 'kingsbane_last_oath',
   offhand: 'gravewyrm_cleaver',
-  helmet: 'heroic_stormcallers_crown',
-  neck: 'swiftfang_talisman',
-  shoulder: 'heroic_stormcallers_spaulders',
-  chest: 'morthens_cryptforged_hauberk',
-  waist: 'stormcallers_waistguard',
-  legs: 'heroic_deathlord_legguards',
-  gloves: 'stormcallers_handguards',
-  feet: 'tideworn_warboots',
+  helmet: 'heroic_crownforged_dreadhelm',
+  neck: 'medallion_of_endless_profit',
+  shoulder: 'heroic_crownforged_warspaulders',
+  chest: 'deathlord_warplate',
+  waist: 'crownforged_girdle',
+  legs: 'deathlord_legguards',
+  gloves: 'crownforged_gauntlets',
+  feet: 'deathlord_sabatons',
   ring1: 'seal_of_the_nine_oaths',
-  ring2: 'sutils_gambit',
+  ring2: 'seal_of_the_nine_oaths',
 };
 
 const VESPERS_PBE_LOADOUT: PbeLoadout = {
@@ -474,7 +482,30 @@ function equipPbeLoadout(sim: Sim, spec: OwnedDpsSpec): void {
 function equipExactLoadout(sim: Sim, loadout: PbeLoadout): void {
   for (const [slot, itemId] of Object.entries(loadout) as [EquipSlot, string][]) {
     if (!ITEMS[itemId]) throw new Error(`missing PBE fixture item ${itemId}`);
-    sim.addItem(itemId, 1);
+    if (RIFT_GEAR_ITEM_ID_SET.has(itemId)) {
+      // A Riftbound band is priced by its copy (src/sim/rift/band_ladder.ts);
+      // the shell alone is an empty ring. The BiS fixture wears the maxed S
+      // band on the shell the loadout names, both sockets on the DPS ratings.
+      const maxed = sanitizeRiftGearInstance(
+        itemId,
+        {
+          rift: {
+            sourceEventId: 'probe-bis',
+            tier: 'S',
+            power: 4, // re-derived by the sanitizer from the tier
+            upgradeLevel: RIFT_BAND_MAX_UPGRADE,
+            maxUpgradeLevel: RIFT_BAND_MAX_UPGRADE,
+            gemSlots: RIFT_BAND_GEM_SLOTS.S,
+            gems: ['rift_gem_verdant', 'rift_gem_crimson'],
+          },
+        },
+        sim.playerId,
+      );
+      if (!maxed) throw new Error(`could not mint the PBE fixture band ${itemId}`);
+      sim.addItemInstance(itemId, maxed);
+    } else {
+      sim.addItem(itemId, 1);
+    }
     sim.equipItemToSlot(itemId, slot);
   }
   const equipment = sim.players.get(sim.playerId)?.equipment;
@@ -660,6 +691,12 @@ function castThundercall(state: RunState): void {
 
 function castWarspirit(state: RunState): void {
   if (tryCast(state, 'primal_exaltation')) return;
+  // Unleash Weapon rides the priority ahead of the strike: every top live
+  // Warspirit weaves it on cooldown (it advances the cadence AND buys the
+  // Galeheart haste window), and the 200 DPS convergence sweep measured the
+  // unleash-first ordering as the strongest real rotation. The fixture plays
+  // the ceiling players actually reach, not the pre-sweep priority.
+  if (tryCast(state, 'unleash_weapon')) return;
   if (hasAura(state.sim.player, 'shaman_stormcast') && tryCast(state, 'lightning_bolt')) return;
   if (tryCast(state, 'stormstrike')) return;
   if (!ownAura(state.primary, 'flame_shock', state.sim.playerId)) {
@@ -803,6 +840,7 @@ export function runOwnedClassDpsProbe(
   // isolates un-geared spec parity, the same low-gear axis a leveling or
   // fresh-alt player experiences.
   gear: 'pbe' | 'naked' = 'pbe',
+  setupEquipment?: (sim: Sim) => void,
 ): OwnedClassBalanceResult {
   const fixture = FIXTURES[spec];
   const sim = new Sim({ seed, playerClass: fixture.cls, autoEquip: false }) as ProbeSim;
@@ -816,6 +854,7 @@ export function runOwnedClassDpsProbe(
     throw new Error(`failed to apply ${fixture.talentSpec}`);
   }
   if (gear === 'pbe') equipPbeLoadout(sim, spec);
+  setupEquipment?.(sim);
   // Keep all three targets in one unobstructed cluster. The starter-world origin
   // has a static collider just left of the player, so a negative offset turns the
   // third target into a line-of-sight fixture instead of an area-damage fixture.
@@ -1088,6 +1127,7 @@ export function runOwnedHealerProbe(
   head = 'working-tree',
   talentRows?: Record<number, string>,
   seconds = 60,
+  setupEquipment?: (sim: Sim) => void,
 ): OwnedHealerBalanceResult {
   const fixture = healerFixture(spec);
   const sim = new Sim({ seed, playerClass: fixture.cls, autoEquip: false }) as ProbeSim;
@@ -1099,6 +1139,7 @@ export function runOwnedHealerProbe(
     throw new Error(`failed to apply ${fixture.talentSpec}`);
   }
   equipExactLoadout(sim, fixture.loadout);
+  setupEquipment?.(sim);
   const healer = sim.player;
   placeEntity(sim, healer, 720, 0);
   const allies: Entity[] = [];
@@ -1263,7 +1304,14 @@ function incomingDamageForPosture(
     throw new Error('failed to apply enhancement');
   }
   equipExactLoadout(sim, WARSPIRIT_PBE_LOADOUT);
-  const attacker = createMob(sim.nextId++, MOBS.forest_wolf, 20, sim.groundPos(0, 3));
+  // Beside the anchored player (the druid probe's idiom): a mob spawned at the
+  // world origin sits beyond THREAT_DROP_RANGE and forgets the player at once.
+  const attacker = createMob(
+    sim.nextId++,
+    MOBS.forest_wolf,
+    20,
+    sim.groundPos(sim.player.pos.x, sim.player.pos.z + 3),
+  );
   attacker.hostile = true;
   attacker.hp = attacker.maxHp = 1_000_000;
   sim.addEntity(attacker);
@@ -1309,7 +1357,12 @@ export function runWarspiritOfftankProbe(
   sim.setPlayerLevel(20, rivalId);
   const rival = sim.entities.get(rivalId);
   if (!rival) throw new Error('missing threat rival');
-  const target = createMob(sim.nextId++, MOBS.forest_wolf, 20, sim.groundPos(0, 3));
+  const target = createMob(
+    sim.nextId++,
+    MOBS.forest_wolf,
+    20,
+    sim.groundPos(sim.player.pos.x, sim.player.pos.z + 3),
+  );
   target.hostile = true;
   target.hp = target.maxHp = 1_000_000;
   target.inCombat = true;

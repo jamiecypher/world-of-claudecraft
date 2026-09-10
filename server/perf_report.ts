@@ -5,8 +5,18 @@ import {
   getCharacter,
   insertClientPerfReport,
 } from './db';
+import { glBackendFromRenderer } from './gl_backend';
+import { glLaptop, glModel } from './gpu_model_bucket';
+import { clientPerfMetricsSink } from './http/client_perf_metrics';
 import type { RateLimitOutcome } from './http/types';
 import { json, readBody } from './http_util';
+import {
+  sanitizeBootPhases,
+  sanitizePostRevealLinks,
+  sanitizeShaderWarm,
+  shaderWarmToken,
+} from './perf_report_entry_blocks';
+import { stripControlChars, stripJsonControlChars } from './perf_report_text';
 import { rateLimitNow, requestIp, windowedRateLimitOutcome } from './ratelimit';
 import { REALM } from './realm';
 
@@ -130,7 +140,7 @@ function nullableNumberIn(value: unknown, min: number, max: number): number | nu
 }
 
 function textIn(value: unknown, max: number, fallback = ''): string {
-  const text = typeof value === 'string' ? value.trim() : '';
+  const text = typeof value === 'string' ? stripControlChars(value).trim() : '';
   return (text || fallback).slice(0, max);
 }
 
@@ -254,6 +264,28 @@ function sanitizeBrowserSummary(value: unknown): Record<string, unknown> | undef
       max: nullableNumberIn(longTasks.max, 0, LONG_TASK_RAW_MS_MAX) ?? 0,
       lastAge: nullableNumberIn(longTasks.lastAge, -1, LONG_TASK_RAW_AGE_MS_MAX) ?? -1,
     },
+  };
+}
+
+// rendererDrawingBuffer: the allocated 3D backing store and the CSS viewport it
+// covers, the only field that says what resolution a session rasterizes at
+// (viewport x dpr is not the allocation). Same JSONB-not-DDL treatment as the
+// longtask block above, and the same reason for a bound: it rides the compact
+// path, where every retained key is copied verbatim, so "four scalars" has to be
+// enforced here rather than trusted. The ceiling is generous against any real
+// panel and MAX_VIEWPORT_DIMS, and only defends the ingest. The flag says
+// whether the governor rasterizes a sub-rect of that allocation, without which
+// a backed-off session reads as if it drew at full size.
+const DRAWING_BUFFER_RAW_PIXELS_MAX = 65_536;
+
+function sanitizeDrawingBuffer(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return {
+    width: intIn(value.width, 0, DRAWING_BUFFER_RAW_PIXELS_MAX, 0),
+    height: intIn(value.height, 0, DRAWING_BUFFER_RAW_PIXELS_MAX, 0),
+    cssWidth: intIn(value.cssWidth, 0, DRAWING_BUFFER_RAW_PIXELS_MAX, 0),
+    cssHeight: intIn(value.cssHeight, 0, DRAWING_BUFFER_RAW_PIXELS_MAX, 0),
+    dynamicResolution: Boolean(value.dynamicResolution),
   };
 }
 
@@ -414,6 +446,23 @@ function sanitizeGpuQueueUnit(unit: Record<string, unknown>): Record<string, unk
   };
 }
 
+/** The per-level budget-variant costs, rebuilt field by field, or nothing when
+ *  the entry carries none (every entry but programs.budget-variants). */
+function compactBudgetVariants(value: unknown): Record<string, unknown> {
+  if (!Array.isArray(value)) return {};
+  const variants = value
+    .slice(0, PREWARM_COMPACT_BUDGET_VARIANTS_MAX)
+    .filter(isRecord)
+    .map((variant) => ({
+      index: nullableNumberIn(variant.index, 0, 1000),
+      elapsedMs: nullableNumberIn(variant.elapsedMs, 0, 600_000),
+      syncMs: nullableNumberIn(variant.syncMs, 0, 600_000),
+      programDelta: nullableNumberIn(variant.programDelta, -10_000, 10_000),
+      passes: nullableNumberIn(variant.passes, 0, 100_000),
+    }));
+  return variants.length > 0 ? { budgetVariants: variants } : {};
+}
+
 function compactPrewarmSummary(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
   const out: Record<string, unknown> = {};
@@ -477,9 +526,62 @@ function compactPrewarmSummary(value: unknown): Record<string, unknown> | null {
       workDone: nullableNumberIn(entry.workDone, 0, 100_000),
       workPlanned: nullableNumberIn(entry.workPlanned, 0, 100_000),
       detail: textIn(entry.detail, 160),
+      // Carried across truncation for the same reason compileUnits and the
+      // pacing transitions are: the per-level costs are the whole point of the
+      // budget-variants entry, and dropping them here loses them on exactly the
+      // overflowing reports they explain. Only one entry ever carries them, so
+      // the cost is one small list, and every field is rebuilt not copied.
+      ...compactBudgetVariants(entry.budgetVariants),
     }));
   const resume = sanitizePrewarmResume(value.resume);
   if (resume) out.resume = resume;
+  // The streamed-prewarm diagnostic, carried across truncation on a TIGHTER
+  // sample than the verbatim path. A report that overflows the byte cap is a
+  // report from a heavy session, which is exactly when "which unit stalled"
+  // and "did the pacer back off" are worth having: dropping these here would
+  // lose the signal precisely where it matters. Same shape as the verbatim
+  // path so a reader needs one parser, just fewer members.
+  const compileUnits = Array.isArray(value.compileUnits) ? value.compileUnits : null;
+  if (compileUnits) {
+    out.compileUnits = rankedCompileUnits(compileUnits, PREWARM_COMPACT_COMPILE_UNITS_MAX).map(
+      (unit) => ({
+        id: textIn(unit.id, 80),
+        lane: textIn(unit.lane, 40),
+        // The field the ranking above SELECTS on: without it a reader sees
+        // units chosen by the failure rule with no way to tell which failed.
+        failedAtMs: nullableNumberIn(unit.failedAtMs, 0, 600_000),
+        syncMs: nullableNumberIn(unit.syncMs, 0, 600_000),
+        settledDurationMs: nullableNumberIn(unit.settledDurationMs, 0, 600_000),
+        programDelta: nullableNumberIn(unit.programDelta, -10_000, 10_000),
+        statusAtReveal: textIn(unit.statusAtReveal, 16),
+      }),
+    );
+  }
+  const pacing = value.prewarmPacing;
+  if (isRecord(pacing)) {
+    const adaptive = isRecord(pacing.adaptive) ? pacing.adaptive : null;
+    const transitions = adaptive && Array.isArray(adaptive.transitions) ? adaptive.transitions : [];
+    out.prewarmPacing = {
+      mode: textIn(pacing.mode, 24),
+      source: textIn(pacing.source, 24),
+      adaptive: adaptive
+        ? {
+            state: textIn(adaptive.state, 24),
+            backoffCount: nullableNumberIn(adaptive.backoffCount, 0, 100_000),
+            noProgressCount: nullableNumberIn(adaptive.noProgressCount, 0, 100_000),
+            transitions: transitions
+              .slice(-PREWARM_COMPACT_TRANSITIONS_MAX)
+              .filter(isRecord)
+              .map((transition) => ({
+                atMs: nullableNumberIn(transition.atMs, 0, 600_000),
+                from: textIn(transition.from, 24),
+                to: textIn(transition.to, 24),
+                reason: textIn(transition.reason, 40),
+              })),
+          }
+        : null,
+    };
+  }
   return out;
 }
 
@@ -493,6 +595,101 @@ const PREWARM_RESUME_ENTRIES_MAX = 24;
 // so this is a deliberate copy, the same pattern as CROWD_BUCKET_LABELS above.
 const PREWARM_RESUME_STATUSES = ['none', 'scheduled', 'done', 'failed'] as const;
 const PREWARM_RESUME_LANES = ['debt', 'cosmetic'] as const;
+
+// The streamed-prewarm diagnostic lists, bounded on the SAME rule as the
+// resume block above and for the same reason: they ride the verbatim raw path,
+// the client caps are advisory (any token holder can post a hand-rolled
+// report), and an unbounded list reaches storage on every report that fits
+// under the body cap. Mirrors PREWARM_REPORT_COMPILE_UNITS /
+// PREWARM_REPORT_BUDGET_VARIANTS / PREWARM_REPORT_TRANSITIONS in
+// src/game/perf_reporter.ts; server/ cannot import src/game, so this is a
+// deliberate copy, the same pattern as PREWARM_RESUME_STATUSES above.
+// A length clamp, not a field rebuild: the shapes are read as opaque
+// diagnostics, and it is their UNBOUNDED length that is the defect. Individual
+// member fields stay unshaped here on purpose, so a retained member can still
+// carry a long string or a nested object; what bounds THAT is the 16 KB
+// RAW_SUMMARY_MAX_BYTES check below, which runs after these clamps and routes
+// anything over it into compactPrewarmSummary, where every field IS rebuilt
+// through textIn / nullableNumberIn. Storage is therefore bounded in bytes on
+// both paths, and in shape on the compact one.
+// The compact path's own, tighter sample: it exists to fit a report that
+// already overflowed, so it carries fewer members and fewer fields per member.
+const PREWARM_COMPACT_COMPILE_UNITS_MAX = 6;
+const PREWARM_COMPACT_TRANSITIONS_MAX = 6;
+const PREWARM_COMPACT_BUDGET_VARIANTS_MAX = 6;
+// Scanned before ranking; far above any legitimate report (the client cap is 12).
+const PREWARM_COMPILE_UNITS_SCAN_MAX = 256;
+
+/**
+ * The most diagnostic `limit` compile units, in their original order.
+ *
+ * Taking the FIRST few would keep the earliest units, which on a boot are the
+ * cheap ones, and this block exists to answer "which unit stalled" on exactly
+ * the heavy reports that overflow into the compact path. Failures rank above
+ * everything, then synchronous time. Mirrors sampleCompileUnits in
+ * src/game/perf_prewarm_lists_core.ts; server/ cannot import src/game, so this
+ * is a deliberate copy, the same pattern as PREWARM_RESUME_STATUSES above.
+ */
+function rankedCompileUnits(units: unknown[], limit: number): Record<string, unknown>[] {
+  // Bounded BEFORE the sort, the same shape as PERF_SUGGESTION_IDS_SCAN_MAX
+  // above: a legitimate payload is at most the client cap, and an unauthenticated
+  // ingest should not sort an attacker-sized array even once. The scan bound sits
+  // far above any real report, so ranking is unaffected in practice.
+  const records = units.slice(0, PREWARM_COMPILE_UNITS_SCAN_MAX).filter(isRecord);
+  if (records.length <= limit) return records;
+  return records
+    .map((unit, index) => ({ unit, index }))
+    .sort((a, b) => {
+      const failed =
+        Number(a.unit.failedAtMs === null || a.unit.failedAtMs === undefined) -
+        Number(b.unit.failedAtMs === null || b.unit.failedAtMs === undefined);
+      if (failed !== 0) return failed;
+      const sync = numberIn(b.unit.syncMs, 0, 600_000, 0) - numberIn(a.unit.syncMs, 0, 600_000, 0);
+      if (sync !== 0) return sync;
+      // The client's own tie-break, so the two copies really do rank alike.
+      const settled =
+        numberIn(b.unit.settledDurationMs, 0, 600_000, 0) -
+        numberIn(a.unit.settledDurationMs, 0, 600_000, 0);
+      if (settled !== 0) return settled;
+      return a.index - b.index;
+    })
+    .slice(0, limit)
+    .sort((a, b) => a.index - b.index)
+    .map((entry) => entry.unit);
+}
+const PREWARM_COMPILE_UNITS_MAX = 12;
+const PREWARM_BUDGET_VARIANTS_MAX = 8;
+const PREWARM_PACING_TRANSITIONS_MAX = 12;
+
+/** Bound the client-supplied prewarm diagnostic lists in place. */
+function boundPrewarmDiagnosticLists(prewarm: Record<string, unknown>): void {
+  if (Array.isArray(prewarm.compileUnits)) {
+    // Ranked, not sliced: taking the first N here would throw away the slow and
+    // failed units before the compact path (or a reader) ever sees them, which
+    // is the opposite of what this list is for. A well-behaved client already
+    // sampled the same way; a hand-rolled report has not.
+    prewarm.compileUnits = rankedCompileUnits(prewarm.compileUnits, PREWARM_COMPILE_UNITS_MAX);
+  }
+  for (const key of ['manifestEntries', 'entries']) {
+    const entries = prewarm[key];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      if (!isRecord(entry) || !Array.isArray(entry.budgetVariants)) continue;
+      entry.budgetVariants = entry.budgetVariants
+        .slice(0, PREWARM_BUDGET_VARIANTS_MAX)
+        .filter(isRecord);
+    }
+  }
+  const pacing = prewarm.prewarmPacing;
+  if (!isRecord(pacing)) return;
+  const adaptive = pacing.adaptive;
+  if (!isRecord(adaptive) || !Array.isArray(adaptive.transitions)) return;
+  // The MOST RECENT, matching sampleTransitions on the client: a pacer's end
+  // state is what a report is read for, and keeping the front would drop it.
+  adaptive.transitions = adaptive.transitions
+    .slice(-PREWARM_PACING_TRANSITIONS_MAX)
+    .filter(isRecord);
+}
 
 function sanitizePrewarmResume(value: unknown): Record<string, unknown> | null {
   if (!isRecord(value)) return null;
@@ -535,6 +732,9 @@ function compactRawSummary(value: Record<string, unknown>): Record<string, unkno
     'rendererFoliage',
     'rendererBudget',
     'rendererQualityBuckets',
+    // The allocated drawing buffer (four scalars): the only field that says what
+    // resolution a session rasterizes at, since viewport x dpr does not.
+    'rendererDrawingBuffer',
     'input',
     'hud',
     'netPipeline',
@@ -543,6 +743,11 @@ function compactRawSummary(value: Record<string, unknown>): Record<string, unkno
     // A wedged GPU queue is exactly what a truncated report must still carry:
     // the block is small and bounded, and it is the whole signal.
     'rendererGpuQueue',
+    // The world-entry blocks: a handful of bounded fields each, and a slow
+    // entry is exactly the report most likely to overflow into this path.
+    'postRevealLinks',
+    'bootPhases',
+    'shaderWarm',
   ]) {
     if (value[key] !== undefined) out[key] = value[key];
   }
@@ -555,7 +760,11 @@ function rawSummary(value: unknown, devTraceAllowed = false): Record<string, unk
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   try {
     const text = JSON.stringify(value);
-    const parsed = JSON.parse(text) as Record<string, unknown>;
+    // Before any other sanitizer, and over the WHOLE parsed value rather than
+    // the fields below: raw_summary is jsonb, which rejects a NUL escape the
+    // same way a text parameter rejects the character, and this object
+    // round-trips client-shaped keys and values that no field clamp here sees.
+    const parsed = stripJsonControlChars(JSON.parse(text) as Record<string, unknown>);
     if (!devTraceAllowed) delete parsed.devTrace;
     const browser = sanitizeBrowserSummary(parsed.browser);
     if (browser) parsed.browser = browser;
@@ -563,6 +772,20 @@ function rawSummary(value: unknown, devTraceAllowed = false): Record<string, unk
     const gpuQueue = sanitizeGpuQueueSummary(parsed.rendererGpuQueue);
     if (gpuQueue) parsed.rendererGpuQueue = gpuQueue;
     else delete parsed.rendererGpuQueue;
+    // Field-shaped here, BEFORE the byte check, so the compact path's verbatim
+    // copy of the key is bounded by construction.
+    const drawingBuffer = sanitizeDrawingBuffer(parsed.rendererDrawingBuffer);
+    if (drawingBuffer) parsed.rendererDrawingBuffer = drawingBuffer;
+    else delete parsed.rendererDrawingBuffer;
+    const postRevealLinks = sanitizePostRevealLinks(parsed.postRevealLinks);
+    if (postRevealLinks) parsed.postRevealLinks = postRevealLinks;
+    else delete parsed.postRevealLinks;
+    const bootPhases = sanitizeBootPhases(parsed.bootPhases);
+    if (bootPhases) parsed.bootPhases = bootPhases;
+    else delete parsed.bootPhases;
+    const shaderWarm = sanitizeShaderWarm(parsed.shaderWarm);
+    if (shaderWarm) parsed.shaderWarm = shaderWarm;
+    else delete parsed.shaderWarm;
     // The prewarm summary rides through verbatim on this path, bounded only by
     // the body cap, so its client-supplied LISTS are bounded here explicitly.
     // Without this the resume block's entries and failed-unit ids reach storage
@@ -579,6 +802,7 @@ function rawSummary(value: unknown, devTraceAllowed = false): Record<string, unk
       const resume = sanitizePrewarmResume(prewarm.resume);
       if (resume) prewarm.resume = resume;
       else delete prewarm.resume;
+      boundPrewarmDiagnosticLists(prewarm);
     }
     const boundedText = JSON.stringify(parsed);
     const maxBytes = devTraceAllowed ? RAW_SUMMARY_DEV_TRACE_MAX_BYTES : RAW_SUMMARY_MAX_BYTES;
@@ -628,6 +852,12 @@ export async function handlePerfReport(
   const accountId = await authenticatedAccountId(req);
   const userAgent = String(req.headers['user-agent'] ?? '');
   const glRenderer = textIn(body.glRenderer, 160);
+  // The client's WebGPU high-performance adapter description
+  // (src/game/gpu_adapter_probe.ts), '' from a client that has none: an absent
+  // navigator.gpu, a refused adapter, or a client older than the probe. On
+  // Chrome this is the vendor/architecture pair ("nvidia ampere"), not a model
+  // name, so the key parsed off it below is usually vendor-level.
+  const gpuHpAdapter = textIn(body.gpuHpAdapter, 160);
   const releaseVersion = textIn(body.releaseVersion, 40);
   const buildId = textIn(body.buildId, 40);
   const source = choiceIn(body.source, ['gameplay', 'benchmark'], 'gameplay');
@@ -652,6 +882,8 @@ export async function handlePerfReport(
     ),
     gfxTier: choiceIn(body.gfxTier, ['low', 'medium', 'high', 'ultra', 'insane'], 'low'),
     autoGovernor: Boolean(body.autoGovernor),
+    shaderWarmWorkerActive: Boolean(body.shaderWarmWorkerActive),
+    shaderWarmRefusal: shaderWarmToken(body.shaderWarmRefusal),
     targetFps: intIn(body.targetFps, 0, 240, 0),
     renderScale: numberIn(body.renderScale, 0.3, 1.5, 1),
     effectiveRenderScale: numberIn(body.effectiveRenderScale, 0.3, 1.5, 1),
@@ -685,6 +917,22 @@ export async function handlePerfReport(
     ),
     glVendor: textIn(body.glVendor, 80),
     glRendererBucket: bucketGpu(glRenderer || textIn(body.glRendererBucket, 80)),
+    // Derived from the SAME adapter name, never from the bucket: bucketGpu has
+    // already thrown the API token away by then for every recognised vendor.
+    glBackend: glBackendFromRenderer(glRenderer),
+    // GPU model dimensions, one block on purpose. The renderer string was
+    // sanitized to 160 chars at the top and then DROPPED before storage; it is
+    // stored as received now, and gpu_model_bucket.ts parses the family key and
+    // form-factor verdict off it server-side (the client is never trusted to
+    // bucket). An absent renderer stores '' rather than the 'other' key, so a
+    // grouped read tells "no evidence" apart from "unrecognised GPU". The
+    // adapter runs through the SAME parser so both columns speak one key
+    // vocabulary; the summary compares them on their vendor segment, which is
+    // as far as the adapter text a browser hands a normal page can reach.
+    glRendererRaw: glRenderer,
+    glModel: glRenderer ? glModel(glRenderer) : '',
+    glLaptop: glLaptop(glRenderer),
+    gpuHpAdapter: gpuHpAdapter ? glModel(gpuHpAdapter) : '',
     zoneOrScenario: textIn(
       body.zoneOrScenario,
       80,
@@ -701,11 +949,15 @@ export async function handlePerfReport(
   };
 
   await insertClientPerfReport(row);
+  // AFTER the insert on purpose: the /metrics series stay 1:1 with stored rows
+  // (see server/http/client_perf_metrics.ts for the full emission contract).
+  clientPerfMetricsSink().perfReportStored(row);
   return json(res, 200, { ok: true });
 }
 
 export const perfReportInternalsForTest = {
   bucketGpu,
+  stripControlChars,
   browserFamily,
   osFamily,
   viewportBucket,
@@ -718,6 +970,7 @@ export const perfReportInternalsForTest = {
   PERF_REPORT_SCHEMA_VERSION,
   LONG_TASK_RAW_MS_MAX,
   LONG_TASK_RAW_AGE_MS_MAX,
+  DRAWING_BUFFER_RAW_PIXELS_MAX,
   GPU_QUEUE_RAW_MS_MAX,
   GPU_QUEUE_RAW_AGE_MS_MAX,
   GPU_QUEUE_RAW_STALLS_MAX,
@@ -729,4 +982,7 @@ export const perfReportInternalsForTest = {
   PREWARM_RESUME_ENTRIES_MAX,
   PREWARM_RESUME_STATUSES,
   PREWARM_RESUME_LANES,
+  PREWARM_COMPILE_UNITS_MAX,
+  PREWARM_BUDGET_VARIANTS_MAX,
+  PREWARM_PACING_TRANSITIONS_MAX,
 };

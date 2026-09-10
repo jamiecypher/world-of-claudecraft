@@ -117,6 +117,7 @@ const hudStringsEn = {
         cooldownLockedHerb: 'Depleted herb node, tool locked',
         station: 'Crafting station: {name}',
         service: 'Service: {name}',
+        farmPatch: 'Garden beds',
         partyMember: 'Party member: {name}',
         deadPartyMember: 'Dead party member: {name}',
         partyMemberGeneric: 'Party member',
@@ -131,6 +132,8 @@ const hudStringsEn = {
         riftEntrance: 'Rift entrance: {name}',
         hostileEnemy: 'Hostile enemy',
         aggressiveEnemy: 'Enemy attacking you',
+        bossEnemy: 'Boss: {name}',
+        bossAggressiveEnemy: 'Boss attacking you: {name}',
         lootableEnemy: 'Lootable enemy',
         corpse: 'Your corpse',
         deathZone: 'Danger zone',
@@ -530,6 +533,11 @@ const hudStringsEn = {
       tradeExpired: 'The trade request has expired.',
       tradeFailed: 'Trade failed: items or money no longer available.',
       tradeBound: 'That item is bound and cannot be traded.',
+      // The bind-on-pickup window refusal (social/trade.ts windowDenied): the
+      // player holds a windowed copy but this counterparty is not in its
+      // drop-moment snapshot, or the window has run out. Wordy, M16: the
+      // five non-Latin fills land in this same change.
+      tradeWindowIneligible: 'That can only be traded to players who shared its drop.',
       // Wordy, M16: the five non-Latin fills land in this same change.
       marketListBound: 'That item is bound and cannot be listed.',
     },
@@ -560,6 +568,13 @@ const hudStringsEn = {
       soldJunkMany: 'Sold {count} junk items for {money}.',
       keptBoundOne: 'Kept {count} bound copy.',
       keptBoundMany: 'Kept {count} bound copies.',
+      // The LOCKED twin: a partial vendor sale spares bound copies AND
+      // player-locked ones, and calling a locked copy bound named a reason the
+      // player cannot act on. Separate keys rather than one parameterized line,
+      // because the two states are unrelated and a locale may well word them
+      // differently (Masterwrought phase 18 QA).
+      keptLockedOne: 'Kept {count} locked copy.',
+      keptLockedMany: 'Kept {count} locked copies.',
       friendOnline: '{name} has come online.',
       friendOffline: '{name} has gone offline.',
     },

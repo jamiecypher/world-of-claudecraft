@@ -31,6 +31,32 @@ export interface CachedReadOptions {
   now?: () => number;
 }
 
+/**
+ * Freeze a cache snapshot WHOLE (every nested object and array) and return
+ * it. Object.freeze alone is shallow, so a tenant that froze only its top
+ * level left the rows the serialize-once memo (server/ok_response_memo.ts)
+ * depends on mutable; a consumer poisoning a shared row would then desync the
+ * memoized bytes from the object.
+ *
+ * The recursion terminates on a VISITED set, never on Object.isFrozen: a
+ * frozen-check short-circuit refuses exactly the input this helper exists to
+ * repair (a shallow-frozen wrapper around mutable rows) and returns having
+ * frozen nothing. The visited set also makes a shared child cheap on its second
+ * sighting and tolerates a cycle, which a frozen check only did by accident.
+ */
+export function deepFreezeSnapshot<T>(value: T): T {
+  freezeInto(value, new WeakSet<object>());
+  return value;
+}
+
+function freezeInto(value: unknown, seen: WeakSet<object>): void {
+  if (typeof value !== 'object' || value === null) return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  Object.freeze(value);
+  for (const child of Object.values(value as Record<string, unknown>)) freezeInto(child, seen);
+}
+
 export interface CachedRead<T> {
   /** Serve fresh-within-TTL from cache; otherwise refresh (single-flight). */
   read(): Promise<T>;
@@ -147,7 +173,9 @@ export interface KeyedCachedReadOptions {
  * A bounded map of per-key CachedRead instances: TTL, single-flight, and
  * stale-on-error per key via createCachedRead; bust-by-key, bust-all, and the
  * entry bound owned here. A key is whatever the owning domain keys by (account
- * ids for the Discord status core, guild ids for the guild bank activity log);
+ * ids for the Discord status core, guild ids for the guild bank activity log,
+ * canonical query strings for the marketplace browse cache; the K parameter
+ * defaults to number so the original consumers read unchanged);
  * each domain holds its OWN instance, so the key domains never meet and an
  * entry can never be served for any key other than the one it is stored under.
  */
@@ -164,8 +192,8 @@ export interface KeyedCachedReadStats {
   entries: number;
 }
 
-export class KeyedCachedRead<T> {
-  private readonly entries = new Map<number, CachedRead<T>>();
+export class KeyedCachedRead<T, K = number> {
+  private readonly entries = new Map<K, CachedRead<T>>();
   // Refresh telemetry, the DailyRewardBoardCache.stats() shape: this cache
   // refreshes on demand after busts, so its query rate is bust rate times
   // status arrival rate, and these counters are what make eviction thrash, a
@@ -177,7 +205,7 @@ export class KeyedCachedRead<T> {
   private bustCount = 0;
 
   constructor(
-    private readonly refresh: (key: number) => Promise<T>,
+    private readonly refresh: (key: K) => Promise<T>,
     private readonly opts: KeyedCachedReadOptions,
   ) {
     // Loud at wiring time: a non-positive TTL would serve every read stale or
@@ -193,7 +221,7 @@ export class KeyedCachedRead<T> {
       );
   }
 
-  read(key: number): Promise<T> {
+  read(key: K): Promise<T> {
     this.readCount += 1;
     let entry = this.entries.get(key);
     if (entry !== undefined) {
@@ -250,12 +278,12 @@ export class KeyedCachedRead<T> {
    * refresh already coming, and in neither is there a stale value to coalesce
    * against. Does not touch the LRU order: this is an observation, not a read.
    */
-  has(key: number): boolean {
+  has(key: K): boolean {
     return this.entries.has(key);
   }
 
   /** Drop one key's entry; its next read refreshes (see the header on why drop). */
-  bust(key: number): void {
+  bust(key: K): void {
     if (this.entries.delete(key)) this.bustCount += 1;
   }
 

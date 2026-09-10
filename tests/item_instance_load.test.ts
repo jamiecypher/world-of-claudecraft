@@ -15,13 +15,19 @@ import {
   MAX_INSTANCE_PAYLOAD_KEYS,
   MAX_INSTANCE_STRING_LENGTH,
   MAX_INSTANCE_SUBTREE_JSON_LENGTH,
+  MAX_LEGENDARY_NAME_LOAD_LENGTH,
   sanitizeItemInstancePayloadOnLoad,
   warnDroppedInstanceKeys,
 } from '../src/sim/item_instance_load';
+import { PERFECTING_RANKS } from '../src/sim/professions/perfecting';
 import { isLegalCrafterName, MAX_CRAFTED_BY_LENGTH } from '../src/sim/professions/tools';
 
-/** A payload carrying one legal value of every declared field, in the
- *  declaration order of ItemInstancePayload. */
+/** A payload carrying one legal value per declared field, in the declaration
+ *  order of ItemInstancePayload, for the identity claim. Per FIELD, not a
+ *  reachable game state (a live copy never holds `perfecting` and `perfected`
+ *  together: the stamp deletes the track field; the sanitizer judges each
+ *  field alone). `rift` is deliberately absent here: it is never descended
+ *  into and has its own no-descent arm below. */
 const legalPayload = () => ({
   signer: 'Loggerholm',
   charges: { gatherers_cache: 3 },
@@ -30,6 +36,10 @@ const legalPayload = () => ({
   craftedRecipeId: 'recipe_tough_jerky',
   boundTo: 41,
   bindOnTrade: true,
+  perfecting: 2,
+  perfected: true,
+  name: 'Sunrise Vow',
+  locked: true,
 });
 
 const atLimit = 'e'.repeat(MAX_INSTANCE_STRING_LENGTH);
@@ -53,8 +63,25 @@ describe('sanitizeItemInstancePayloadOnLoad: identity on legal data', () => {
       'craftedRecipeId',
       'boundTo',
       'bindOnTrade',
+      'perfecting',
+      'perfected',
+      'name',
+      'locked',
     ]);
     expect(out.payload).toEqual(legalPayload());
+  });
+
+  it('keeps a STATS-FREE rolled record byte-identical (the promotion mint shape)', () => {
+    // The orange promotion of a Perfected copy whose attempt never minted
+    // rolled (the R5 bonus can be empty) writes exactly
+    // { quality: 'legendary' }: no stats key at all. The load bound must
+    // pass it untouched (phase 13, 2026-08-27 review).
+    const payload = { perfected: true, rolled: { quality: 'legendary' }, name: 'Sunrise Vow' };
+    const before = JSON.stringify(payload);
+    const out = sanitizeItemInstancePayloadOnLoad(payload);
+    expect(out.dropped).toEqual([]);
+    expect(out.payload).toBe(payload);
+    expect(JSON.stringify(out.payload)).toBe(before);
   });
 
   it('keeps unknown keys inside the bounds (the forward-compatibility arm)', () => {
@@ -165,6 +192,83 @@ describe('sanitizeItemInstancePayloadOnLoad: the signer name shape', () => {
     for (const bad of [41, null, true, { name: 'Elsewhere' }, ['Elsewhere']]) {
       expect(load(bad).dropped, `signer ${JSON.stringify(bad)}`).toEqual(['signer']);
       expect(load(bad).payload).toEqual({ enchant: 'enchant_weapon_might' });
+    }
+  });
+});
+
+describe('sanitizeItemInstancePayloadOnLoad: the Perfecting field shapes (phase 12)', () => {
+  it('keeps every legal mid-track rank and the literal perfected stamp', () => {
+    for (let rank = 1; rank <= PERFECTING_RANKS - 1; rank++) {
+      const out = sanitizeItemInstancePayloadOnLoad({ perfecting: rank, signer: 'Loggerholm' });
+      expect(out.dropped, `rank ${rank}`).toEqual([]);
+      expect(out.payload).toEqual({ perfecting: rank, signer: 'Loggerholm' });
+    }
+    const stamped = sanitizeItemInstancePayloadOnLoad({ perfected: true, boundTo: 7 });
+    expect(stamped.dropped).toEqual([]);
+    expect(stamped.payload).toEqual({ perfected: true, boundTo: 7 });
+  });
+
+  it('drops a perfecting value outside integer [1, PERFECTING_RANKS - 1], alone', () => {
+    // Rank 0 is spelled by ABSENCE and rank PERFECTING_RANKS by the
+    // `perfected` stamp, so neither is a legal stored value; nor is any
+    // non-integer or non-number shape.
+    for (const bad of [
+      0,
+      PERFECTING_RANKS,
+      PERFECTING_RANKS + 5,
+      -2,
+      2.5,
+      Number.NaN,
+      '2',
+      true,
+      null,
+      { rank: 2 },
+    ]) {
+      const out = sanitizeItemInstancePayloadOnLoad({ perfecting: bad, boundTo: 7 });
+      expect(out.dropped, `perfecting ${JSON.stringify(bad)}`).toEqual(['perfecting']);
+      // ALONE: the payload around the junk field survives.
+      expect(out.payload).toEqual({ boundTo: 7 });
+    }
+    expect(PERFECTING_RANKS).toBe(4);
+  });
+
+  it('drops any perfected value that is not the literal true, alone', () => {
+    for (const bad of [false, 1, 0, 'true', null, {}]) {
+      const out = sanitizeItemInstancePayloadOnLoad({ perfected: bad, boundTo: 7 });
+      expect(out.dropped, `perfected ${JSON.stringify(bad)}`).toEqual(['perfected']);
+      expect(out.payload).toEqual({ boundTo: 7 });
+    }
+  });
+});
+
+describe('sanitizeItemInstancePayloadOnLoad: the legendary name bound (phase 13)', () => {
+  const load = (name: unknown) =>
+    sanitizeItemInstancePayloadOnLoad({ name, enchant: 'enchant_weapon_might' });
+
+  it('keeps a legal name, up to the LOAD ceiling (looser than the live shape)', () => {
+    // The signer doctrine: the live shape (legendary_name.ts) is 32 letters/
+    // spaces/apostrophes/hyphens, and this bound deliberately admits MORE
+    // (any printable ASCII to 48) so shipped names outlive a live-shape
+    // widening; the survivor set here includes strings the live validator
+    // would refuse today, which is exactly the doctrine under test.
+    for (const legal of ['Sunrise Vow', "D'arna-Vel", 'A', 'Vow #7 (true)', 'e'.repeat(48)]) {
+      const out = load(legal);
+      expect(out.dropped, JSON.stringify(legal)).toEqual([]);
+      expect(out.payload?.name).toBe(legal);
+    }
+    expect(MAX_LEGENDARY_NAME_LOAD_LENGTH).toBe(48);
+  });
+
+  it('drops a junk name alone, per dimension', () => {
+    // One probe per dimension of the bound: type, emptiness, byte ceiling,
+    // alphabet (multi-byte), alphabet (control char).
+    const overlong = 'e'.repeat(MAX_LEGENDARY_NAME_LOAD_LENGTH + 1);
+    const accented = `Bl${String.fromCharCode(0xe9)}de`;
+    for (const bad of [41, null, true, ['Vow'], { text: 'Vow' }, '', overlong, accented, 'A\nB']) {
+      const out = load(bad);
+      expect(out.dropped, `name ${JSON.stringify(bad)}`).toEqual(['name']);
+      // ALONE: the payload around the junk field survives.
+      expect(out.payload).toEqual({ enchant: 'enchant_weapon_might' });
     }
   });
 });
@@ -349,5 +453,70 @@ describe('boundCraftedRecipeIdOnLoad: the slot-level sibling bound', () => {
     boundCraftedRecipeIdOnLoad(nonString, dropped, 'buyback');
     expect('craftedRecipeId' in nonString).toBe(false);
     expect(dropped).toEqual(['bag.hide.craftedRecipeId', 'buyback.hide.craftedRecipeId']);
+  });
+});
+
+describe('sanitizeItemInstancePayloadOnLoad: the partyTrade window subtree', () => {
+  it('keeps a legal bind-on-pickup window intact (the 2h grant must survive a relog)', () => {
+    const payload = {
+      partyTrade: {
+        untilMs: 7_200_000,
+        eligible: ['Alice', 'Bob', 'Cara'],
+        eligibleIds: [11, 22, 33],
+      },
+    };
+    const before = JSON.stringify(payload);
+    const out = sanitizeItemInstancePayloadOnLoad(payload);
+    expect(out.dropped).toEqual([]);
+    expect(JSON.stringify(out.payload)).toBe(before);
+  });
+
+  it('a worst-case legal window (RAID_MAX max-length names plus ids) stays under the ceiling', () => {
+    const payload = {
+      partyTrade: {
+        untilMs: 7_200_000,
+        eligible: Array.from({ length: 10 }, (_, i) => `Raider${i}`.padEnd(24, 'x')),
+        eligibleIds: Array.from({ length: 10 }, (_, i) => 100_000 + i),
+      },
+    };
+    const out = sanitizeItemInstancePayloadOnLoad(payload);
+    expect(out.dropped).toEqual([]);
+  });
+
+  it('drops a hand-edited unbounded eligible list WHOLE via the subtree JSON ceiling', () => {
+    const payload = {
+      partyTrade: {
+        untilMs: 7_200_000,
+        eligible: Array.from({ length: 200 }, (_, i) => `Bogus${i}`.padEnd(30, 'y')),
+      },
+    };
+    const out = sanitizeItemInstancePayloadOnLoad(payload);
+    // ATOMIC, deliberately unlike the key-at-a-time doctrine: the window is
+    // one snapshot, so no partial `{ untilMs }` residue may survive (the
+    // pre-fix behavior kept exactly that residue). The marker was the
+    // payload's only key, so the emptied payload drops whole too.
+    expect(out.dropped).toEqual(['partyTrade', 'payload']);
+    expect(out.payload).toBeUndefined();
+  });
+
+  it('drops the whole marker when eligibility data is invalid or missing (atomic, no residue)', () => {
+    const malformedMarkers: unknown[] = [
+      { untilMs: 7_200_000 }, // eligible missing
+      { untilMs: 7_200_000, eligible: 5 }, // eligible not iterable (the load-crash shape)
+      { untilMs: 7_200_000, eligible: ['Alice', 42] }, // non-string name
+      { untilMs: 7_200_000, eligible: ['Alice', 'x'.repeat(65)] }, // overlong name
+      { untilMs: Number.NaN, eligible: ['Alice', 'Bob'] }, // non-finite clock
+      { eligible: ['Alice', 'Bob'] }, // untilMs missing
+      { untilMs: 7_200_000, eligible: ['Alice', 'Bob'], eligibleIds: 'junk' }, // ids not an array
+      { untilMs: 7_200_000, eligible: ['Alice', 'Bob'], eligibleIds: [11, 'x'] }, // non-number id
+      'a short string marker', // survives the generic string arm, so the marker arm must catch it
+      [7_200_000], // an array wearing the marker key
+    ];
+    for (const marker of malformedMarkers) {
+      const out = sanitizeItemInstancePayloadOnLoad({ signer: 'Loggerholm', partyTrade: marker });
+      expect(out.dropped, JSON.stringify(marker)).toEqual(['partyTrade']);
+      // The sibling key survives: atomicity is marker-wide, never payload-wide.
+      expect(out.payload, JSON.stringify(marker)).toEqual({ signer: 'Loggerholm' });
+    }
   });
 });

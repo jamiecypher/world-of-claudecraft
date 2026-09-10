@@ -4,6 +4,7 @@
 // stored now so cross-realm friends/guilds need no migration later).
 
 import type { Pool } from 'pg';
+import { guildRosterCap, guildRosterPagesBought } from '../src/sim/guild_roster';
 import { bustAdminGuildListReads } from './admin_guilds_read';
 import {
   GUILD_NAME_ADVISORY_LOCK_SQL,
@@ -138,6 +139,83 @@ CREATE UNIQUE INDEX IF NOT EXISTS guilds_realm_name ON guilds(realm, name);
 ALTER TABLE guilds ADD COLUMN IF NOT EXISTS motd TEXT NOT NULL DEFAULT '';
 ALTER TABLE guilds ADD COLUMN IF NOT EXISTS motd_set_by TEXT NOT NULL DEFAULT '';
 
+-- Guild pledge board (docs/prd/guild-pledge-board.md): per-guild recruiting
+-- settings ride the guilds row like the motd.
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS pledges_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS pledge_min_level INT NOT NULL DEFAULT 1;
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS pledge_note TEXT NOT NULL DEFAULT '';
+
+-- Guild roster expansion (docs/prd/guild-roster-expansion.md): how many
+-- 20-seat pages the Guild Master has bought. The CAP derives from it
+-- (src/sim/guild_roster.ts guildRosterCap), never the other way round, so the
+-- next page's price always indexes the ladder by pages actually paid for.
+-- Additive and idempotent; 0 keeps every existing guild at the base roster.
+ALTER TABLE guilds ADD COLUMN IF NOT EXISTS roster_pages INT NOT NULL DEFAULT 0;
+
+-- One receipt per bought roster page, written in the SAME transaction as the
+-- page and the buyer's charged purse (server/guild_roster_page_db.ts). Its
+-- only reader is the reconcile step after a lost COMMIT answer: a matching
+-- row under the purchase's own key proves the page landed and must not be
+-- refunded. Bounded by construction (the compare-and-set caps pages at the
+-- ladder's length, so at most that many rows per guild, gone with the
+-- guild), so no retention sweep is needed. copper is BIGINT on purpose: the
+-- ladder crosses INT4 at page 30. Uniqueness is the batch_key alone, NOT
+-- (guild_id, page): an operator who lowers roster_pages to compensate a
+-- player must be able to sell that page number again without deleting
+-- receipts first, so the page index below is a plain index (it serves the
+-- guild cascade). The inline CHECKs are frozen at first creation (CREATE
+-- TABLE IF NOT EXISTS never revisits the body, the bank_ledger_batch_db
+-- lesson); they interpolate no constant, so a change needs its own ALTER.
+CREATE TABLE IF NOT EXISTS guild_roster_receipts (
+  batch_key TEXT PRIMARY KEY,
+  guild_id INT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+  page INT NOT NULL,
+  character_id INT NOT NULL REFERENCES characters(id) ON DELETE CASCADE,
+  copper BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT guild_roster_receipts_page_positive CHECK (page > 0),
+  CONSTRAINT guild_roster_receipts_copper_positive CHECK (copper > 0)
+);
+-- The first cut of this table (never released) made (guild_id, page) unique.
+ALTER TABLE guild_roster_receipts DROP CONSTRAINT IF EXISTS guild_roster_receipts_page_once;
+CREATE INDEX IF NOT EXISTS guild_roster_receipts_guild_page
+  ON guild_roster_receipts (guild_id, page);
+-- The character cascade (the account-delete path) must never scan this table.
+CREATE INDEX IF NOT EXISTS guild_roster_receipts_character
+  ON guild_roster_receipts (character_id);
+
+-- One active pledge per character (the pledge is a public line on the
+-- character, singular by construction). Bounded at one row per character, so
+-- no retention sweep is needed.
+CREATE TABLE IF NOT EXISTS guild_pledges (
+  character_id INT PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+  guild_id INT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS guild_pledges_guild ON guild_pledges(guild_id);
+
+-- The re-pledge cooldown stamp, per character: the last time they PLEDGED,
+-- SURVIVING withdraw (which deletes the pledge row itself), so
+-- withdraw-and-re-pledge cannot dodge the anti-spam window
+-- (server/social.ts PLEDGE_REPLEDGE_COOLDOWN_MS). Bounded at one row per
+-- character, so no retention sweep is needed.
+CREATE TABLE IF NOT EXISTS guild_pledge_cooldowns (
+  character_id INT PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
+  pledged_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- The rejection ladder, per (guild, ACCOUNT): 1 day, then 1 week, then
+-- forever (sim/guild_pledge_ladder.ts owns the arithmetic). KEEP FOREVER by
+-- design: the third tier is permanent, so rows must outlive every sweep; the
+-- table is bounded by guilds x accounts that were actually rejected.
+CREATE TABLE IF NOT EXISTS guild_pledge_ladder (
+  guild_id INT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
+  account_id INT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  reject_count INT NOT NULL DEFAULT 0,
+  rejected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (guild_id, account_id)
+);
+
 CREATE TABLE IF NOT EXISTS guild_members (
   character_id INT PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,
   guild_id INT NOT NULL REFERENCES guilds(id) ON DELETE CASCADE,
@@ -194,6 +272,12 @@ export class PgSocialDb implements SocialDb {
   );
 
   constructor(private readonly pool: Pool) {}
+
+  /** Atomic paid creation lives outside the SocialDb interface, but it still
+   *  has to invalidate this instance-local roster cache after commit. */
+  bustGuildRoster(guildId: number): void {
+    this.guildRoster.bust(guildId);
+  }
 
   async findCharacterByName(name: string): Promise<CharInfo | null> {
     // scoped to this realm: you can only friend/ignore/invite characters that
@@ -353,6 +437,10 @@ export class PgSocialDb implements SocialDb {
         await client.query('ROLLBACK');
         return { error: 'already_in_guild' };
       }
+      // Founding a guild is joining one: clear any standing pledge in the
+      // same transaction, so no stale request lingers on another guild's
+      // board (docs/prd/guild-pledge-board.md).
+      await client.query('DELETE FROM guild_pledges WHERE character_id = $1', [leaderId]);
       await client.query('COMMIT');
       this.guildRoster.bust(guildId);
       bustAdminGuildListReads();
@@ -373,33 +461,48 @@ export class PgSocialDb implements SocialDb {
 
   async guildMembership(
     charId: number,
-  ): Promise<{ guildId: number; guildName: string; rank: GuildRank } | null> {
+  ): Promise<{ guildId: number; guildName: string; rank: GuildRank; rosterPages: number } | null> {
+    // roster_pages rides the same JOIN the membership read already pays for,
+    // so the roster cap costs the snapshot and the invite gate no extra query.
     const res = await this.pool.query(
-      `SELECT gm.guild_id, g.name AS guild_name, gm.rank
+      `SELECT gm.guild_id, g.name AS guild_name, gm.rank, g.roster_pages
        FROM guild_members gm JOIN guilds g ON g.id = gm.guild_id
        WHERE gm.character_id = $1`,
       [charId],
     );
     const row = res.rows[0];
-    return row ? { guildId: row.guild_id, guildName: row.guild_name, rank: row.rank } : null;
+    return row
+      ? {
+          guildId: row.guild_id,
+          guildName: row.guild_name,
+          rank: row.rank,
+          rosterPages: guildRosterPagesBought(row.roster_pages),
+        }
+      : null;
   }
 
   async addGuildMemberAtomic(
     guildId: number,
     charId: number,
     rank: GuildRank,
-    limit: number,
-  ): Promise<'ok' | 'full' | 'already_member' | 'no_guild'> {
+    requirePledge = false,
+  ): Promise<'ok' | 'full' | 'already_member' | 'no_guild' | 'no_pledge'> {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       // lock the guild row so concurrent accepts serialize — without this the
       // count-then-insert races and N pending invitees can all pass the cap.
-      const g = await client.query('SELECT id FROM guilds WHERE id = $1 FOR UPDATE', [guildId]);
+      // The cap is read from the SAME locked row (bought roster pages), so a
+      // page purchase landing between a caller's snapshot and this seat is
+      // honoured, and a stale client-side cap can never widen it.
+      const g = await client.query('SELECT id, roster_pages FROM guilds WHERE id = $1 FOR UPDATE', [
+        guildId,
+      ]);
       if (g.rowCount === 0) {
         await client.query('ROLLBACK');
         return 'no_guild';
       }
+      const limit = guildRosterCap(guildRosterPagesBought(g.rows[0].roster_pages));
       const existing = await client.query('SELECT 1 FROM guild_members WHERE character_id = $1', [
         charId,
       ]);
@@ -426,6 +529,19 @@ export class PgSocialDb implements SocialDb {
       if (ins.rowCount === 0) {
         await client.query('ROLLBACK');
         return 'already_member';
+      }
+      if (requirePledge) {
+        // The pledge is the seat's consent: consume it in the same
+        // transaction, so a withdraw or decline racing the caller's pledge
+        // read rolls the seat back instead of seating a player who said no.
+        const consumed = await client.query(
+          'DELETE FROM guild_pledges WHERE character_id = $1 AND guild_id = $2',
+          [charId, guildId],
+        );
+        if ((consumed.rowCount ?? 0) === 0) {
+          await client.query('ROLLBACK');
+          return 'no_pledge';
+        }
       }
       await client.query('COMMIT');
       this.guildRoster.bust(guildId);
@@ -535,6 +651,143 @@ export class PgSocialDb implements SocialDb {
     );
     const row = res.rows[0];
     return { motd: row?.motd ?? '', motdSetBy: row?.motdSetBy ?? '' };
+  }
+
+  // ---- guild pledges (docs/prd/guild-pledge-board.md) ----
+
+  async guildByName(name: string): Promise<{ id: number; name: string } | null> {
+    const res = await this.pool.query(
+      'SELECT id, name FROM guilds WHERE realm = $1 AND lower(name) = lower($2)',
+      [REALM, name],
+    );
+    return res.rows[0] ?? null;
+  }
+
+  async guildPledgeSettings(
+    guildId: number,
+  ): Promise<{ enabled: boolean; minLevel: number; note: string }> {
+    const res = await this.pool.query(
+      'SELECT pledges_enabled AS enabled, pledge_min_level AS "minLevel", pledge_note AS note FROM guilds WHERE id = $1',
+      [guildId],
+    );
+    const row = res.rows[0];
+    return { enabled: row?.enabled ?? true, minLevel: row?.minLevel ?? 1, note: row?.note ?? '' };
+  }
+
+  async setGuildPledgeSettings(
+    guildId: number,
+    settings: { enabled: boolean; minLevel: number; note: string },
+  ): Promise<void> {
+    await this.pool.query(
+      'UPDATE guilds SET pledges_enabled = $2, pledge_min_level = $3, pledge_note = $4 WHERE id = $1',
+      [guildId, settings.enabled, settings.minLevel, settings.note],
+    );
+  }
+
+  async guildPledges(guildId: number): Promise<(CharInfo & { sinceMs: number })[]> {
+    const res = await this.pool.query(
+      `SELECT c.id, c.name, c.class AS cls, c.level, c.realm,
+              (EXTRACT(EPOCH FROM p.created_at) * 1000)::float8 AS "sinceMs"
+         FROM guild_pledges p JOIN characters c ON c.id = p.character_id
+        WHERE p.guild_id = $1
+        ORDER BY p.created_at ASC`,
+      [guildId],
+    );
+    return res.rows;
+  }
+
+  async pledgeOf(
+    charId: number,
+  ): Promise<{ guildId: number; guildName: string; sinceMs: number } | null> {
+    const res = await this.pool.query(
+      `SELECT p.guild_id AS "guildId", g.name AS "guildName",
+              (EXTRACT(EPOCH FROM p.created_at) * 1000)::float8 AS "sinceMs"
+         FROM guild_pledges p JOIN guilds g ON g.id = p.guild_id
+        WHERE p.character_id = $1`,
+      [charId],
+    );
+    return res.rows[0] ?? null;
+  }
+
+  async upsertPledge(charId: number, guildId: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO guild_pledges (character_id, guild_id) VALUES ($1, $2)
+       ON CONFLICT (character_id) DO UPDATE SET guild_id = EXCLUDED.guild_id, created_at = now()`,
+      [charId, guildId],
+    );
+  }
+
+  async deletePledge(charId: number): Promise<void> {
+    await this.pool.query('DELETE FROM guild_pledges WHERE character_id = $1', [charId]);
+  }
+
+  async lastPledgeAtMs(charId: number): Promise<number | null> {
+    const res = await this.pool.query(
+      `SELECT (EXTRACT(EPOCH FROM pledged_at) * 1000)::float8 AS ms
+         FROM guild_pledge_cooldowns WHERE character_id = $1`,
+      [charId],
+    );
+    return res.rows[0]?.ms ?? null;
+  }
+
+  async touchPledgeCooldown(charId: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO guild_pledge_cooldowns (character_id) VALUES ($1)
+       ON CONFLICT (character_id) DO UPDATE SET pledged_at = now()`,
+      [charId],
+    );
+  }
+
+  async accountIdForCharacter(charId: number): Promise<number | null> {
+    const res = await this.pool.query('SELECT account_id AS id FROM characters WHERE id = $1', [
+      charId,
+    ]);
+    return res.rows[0]?.id ?? null;
+  }
+
+  async pledgeLadder(
+    guildId: number,
+    accountId: number,
+  ): Promise<{ rejectCount: number; rejectedAtMs: number } | null> {
+    const res = await this.pool.query(
+      `SELECT reject_count AS "rejectCount",
+              (EXTRACT(EPOCH FROM rejected_at) * 1000)::float8 AS "rejectedAtMs"
+         FROM guild_pledge_ladder WHERE guild_id = $1 AND account_id = $2`,
+      [guildId, accountId],
+    );
+    return res.rows[0] ?? null;
+  }
+
+  async bumpPledgeLadder(guildId: number, accountId: number): Promise<number> {
+    const res = await this.pool.query(
+      `INSERT INTO guild_pledge_ladder (guild_id, account_id, reject_count, rejected_at)
+       VALUES ($1, $2, 1, now())
+       ON CONFLICT (guild_id, account_id)
+       DO UPDATE SET reject_count = guild_pledge_ladder.reject_count + 1, rejected_at = now()
+       RETURNING reject_count AS "rejectCount"`,
+      [guildId, accountId],
+    );
+    return res.rows[0]?.rejectCount ?? 1;
+  }
+
+  async wipePledgeLadder(guildId: number, accountId: number): Promise<void> {
+    await this.pool.query(
+      'DELETE FROM guild_pledge_ladder WHERE guild_id = $1 AND account_id = $2',
+      [guildId, accountId],
+    );
+  }
+
+  async guildLifetimeXpTotal(guildId: number): Promise<number> {
+    // The same per-member expression the guild high-score board sums
+    // (db.ts LIFETIME_XP_EXPR family); one indexed aggregate per call site
+    // (join-time stamping), never per frame.
+    const res = await this.pool.query(
+      `SELECT COALESCE(SUM(COALESCE((c.state->>'lifetimeXp')::float8, 0)), 0) AS total
+         FROM guild_members m JOIN characters c ON c.id = m.character_id
+        WHERE m.guild_id = $1`,
+      [guildId],
+    );
+    return Number(res.rows[0]?.total ?? 0);
   }
 
   // Cached: see server/guild_roster_cache.ts. The raw JOIN lives in

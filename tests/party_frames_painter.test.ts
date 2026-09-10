@@ -438,6 +438,10 @@ describe('PartyFramesPainter: keyed pool over the elided writers', () => {
           pid: 2,
           auras: [
             { id: 'weapon_imbue', kind: 'imbue' },
+            // the live unified food-buff id (Masterwrought 11c): every buff
+            // food mints it (PartyMemberAura is the projected wire shape,
+            // which carries no value field; the predicate-level fixture in
+            // tests/party_frames.test.ts walks the real magnitude)
             { id: 'well_fed', kind: 'buff_sta' },
             { id: 'arcane_intellect', kind: 'buff_int_pct' },
             { id: 'temporal_exhaustion', kind: 'sated' },
@@ -577,6 +581,24 @@ describe('PartyFramesPainter: keyed pool over the elided writers', () => {
     painter.sync([member({ pid: 2, hp: 10 }), member({ pid: 3, inCombat: 1 })], 1, false);
     expect(container._mutations).toBe(movesBefore); // zero DOM moves in the hot path
     expect(rows()).toHaveLength(2);
+  });
+
+  it('keeps one stable boss-guide control between member rows and leader controls', () => {
+    const guide = fakeEl('button');
+    const master = fakeEl('div');
+    painter.setMasterControl(master as unknown as HTMLElement);
+    painter.setGuideControl(guide as unknown as HTMLElement);
+    painter.sync([member({ pid: 2 })], 1, false);
+
+    expect(container.childNodes).toEqual([wrapperOf(), guide, master]);
+    const movesBefore = container._mutations;
+    painter.setGuideControl(guide as unknown as HTMLElement);
+    painter.sync([member({ pid: 2, hp: 40 })], 1, false);
+    expect(container._mutations).toBe(movesBefore);
+
+    painter.clear();
+    expect(container.childNodes).toEqual([]);
+    expect(guide.parentNode).toBeNull();
   });
 
   it('repaints the crest with the recycled member class via the live slot (the portrait gate)', () => {
@@ -757,6 +779,17 @@ describe('PartyFramesPainter: keyed pool over the elided writers', () => {
     expect(kids[0].id).toBe(chipId);
     expect(rows()).toHaveLength(2); // the two member rows live inside the wrapper
     expect(kids[kids.length - 1]).toBe(wrapperOf());
+  });
+
+  it('keeps the complete mobile footer order with chip, rows, guide, and loot controls', () => {
+    const guide = fakeEl('button');
+    const master = fakeEl('div');
+    painter.setCollapse(true, true, false, false);
+    painter.setGuideControl(guide as unknown as HTMLElement);
+    painter.setMasterControl(master as unknown as HTMLElement);
+    painter.sync([member({ pid: 2 })], 1, false);
+
+    expect(container.childNodes).toEqual([findChip(), wrapperOf(), guide, master]);
   });
 
   it('F1: an expanded party seats the chip alone on its line, no member frame beside it', () => {

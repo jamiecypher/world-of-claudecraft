@@ -119,6 +119,97 @@ export const SFX = [
     key: 'mount_run_thunderstrut_gobbler',
     custom: true,
   },
+  // The Lanternback Troll and the Chimeglass Tortoise deliberately have NO
+  // mount_run_ entry. Both shipped synthesised cues and both read as cheap and
+  // nagging at the mounted gallop's ~0.46s stride beat; rather than keep
+  // tuning a synth, they now borrow the player's own surface footfall
+  // (foot_<surface>) through Sfx.mountRun's fallback branch. A mount is opted
+  // into that fallback purely by the ABSENCE of its key here, so adding one
+  // back is all it takes to give either of them a bespoke stride again.
+  {
+    key: 'mount_run_goblin_rocket_sled_start',
+    custom: true,
+  },
+  {
+    key: 'mount_run_goblin_rocket_sled',
+    custom: true,
+    loop: true,
+  },
+  {
+    // The sled's summon call, fired once when the summon channel completes and
+    // the mount appears. Never on dismount, never for a rider already mounted
+    // when they come into view.
+    key: 'mount_summon_goblin_rocket_sled',
+    custom: true,
+  },
+  {
+    key: 'mount_run_goblin_rocket_sled_stop',
+    custom: true,
+  },
+  {
+    key: 'mount_run_goblin_rocket_sled_reverse_start',
+    custom: true,
+  },
+  {
+    key: 'mount_run_goblin_rocket_sled_reverse',
+    custom: true,
+    loop: true,
+  },
+  {
+    key: 'mount_run_goblin_rocket_sled_reverse_stop',
+    custom: true,
+  },
+  {
+    key: 'mount_summon_rallycart_rxt',
+    custom: true,
+  },
+  {
+    key: 'mount_run_rallycart_rxt_idle',
+    custom: true,
+    loop: true,
+  },
+  {
+    key: 'mount_run_rallycart_rxt_start',
+    custom: true,
+  },
+  {
+    key: 'mount_run_rallycart_rxt',
+    custom: true,
+    loop: true,
+  },
+  {
+    key: 'mount_run_rallycart_rxt_stop',
+    custom: true,
+  },
+  // Reverse, the same three-part shape the sled uses. The engine builds these
+  // key names generically (`mount_run_<mountKey>_reverse*`), so the takes were
+  // on disk and reachable by code but absent from this catalog, which meant
+  // they were never in SFX_CLIPS and reversing the cart was silent.
+  {
+    key: 'mount_run_rallycart_rxt_reverse_start',
+    custom: true,
+  },
+  {
+    key: 'mount_run_rallycart_rxt_reverse',
+    custom: true,
+    loop: true,
+  },
+  {
+    key: 'mount_run_rallycart_rxt_reverse_stop',
+    custom: true,
+  },
+  {
+    // Takeoff and touchdown for the cart, five and four takes respectively.
+    // A mount that carries no jump/land set falls back to the rider's own
+    // move_jump/move_land, so these two keys are the whole opt-in: no shipped
+    // mount changes behavior by their existing.
+    key: 'mount_jump_rallycart_rxt',
+    custom: true,
+  },
+  {
+    key: 'mount_land_rallycart_rxt',
+    custom: true,
+  },
   {
     key: 'mount_run_terrorspark_groundshaker_start',
     custom: true,
@@ -144,10 +235,9 @@ export const SFX = [
   },
   {
     // The Viridian Valestrider's summon call: an authored bird cry played once
-    // when the 1.5s summon channel completes and the mount appears. The only
-    // `mount_summon_*` key so far; Sfx.mountSummon resolves the key per mount
-    // and stays silent for a mount with no authored take, so the other mounts
-    // are unaffected.
+    // when the 1.5s summon channel completes and the mount appears.
+    // Sfx.mountSummon resolves `mount_summon_<key>` per mount and stays silent
+    // for a mount with no authored take, so the other mounts are unaffected.
     key: 'mount_summon_avian_strider',
     custom: true,
   },
@@ -177,6 +267,49 @@ export const SFX = [
   },
   {
     key: 'mount_flap_avian_strider',
+    custom: true,
+  },
+  {
+    // The Mech Bird's gait beat: the recorded servo footsteps assembled 1-2-1
+    // (step one, step two, step one) per stride by scripts/gen_mech_bird_sfx.mjs.
+    key: 'mount_run_mech_bird',
+    custom: true,
+  },
+  {
+    // The Mech Bird's standstill powered-on hum: driven through Sfx.loop()
+    // while mounted and stationary (see mountIdle in src/game/sfx.ts), so the
+    // manifest loop flag must say so, like the tank engine sustain above.
+    key: 'mount_idle_mech_bird',
+    custom: true,
+    loop: true,
+  },
+  {
+    // Launch servo one-shot: replaces the generic move_jump while riding the
+    // Mech Bird (the mount-aware arm of Sfx.movement).
+    key: 'mount_jump_mech_bird',
+    custom: true,
+  },
+  {
+    // Landing clank one-shot: replaces the generic move_land while riding.
+    key: 'mount_land_mech_bird',
+    custom: true,
+  },
+  {
+    // Real recording (not ElevenLabs): the cart's rolling/creaking bed, held
+    // as a continuous loop while the mount moves rather than a per-stride
+    // one-shot like mount_run_* above. A wheeled cart has no stride to hang
+    // a one-shot on -- the sound is continuous by nature, so it runs through
+    // sfx.ts's loop()/unloop() the way the campfire and forge ambiences do.
+    key: 'mount_loop_rickshaw_mount',
+    custom: true,
+    loop: true,
+  },
+  {
+    // The Bonebound Rickshaw's summon call, fired once when the summon channel
+    // completes and the mount appears. Never on dismount, and never for a rider
+    // already mounted when they come into view. Silent for any mount without an
+    // authored take, so this key is the whole opt-in.
+    key: 'mount_summon_rickshaw_mount',
     custom: true,
   },
   {
@@ -307,6 +440,20 @@ export const SFX = [
     duration: 1.3,
     prompt:
       "A human warrior's final pained death cry as he collapses to the ground. Single death cry fading out.",
+  },
+  {
+    key: 'player_hurt_female',
+    custom: true,
+    duration: 0.6,
+    prompt:
+      'A human warrior grunting in sudden sharp pain from taking a hit. Single short grunt. Female voice.',
+  },
+  {
+    key: 'player_death_female',
+    custom: true,
+    duration: 1.3,
+    prompt:
+      "A human warrior's final pained death cry as she collapses to the ground. Single death cry fading out. Female voice.",
   },
   {
     key: 'player_eat_food',
@@ -912,8 +1059,6 @@ export const SFX = [
   { key: 'ui_cosmetic_unlock', custom: true },
 
   // Duel/arena start gong (custom recording, not ElevenLabs/generated).
-  // Vale Cup kickoff was split off to its own key (ui_vcup_kickoff) so this
-  // one stays real-duel/arena only; see the 'vcupKickoff' case in hud.ts.
   { key: 'ui_duel_start', custom: true },
 
   // Arena rating-loss defeat chime (custom recording, not ElevenLabs/generated).

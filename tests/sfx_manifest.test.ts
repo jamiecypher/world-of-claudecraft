@@ -164,13 +164,36 @@ describe('buildManifest', () => {
     expect(manifest).toContain('cast_lightning_bolt');
   });
 
-  it('keeps the release catalog, all 10 mount gait cues, the Valestrider set, and all 63 UI cues in one 271-key inventory', () => {
+  it('keeps the merged catalog, all 40 mount cues, and all 72 UI cues in one 305-key inventory', () => {
+    // Combine the release farming/crafting cues with the candidate mount cues.
+    // Counts measured from SFX: 305 total, 72 UI, 40 mount. A mount may share
+    // player footfalls or have several cues, so this is not a mount count.
+    // The Viridian Valestrider added the last six mount cues: its gait pool,
+    // summon call, takeoff, touchdown, and the squawk/flap pair it calls at
+    // the apex of a jump.
     const keys = new Set(SFX.map((entry) => entry.key));
-    expect(keys.size).toBe(271);
-    expect([...keys].filter((key) => key.startsWith('ui_'))).toHaveLength(63);
+    expect(keys.size).toBe(305);
+    expect([...keys].filter((key) => key.startsWith('ui_'))).toHaveLength(72);
+    expect([...keys].filter((key) => key.startsWith('mount_'))).toHaveLength(40);
     expect(keys.has('ui_craft_cast')).toBe(true);
+    expect(keys.has('ui_farm_plant')).toBe(true);
+    expect(keys.has('ui_farm_harvest')).toBe(true);
+    expect(keys.has('ui_farm_withered')).toBe(true);
+    expect(keys.has('ui_farm_ready')).toBe(true);
+    expect(keys.has('ui_farm_golden')).toBe(true);
+    expect(keys.has('ui_farm_feast')).toBe(true);
+    expect(keys.has('ui_perfecting_attempt')).toBe(true);
+    expect(keys.has('ui_perfecting_success')).toBe(true);
+    expect(keys.has('ui_legendary_forged')).toBe(true);
+    expect(keys.has('ui_sunder_complete')).toBe(true);
     for (const key of [
       'cast_lightning_bolt',
+      // the Mech Bird, the store mount: the 1-2-1 gait beat plus the game's
+      // first standstill idle hum and mount-specific jump/land takes
+      'mount_run_mech_bird',
+      'mount_idle_mech_bird',
+      'mount_jump_mech_bird',
+      'mount_land_mech_bird',
       'mob_mudfin_attack',
       'mob_burrower_attack',
       'mob_reptile_attack',
@@ -189,17 +212,6 @@ describe('buildManifest', () => {
       'mount_run_terrorspark_groundshaker',
       // the Drakemaw Raptor, the ninth mount cue (the brood rework's legendary)
       'mount_run_drakemaw_raptor',
-      // The Viridian Valestrider's authored set, the first mount to carry more
-      // than a gait cue: its call on the summon channel's completion edge
-      // (every other mount appears silently), a gait beat pinned to the
-      // animation's own foot contacts, takeoff and touchdown on the airborne
-      // edges, and a squawk plus a wingbeat fired together at the jump's apex.
-      'mount_summon_avian_strider',
-      'mount_run_avian_strider',
-      'mount_jump_avian_strider',
-      'mount_land_avian_strider',
-      'mount_squawk_avian_strider',
-      'mount_flap_avian_strider',
       'fear_shout',
       'fear',
       'intimidating_shout',
@@ -255,7 +267,7 @@ describe('buildManifest', () => {
     // purely filesystem-discovered.
     const mobFamilyKeys = [...keys].filter((key) => key.startsWith('mob_'));
     expect(mobFamilyKeys).toHaveLength(65); // 13 families x 5 actions
-    expect(SFX_FIXED_CATALOG_KEYS).toHaveLength(271);
+    expect(SFX_FIXED_CATALOG_KEYS).toHaveLength(305);
   });
 });
 
@@ -453,6 +465,17 @@ describe('mob subfamily scanning', () => {
   });
 });
 
+describe('Mech Bird jump and landing asset binding', () => {
+  it('ships byte-distinct launch and impact recordings', () => {
+    const jump = readFileSync(path.join(realSfxDir, 'mount_jump_mech_bird.mp3'));
+    const land = readFileSync(path.join(realSfxDir, 'mount_land_mech_bird.mp3'));
+    const jumpHash = createHash('sha256').update(jump).digest('hex');
+    const landHash = createHash('sha256').update(land).digest('hex');
+
+    expect(landHash).not.toBe(jumpHash);
+  });
+});
+
 // Pins the exact asset-to-ability binding this PR restored, so a future
 // re-swap (Meteor's landing recording and Flamestrike's cast recording were
 // mixed up once already, see the fix commit's history) gets caught by CI
@@ -482,5 +505,51 @@ describe('meteor/flamestrike asset binding', () => {
   it('binds the "meteor" and "flamestrike" manifest keys to the right file each', () => {
     expect(SFX_CLIPS.meteor.url.split('?')[0]).toBe('/audio/sfx/meteor.mp3');
     expect(SFX_CLIPS.flamestrike.url.split('?')[0]).toBe('/audio/sfx/flamestrike.mp3');
+  });
+});
+
+// The build step's ORDER, which is load-bearing rather than cosmetic.
+//
+// writeSfxManifest validates every custom key's resolved gain (category
+// baseline + keyTrimDb) against the per-key ceiling in
+// sfx_gain_ceiling.generated.json, and throws when the resolved value exceeds
+// it. writeSfxGainCeilings is what puts a key INTO that file, measured from the
+// audio. Running the manifest first therefore means a newly-added custom key
+// carrying a positive trim can never bootstrap: its ceiling does not exist yet,
+// so it defaults to 0dB, the bounds check throws, and the manifest is left
+// stale on disk.
+//
+// That failure mode is quiet in the worst way. The command exits non-zero, but
+// if the stale manifest is committed anyway the missing key is simply absent
+// from SFX_CLIPS, so the cue never loads and the game plays silence with
+// nothing red anywhere. Two shipped cues were lost to exactly this: a mount's
+// summon call and a mount's three reverse takes, both present on disk and
+// reachable in code.
+//
+// Ceilings depend only on the catalog and the audio files, never on the
+// manifest, so generating them first is safe as well as correct.
+describe('build_sfx_manifest.mjs step order', () => {
+  const entryScript = readFileSync(
+    path.join(fileURLToPath(new URL('..', import.meta.url)), 'scripts/build_sfx_manifest.mjs'),
+    'utf8',
+  );
+
+  it('writes the gain ceilings before loading the manifest that validates against them', () => {
+    expect(entryScript).not.toMatch(
+      /import\s+\{[^}]*\bwriteSfxManifest\b[^}]*\}\s+from\s+['"]\.\/sfx\/manifest\.mjs['"]/,
+    );
+    const ceilingsAt = entryScript.indexOf('writeSfxGainCeilings(');
+    const manifestImportAt = entryScript.indexOf("await import('./sfx/manifest.mjs')");
+    const manifestWriteAt = entryScript.indexOf('writeSfxManifest(');
+    expect(ceilingsAt).toBeGreaterThan(-1);
+    expect(manifestImportAt).toBeGreaterThan(-1);
+    expect(manifestWriteAt).toBeGreaterThan(-1);
+    expect(
+      ceilingsAt,
+      'writeSfxGainCeilings must run BEFORE manifest.mjs is imported: importing the ' +
+        'manifest evaluates playback_profile.mjs and reads the generated ceiling file, ' +
+        'so a new custom key with a positive trim cannot bootstrap if the import happens first',
+    ).toBeLessThan(manifestImportAt);
+    expect(manifestImportAt).toBeLessThan(manifestWriteAt);
   });
 });

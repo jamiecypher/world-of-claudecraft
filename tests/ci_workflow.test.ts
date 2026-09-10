@@ -1,10 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { isCodePath } from '../scripts/lib/ci_change_classify.mjs';
-import { CI_LONG_SUITE_HALVES, resolveWorkerCount } from '../scripts/lib/ci_shard_plan.mjs';
+import {
+  CI_LONG_SUITE_HALVES,
+  CI_LONG_SUITES,
+  resolveWorkerCount,
+} from '../scripts/lib/ci_shard_plan.mjs';
 import { decideTestMode } from '../scripts/lib/ci_test_select.mjs';
 import {
   GENERATED_I18N_ARTIFACT_FILES,
@@ -16,10 +20,13 @@ import {
 import {
   buildFullGateSteps,
   I18N_ARTIFACTS,
+  I18N_RELEASE_TIER_SUITES,
   MANIFEST_ARTIFACTS,
 } from '../scripts/lib/gate_steps.mjs';
+import { PLAYWRIGHT_INSTALL_BLOCK } from './helpers/playwright_install_block';
 import { expectScansOnlyThroughSharedWalkers } from './helpers/scan_guard_self_audit';
 import { stripComments } from './helpers/strip_comments';
+import { tsFilesUnder } from './helpers/ts_files_under';
 
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const detectEntry = readFileSync(
@@ -229,6 +236,69 @@ function jobSource(name: string): string {
   return match[0];
 }
 
+/** A `sparse-checkout:` header in ANY YAML block-scalar spelling. The style
+ *  indicator is deliberately open (`|`, `|-`, `|+`, `>`, `>-`, `>+`, and an
+ *  explicit indentation digit): all of them feed actions/checkout the same cone,
+ *  so a drifted sixth copy must not be able to leave this extractor's sight by
+ *  changing chomping style. Matching only `|` is how a divergent block hides. */
+const SPARSE_HEADER_RE = /^sparse-checkout:\s*[|>][-+]?\d?$/;
+
+/** The screenshot exclusion, as its own LINE rather than a substring, so
+ *  surrounding whitespace or a re-indent cannot make a real block invisible. */
+const SCREENSHOT_EXCLUSION_RE = /^\s*!\/docs\/screenshots\/\*\/\s*$/m;
+
+/**
+ * Every `sparse-checkout:` block in `source` that carries the docs/screenshots
+ * exclusion, extracted WHOLE: the header, its indented body, and the
+ * `sparse-checkout-cone-mode:` line that closes it.
+ *
+ * Structural rather than a search for the known literal, which is the whole
+ * point: a copy-pasted block someone then edited must still be FOUND, so that
+ * the caller can compare it and fail. The body ends where the indentation
+ * returns to the header's own level, so the `changes` job's article-free
+ * `sparse-checkout: |` (a two-line scripts cone with no cone-mode key) is
+ * bounded correctly and then filtered out for lacking the exclusion.
+ */
+function screenshotSparseBlocks(source: string): string[] {
+  const lines = source.split('\n');
+  const indentOf = (line: string): number => line.length - line.trimStart().length;
+  const blocks: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!SPARSE_HEADER_RE.test(lines[i].trim())) continue;
+    const headerIndent = indentOf(lines[i]);
+    let end = i;
+    for (let j = i + 1; j < lines.length; j++) {
+      const line = lines[j];
+      // THE TERMINATOR: the body ends at the next NON-BLANK line at or above
+      // the header's own indent (the next `with:` key, the cone-mode closer,
+      // or the next job). A blank line is legal INSIDE a YAML block scalar
+      // and must not end the walk: the pre-fix loop broke at the first blank,
+      // so a block split by an internal blank line was truncated above its
+      // exclusion line and left discovery entirely, which is the one
+      // direction this extractor must never fail in (fewer blocks found).
+      // Trailing blanks stay excluded because `end` only advances on a
+      // non-blank body line.
+      if (line.trim() === '') continue;
+      if (indentOf(line) <= headerIndent) break;
+      end = j;
+    }
+    let block = lines.slice(i, end + 1).join('\n');
+    // The closer lookup is blank-immune like the body walk above: a blank
+    // line parked between the body and sparse-checkout-cone-mode: must not
+    // drop the closer from the extracted block (which would read as a
+    // divergent copy missing its cone-mode line, or, worse, hide the
+    // cone-mode value from the equality pin entirely).
+    let closerAt = end + 1;
+    while (closerAt < lines.length && lines[closerAt].trim() === '') closerAt++;
+    const closer = lines[closerAt];
+    if (closer !== undefined && closer.trim().startsWith('sparse-checkout-cone-mode:')) {
+      block += `\n${closer}`;
+    }
+    if (SCREENSHOT_EXCLUSION_RE.test(block)) blocks.push(block);
+  }
+  return blocks;
+}
+
 describe('CI workflow parity', () => {
   it('sparse-checkout on the test jobs covers every referenced screenshot subtree', () => {
     // The five sparse test-job checkouts (pr-gate, both long-sims lanes,
@@ -249,19 +319,36 @@ describe('CI workflow parity', () => {
       '            !/docs/screenshots/*/',
       '            /docs/screenshots/admin-cheater-mark/',
       '            /docs/screenshots/admin-guild-bank-panel/',
+      '            /docs/screenshots/aura-tracks/',
+      '            /docs/screenshots/bank-storage-charters/',
+      '            /docs/screenshots/bank-vault-tab/',
+      '            /docs/screenshots/cosmetics-window/',
+      '            /docs/screenshots/deed-border-cartouche/',
       '            /docs/screenshots/eastbrook-grand-armoury/',
       '            /docs/screenshots/eastbrook-vale-rebuild/',
       '            /docs/screenshots/far-foliage-impostors/',
       '            /docs/screenshots/fenbridge-rebuild/',
+      '            /docs/screenshots/guild-bank-history/',
       '            /docs/screenshots/guild-bank-tab/',
+      '            /docs/screenshots/guild-pledge-board/',
       '            /docs/screenshots/guild-social-v1/',
+      '            /docs/screenshots/harvest-button-refresh/',
+      '            /docs/screenshots/ignivar-raid/',
+      '            /docs/screenshots/ignivar-raid-expansion/',
+      '            /docs/screenshots/intentional-gathering-pr1/',
+      '            /docs/screenshots/intentional-gathering-pr2/',
       '            /docs/screenshots/item-art-consistency-2026-08-09/',
       '            /docs/screenshots/market-house-redesign/',
+      '            /docs/screenshots/masterwrought-art-completion-2026-09-02/',
       '            /docs/screenshots/placeholder-art-completion-2026-08-09/',
       '            /docs/screenshots/r35-admin-professions-inspector/',
       '            /docs/screenshots/release-v036-skill-normalization-2026-08-10/',
       '            /docs/screenshots/release-v039-icon-art-first-pass-2026-08-16/',
+      '            /docs/screenshots/target-dots/',
+      '            /docs/screenshots/touch-ui-rework/',
+      '            /docs/screenshots/vault-fine-mark/',
       '            /docs/screenshots/wildheart/',
+      '            /docs/screenshots/woc-market/',
       '          sparse-checkout-cone-mode: false',
     ].join('\n');
     // Job-anchored, not a bare workflow-wide count: each sparse job carries
@@ -281,6 +368,91 @@ describe('CI workflow parity', () => {
       expect(jobSource(job).includes(SPARSE_CONE), job).toBe(false);
     }
     expect(workflow.split(SPARSE_CONE)).toHaveLength(6);
+    // The counts above are both blind in one direction: they say how many
+    // copies of THIS literal exist, and nothing at all about a sixth block that
+    // was copy-pasted and then edited, which reads as zero copies of the
+    // literal in a job the first loop does not name. So extract every
+    // screenshot-excluding sparse block the workflow actually contains, whole,
+    // and require each to BE the literal. That subsumes both counts against a
+    // divergent copy: a drifted block is still extracted here and still fails.
+    const blocks = screenshotSparseBlocks(workflow);
+    expect(blocks, 'every sparse-checkout block carrying the screenshot exclusion').toHaveLength(5);
+    for (const [i, block] of blocks.entries()) {
+      expect(block, `sparse-checkout block ${i + 1} diverged from the one cone`).toBe(SPARSE_CONE);
+    }
+    // The extractor's own control, and it proves the thing that actually
+    // matters: SIXTH-BLOCK DISCOVERY. Append a synthetic sixth job whose cone
+    // diverged (one subtree dropped) and the extractor must find SIX blocks
+    // with exactly one of them unequal, which is precisely the state a
+    // copy-pasted-then-edited block would leave the workflow in. Mutating one
+    // of the existing five would only prove the extractor reads them.
+    //
+    // The dropped subtree is DERIVED from the parsed cone, never a hard-coded
+    // path: a hard-coded one silently stops mutating anything the day that
+    // subtree is renamed or removed, and the control passes over an unmutated
+    // copy forever.
+    const coneSubtreeLines = SPARSE_CONE.split('\n').filter((line) =>
+      /^\s*\/docs\/screenshots\/[A-Za-z0-9._-]+\/$/.test(line),
+    );
+    expect(coneSubtreeLines.length, 'the cone really lists subtrees to drop').toBeGreaterThan(0);
+    const divergentCone = SPARSE_CONE.split('\n')
+      .filter((line) => line !== coneSubtreeLines[coneSubtreeLines.length - 1])
+      .join('\n');
+    expect(divergentCone).not.toBe(SPARSE_CONE);
+    const withSixth = `${workflow}\n  synthetic-drift-job:\n    steps:\n      - uses: actions/checkout@v5\n        with:\n${divergentCone}\n`;
+    const sixBlocks = screenshotSparseBlocks(withSixth);
+    expect(sixBlocks, 'a sixth block must be DISCOVERED, not silently skipped').toHaveLength(6);
+    expect(sixBlocks.filter((block) => block !== SPARSE_CONE)).toHaveLength(1);
+
+    // ...and the same sixth block hiding behind a different block-scalar style
+    // is still discovered, which is what SPARSE_HEADER_RE buys.
+    for (const style of ['|-', '|+', '>', '>-']) {
+      const restyled = divergentCone.replace(/^(\s*sparse-checkout:\s*)\|$/m, `$1${style}`);
+      expect(restyled, `the ${style} rewrite really changed the header`).not.toBe(divergentCone);
+      const styled = `${workflow}\n  synthetic-drift-job:\n    steps:\n      - uses: actions/checkout@v5\n        with:\n${restyled}\n`;
+      expect(screenshotSparseBlocks(styled), `a ${style} block must be found`).toHaveLength(6);
+    }
+
+    // ...and the same sixth block split by an INTERNAL BLANK LINE above its
+    // exclusion line is still discovered whole. Blank lines are legal inside
+    // a YAML block scalar, and the pre-fix extractor broke its body walk at
+    // the first one: this block's truncated fragment lacked the exclusion, so
+    // the divergent sixth cone left discovery entirely and the five-block
+    // count above stayed green over it. The control reds on that extractor
+    // (five blocks found) and holds the fixed walk to the honest direction:
+    // a formatting trick may only ever surface as MORE blocks discovered
+    // (then unequal to the one cone), never fewer.
+    const splitLines = divergentCone.split('\n');
+    const exclusionAt = splitLines.findIndex((line) => SCREENSHOT_EXCLUSION_RE.test(line));
+    expect(exclusionAt, 'the divergent cone still carries the exclusion line').toBeGreaterThan(0);
+    splitLines.splice(exclusionAt, 0, '');
+    const blankSplitCone = splitLines.join('\n');
+    const withBlankSixth = `${workflow}\n  synthetic-drift-job:\n    steps:\n      - uses: actions/checkout@v5\n        with:\n${blankSplitCone}\n`;
+    const blankBlocks = screenshotSparseBlocks(withBlankSixth);
+    expect(blankBlocks, 'a blank-line-split sixth block must be DISCOVERED whole').toHaveLength(6);
+    expect(blankBlocks.filter((block) => block !== SPARSE_CONE)).toHaveLength(1);
+    // The closer half of the same immunity (the Phase 18 fresh-read control):
+    // a blank line parked between the last subtree row and the cone-mode
+    // closer must not drop the closer from the extracted block. The sixth
+    // copy here is the UNMODIFIED cone with that one blank inserted, so the
+    // post-fix extractor reads it EQUAL to SPARSE_CONE (six equal blocks);
+    // the pre-fix lines[end + 1] lookup lost the closer and read it unequal.
+    // The divergent cone cannot carry this control (it is unequal either
+    // way), which is why the body-split control above cannot see the closer.
+    const coneLines = SPARSE_CONE.split('\n');
+    const closerAt = coneLines.findIndex((line) =>
+      line.trim().startsWith('sparse-checkout-cone-mode:'),
+    );
+    expect(closerAt, 'the cone carries its cone-mode closer').toBeGreaterThan(0);
+    coneLines.splice(closerAt, 0, '');
+    const blankBeforeCloser = coneLines.join('\n');
+    const withBlankCloserSixth = `${workflow}\n  synthetic-drift-job:\n    steps:\n      - uses: actions/checkout@v5\n        with:\n${blankBeforeCloser}\n`;
+    const closerBlocks = screenshotSparseBlocks(withBlankCloserSixth);
+    expect(closerBlocks, 'a blank before the closer must not lose the block').toHaveLength(6);
+    expect(
+      closerBlocks.filter((block) => block !== SPARSE_CONE),
+      'a blank before the closer must not drop the closer from the block',
+    ).toHaveLength(0);
     const coneDirs = new Set<string>(
       [...SPARSE_CONE.matchAll(/\/docs\/screenshots\/([A-Za-z0-9._-]+)\//g)].map((m) => m[1]),
     );
@@ -296,8 +468,15 @@ describe('CI workflow parity', () => {
         const match = line.match(/^docs\/screenshots\/([A-Za-z0-9._-]+)\//);
         if (match) indexDirs.add(match[1]);
       }
-      // Vacuity floor near the real count (166 subtrees on 2026-08-14).
-      expect(indexDirs.size).toBeGreaterThanOrEqual(160);
+      // Vacuity floor near the real count (254 subtrees on 2026-08-25, after
+      // the seventeenth release sync brought the tutorial island, guild board
+      // and Double Honor evidence; 249 on 2026-08-24). The
+      // 169 this comment carried was accurate on 2026-08-14; ten days of
+      // committed evidence took it to 235 at efb1220e85, 248 at the 11l stamp
+      // and 249 after the sixteenth release sync, so a floor of 160 had rotted
+      // by ACCUMULATION, not by a miscount: re-measure it at every release
+      // sync (the 11l QA), and keep it within a few subtrees of the count.
+      expect(indexDirs.size).toBeGreaterThanOrEqual(245);
     }
     // The guard's own file is excluded from the corpus: its SPARSE_CONE
     // literal above names every cone subtree, so counting it would satisfy
@@ -323,21 +502,40 @@ describe('CI workflow parity', () => {
         maxBuffer: 64 * 1024 * 1024,
       });
       expect(ls.status).toBe(0);
-      const corpus = ls.stdout
-        .split('\0')
-        .filter(
-          (file) =>
-            file.length > 0 &&
-            file !== SELF &&
-            !file.startsWith('docs/screenshots/') &&
-            REFERENCE_EXTENSIONS.some((ext) => file.endsWith(ext)),
-        );
+      const repoRoot = fileURLToPath(repoRootUrl);
+      const tracked = ls.stdout.split('\0').filter((file) => file.length > 0);
+      const corpusCandidates = tracked.filter(
+        (file) =>
+          file !== SELF &&
+          !file.startsWith('docs/screenshots/') &&
+          REFERENCE_EXTENSIONS.some((ext) => file.endsWith(ext)),
+      );
+      // In a local unstaged feature tree, a retired tracked file is absent by
+      // design until the user stages the deletion. Derive that set from Git
+      // instead of keeping a path allowlist that could become a permanent hole.
+      // Sparse-checkout omissions carry skip-worktree, not a deletion diff, so
+      // an unexpectedly absent corpus candidate in CI still fails loudly.
+      const deleted = spawnSync('git', ['diff', '--name-only', '--diff-filter=D', '-z', '--'], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        maxBuffer: 64 * 1024 * 1024,
+      });
+      expect(deleted.status).toBe(0);
+      const pendingDeletions = new Set(
+        deleted.stdout.split('\0').filter((file) => file.length > 0),
+      );
+      const missing = corpusCandidates.filter((file) => !existsSync(join(repoRoot, file)));
+      expect(
+        missing.filter((file) => !pendingDeletions.has(file)),
+        `unexpected tracked paths are missing from the screenshot-reference corpus: ${missing.join(', ')}`,
+      ).toEqual([]);
+      const corpus = corpusCandidates.filter((file) => existsSync(join(repoRoot, file)));
       // Vacuity floor near the real count (about 6,600 tracked
       // reference-carrying files on 2026-08-14): an emptied enumeration
       // cannot green the coupling by scanning nothing.
       expect(corpus.length).toBeGreaterThanOrEqual(6_000);
       for (const file of corpus) {
-        const source = readFileSync(join(fileURLToPath(repoRootUrl), file), 'utf8');
+        const source = readFileSync(join(repoRoot, file), 'utf8');
         for (const match of source.matchAll(/docs\/screenshots\/([A-Za-z0-9._-]+)/g)) {
           if (indexDirs.has(match[1])) referenced.add(match[1]);
         }
@@ -352,7 +550,7 @@ describe('CI workflow parity', () => {
   });
 
   it('performs no hand-rolled directory reads (the corpus is the git index)', () => {
-    expectScansOnlyThroughSharedWalkers(import.meta.url, []);
+    expectScansOnlyThroughSharedWalkers(import.meta.url, ['ts_files_under']);
   });
 
   it('installs with pnpm frozen-lockfile and pins the packageManager version', () => {
@@ -421,14 +619,32 @@ describe('CI workflow parity', () => {
     // gate.mjs and gate_select.mjs share one copy; the pin follows it there and
     // additionally holds gate.mjs to still invoking it, which is what actually
     // makes the resolution reachable.
-    expect(workflow).not.toContain('apt-get');
+    // The blanket apt-get ban became a count pin when browser-gate's font
+    // fallback earned the workflow's ONE sanctioned apt use (the two lines of
+    // the Install Chromium block, pinned whole above): FFmpeg stays banned by
+    // name, and any third apt-get line is new creep this count refuses.
+    expect(workflow).not.toMatch(/apt-get[^\n]*ffmpeg/i);
+    expect(workflow.match(/apt-get/g) ?? []).toHaveLength(2);
     expect(preflightCode).toContain("from '../sfx/ffmpeg_paths.mjs'");
     expect(gateCode).toContain('runGatePreflights');
   });
 
   it('runs the opt-in Chromium browser regressions in their own CI job', () => {
     const browserGate = jobSource('browser-gate');
-    expect(browserGate).toContain('run: npx playwright install --with-deps chromium');
+    // The install is split: the browser download fails hard, while the
+    // package-manager half (playwright install-deps) is bounded and
+    // best-effort by ruling (2026-08-19: three merge-queue rejections died
+    // at zero mirror throughput with the browser cache-hit). The runner
+    // image already ships Chromium's system libraries, and a genuinely
+    // missing one fails at browser launch, and the fonts install-deps alone
+    // provided are verified by capability with a mirror-swapped targeted
+    // fallback. Pinned as the WHOLE block scalar so a step comment cannot
+    // satisfy it, the hard-fail line cannot grow a fallback, and the bounds
+    // cannot drift silently: the degraded path totals about 3.7 minutes,
+    // sized to stay inside the job's 10-minute bound and its
+    // auto-rerunnable setup class.
+    expect(browserGate).toContain(PLAYWRIGHT_INSTALL_BLOCK);
+    expect(browserGate).not.toContain('--with-deps');
     expect(browserGate).toContain('run: npm run test:browser');
     const browser = gateSteps.find((s) => s.name === 'browser regressions');
     expect(browser?.cmd).toBe('npm');
@@ -467,9 +683,9 @@ describe('CI workflow parity', () => {
     );
     expect(browserGate).toContain("require('playwright/package.json').version");
     expect(browserGate.indexOf('Cache Playwright Chromium browsers')).toBeLessThan(
-      browserGate.indexOf('run: npx playwright install --with-deps chromium'),
+      browserGate.indexOf('npx playwright install chromium'),
     );
-    expect(browserGate).toContain('run: npx playwright install --with-deps chromium');
+    expect(browserGate).toContain('npx playwright install chromium');
     // No restore-keys: the key is already exact-version-scoped, so a prefix
     // fallback could only ever restore a PRIOR Playwright version's binaries
     // alongside the new install. actions/cache never evicts an old entry, so
@@ -687,6 +903,47 @@ describe('CI workflow parity', () => {
     expect(releaseGate).not.toMatch(/^\s{4}env:\n\s{6}I18N_RELEASE_TIER/m);
     expect(releaseChecks).not.toContain('I18N_RELEASE_TIER');
     expect(jobSource('release-i18n')).toContain("\n    env:\n      I18N_RELEASE_TIER: '1'");
+  });
+
+  it('release-gate arms the mediawiki seed release tier at JOB level', () => {
+    // Phase 18 QA, gate-census item 2. The byte-equality arm of
+    // tests/mediawiki_seed_freshness.test.ts is registered with
+    // `it.runIf(MEDIAWIKI_SEED_RELEASE_TIER === '1')`, so deleting the one env
+    // line in ci.yml leaves EVERY test in the repo green while the demand goes
+    // inert and a stale mediawiki/seed/pages.xml ships. Nothing pinned it. This
+    // is the mirror of the release-i18n assertion one block up, which is why
+    // that flag cannot be deleted the same way.
+    const releaseGate = jobSource('release-gate');
+    // Job level (a six-space key under the four-space `env:`), never a step
+    // env: a step-scoped flag would arm one shard and leave the other seven at
+    // PR tier, which is the same silent half-check in a different shape.
+    expect(releaseGate).toMatch(/^ {4}env:$/m);
+    expect(releaseGate).toMatch(/^ {6}MEDIAWIKI_SEED_RELEASE_TIER: '1'$/m);
+    // Release-gate ALONE: it is a release demand, and arming it on a PR job
+    // would drag the regenerated seed diff into every content PR. Counted over
+    // the WHOLE file, not a hand-listed set of siblings: a named list silently
+    // exempts the jobs it forgets (and every job added later), and a step-level
+    // flag in one of those would arm the tier on a PR job unpinned.
+    expect(workflow.split('MEDIAWIKI_SEED_RELEASE_TIER')).toHaveLength(2);
+    for (const other of [
+      'release-version-gate',
+      'changes',
+      'lint',
+      'browser-gate',
+      'pr-gate',
+      'pr-long-sims-a',
+      'pr-long-sims-b',
+      'pr-checks',
+      'release-checks',
+      'release-i18n',
+    ]) {
+      expect(jobSource(other)).not.toContain('MEDIAWIKI_SEED_RELEASE_TIER');
+    }
+    // The flag is not decorative: the suite still gates that arm on this exact
+    // name, so renaming either half without the other reds here.
+    const seedSuite = readFileSync(join(__dirname, 'mediawiki_seed_freshness.test.ts'), 'utf8');
+    expect(seedSuite).toContain("process.env.MEDIAWIKI_SEED_RELEASE_TIER === '1'");
+    expect(seedSuite).toMatch(/it\.runIf\(RELEASE_TIER\)\(/);
   });
 
   it('splits the PR tier into parallel test and checks jobs that cover every step', () => {
@@ -1654,5 +1911,243 @@ describe('CI workflow parity', () => {
     // naming the sequencer so the next reader finds the mechanism.
     expect(viteConfig).toContain('passWithNoTests: false');
     expect(workflow).toContain('ci_balanced_sequencer.mjs');
+  });
+
+  it('classifies every CI job for the real-SQL merge bar: pg-wired, guarded DB-less, or test-free', () => {
+    // Ruling R16 (the woc-marketplace hardening state): the real-SQL pg
+    // suites classify into the always-run floor but SKIP GREEN without
+    // TEST_DATABASE_URL, so this wiring IS their presence at the merge bar.
+    // Three pin shapes fell before this one: a file-wide count stayed green
+    // when the blocks were relocated onto vitest-free jobs; a hand-listed job
+    // set stayed green when the shard matrix was split into a new job with no
+    // service; and a run-line recognizer (four literal `run: <cmd>` forms)
+    // stayed green when the same split wrote its command in a `run: |` block
+    // scalar or an npm-script indirection. Shape four inverts the burden:
+    // EVERY job key in both files must appear in exactly one class below, so
+    // a new or renamed job in ANY spelling fails this test until a human
+    // classifies it, and the token scan cross-checks that a classification is
+    // not a lie. tests/ci_pg_presence.test.ts is the runtime twin (red inside
+    // any armed run when the variable is absent, and a CI_GUARD_SUITES member
+    // so every selective run executes it on one of its legs).
+    const jobKey = /\n {2}(["']?)([A-Za-z0-9_][A-Za-z0-9_-]*)\1:[ \t]*(?:#[^\n]*)?\n/g;
+    const jobsIn = (source: string) => {
+      // Sliced from the jobs: map so a header key (push, group, contents) can
+      // never satisfy a job lookup; quoted keys and _-or-digit initials are
+      // collected so an unconventional job id is classified, not swallowed
+      // into a neighbour's span.
+      const body = source.slice(source.indexOf('\njobs:'));
+      // Every two-space line in the jobs body must BE a recognized job key
+      // or a comment: a flow-style job (`  x: {steps: [...]}`) or any
+      // spelling the key regex misses would otherwise be swallowed into the
+      // previous job's span instead of forcing a classification.
+      for (const line of body.split('\n')) {
+        if (!/^ {2}\S/.test(line) || line.startsWith('  #')) continue;
+        expect(
+          /^ {2}(["']?)[A-Za-z0-9_][A-Za-z0-9_-]*\1:[ \t]*(?:#[^\n]*)?$/.test(line),
+          `unrecognized two-space line in the jobs body: ${line}`,
+        ).toBe(true);
+      }
+      const keys = [...body.matchAll(jobKey)].map((m) => ({ name: m[2], at: m.index ?? 0 }));
+      return keys.map((k, i) => ({
+        name: k.name,
+        span: body.slice(k.at, i + 1 < keys.length ? keys[i + 1].at : body.length),
+      }));
+    };
+    // Full-line YAML comments leave the scan so prose about tests cannot
+    // convict a test-free job; a trailing comment on a code line still
+    // convicts, which errs toward attention, never toward silence.
+    const codeLines = (span: string) =>
+      span
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#'))
+        .join('\n');
+    // Token scan over span CONTENT, deliberately not anchored to `run: `:
+    // block scalars, npm-script names, and pnpm forms all carry one of these
+    // tokens somewhere in the step that runs them.
+    const testTokens =
+      /vitest|ci_shard_test|npm test|npm run test|npm run gate|yarn test|bun test|turbo run test|node --test|node --run test|pnpm (?:run )?test/;
+    const nightly = readFileSync(
+      new URL('../.github/workflows/nightly.yml', import.meta.url),
+      'utf8',
+    );
+    // The classification. wired: carries the per-leg Postgres service and the
+    // job-level env pinned below. dbless: runs vitest with NO database, each
+    // member covered by a coupled guard below. testFree: never runs the node
+    // test suite at all.
+    const classes = [
+      {
+        source: workflow,
+        wired: ['pr-gate', 'release-gate'],
+        dbless: ['browser-gate', 'pr-long-sims-a', 'pr-long-sims-b', 'release-i18n'],
+        testFree: ['release-version-gate', 'changes', 'lint', 'pr-checks', 'release-checks'],
+      },
+      {
+        source: nightly,
+        wired: ['tests'],
+        dbless: ['browser'],
+        testFree: ['targets', 'checks', 'report'],
+      },
+    ];
+    for (const { source, wired, dbless, testFree } of classes) {
+      const jobs = jobsIn(source);
+      // COMPLETENESS, the load-bearing assertion: a job key missing from the
+      // three lists (new, renamed, or spelled in a way no recognizer guessed)
+      // fails here, toward a human decision, never toward a silent skip.
+      expect(jobs.map((j) => j.name).sort()).toEqual([...wired, ...dbless, ...testFree].sort());
+      for (const { name, span } of jobs) {
+        const code = codeLines(span);
+        // An expression-valued run COMMAND could smuggle a test invocation
+        // past the token scan; no job uses one today, so novelty is refused
+        // in every spelling: inline (quoted or bare) and as the first token
+        // of any line (the block-scalar form). Mid-line expressions in
+        // ARGUMENTS stay legal; the shard index rides one.
+        expect(
+          /run:\s*["']?\$\{\{/.test(code),
+          `${name}: expression-valued run lines are refused`,
+        ).toBe(false);
+        expect(
+          /\n\s*["']?\$\{\{/.test(code),
+          `${name}: a line may not begin with an expression`,
+        ).toBe(false);
+        // A job-level uses: (reusable workflow) is unclassifiable here: its
+        // tests live in another file this pin never reads. None exists
+        // today, so novelty is refused; a future one must extend this pin
+        // with the called workflow's own classification first. (Step-level
+        // `- uses:` actions sit at deeper indent and stay legal.)
+        expect(/\n {4}uses: /.test(span), `${name}: a job-level uses is refused`).toBe(false);
+        if (testFree.includes(name)) {
+          expect(
+            testTokens.test(code),
+            `${name} is classified test-free but its span carries a test token; wire it or exempt it above`,
+          ).toBe(false);
+          continue;
+        }
+        // Both test-running classes must LOOK like it, so a runner migration
+        // that the token scan cannot see fails loudly here instead of
+        // silently reclassifying the job.
+        expect(testTokens.test(code), `${name} is classified test-running`).toBe(true);
+        if (!wired.includes(name)) continue;
+        // One container per wired job leg (isolated fixed-name databases);
+        // the health gate lives in the service options because a wait STEP
+        // would break the step-count pins above.
+        expect(span, name).toContain('    services:\n      postgres:\n');
+        expect(span, name).toContain('        image: postgres:16-alpine\n');
+        expect(span, name).toContain('--health-cmd "pg_isready -U postgres -d wocc_ci"');
+        expect(span, name).toContain('          - 5432:5432\n');
+        // The JOB-LEVEL env lines (a step-level copy would not cover the
+        // leg); other job env keys may precede either one. WOCC_EXPECT_PG
+        // arms the runtime twin on ANY runner, so the sentinel that demands
+        // the database URL travels in the same pinned block as the URL.
+        expect(span, name).toMatch(
+          /\n {4}env:\n(?: {6}\S[^\n]*\n)*? {6}TEST_DATABASE_URL: postgres:\/\/postgres:postgres@127\.0\.0\.1:5432\/wocc_ci\n/,
+        );
+        expect(span, name).toMatch(/\n {4}env:\n(?: {6}\S[^\n]*\n)*? {6}WOCC_EXPECT_PG: '1'\n/);
+        // Exactly ONE occurrence of each variable in the job's code: a
+        // second copy at any indent is a step-level or matrix-conditional
+        // override that could blank the URL on a subset of legs while the
+        // job-level pin above stays satisfied.
+        expect(code.match(/TEST_DATABASE_URL/g) ?? [], name).toHaveLength(1);
+        expect(code.match(/WOCC_EXPECT_PG/g) ?? [], name).toHaveLength(1);
+      }
+    }
+    // THE FORCING FUNCTION for the DB-less class: membership alone would be
+    // the one unguarded door (classify a new pg-suite job "dbless" and it
+    // skips green forever), so every dbless member must name its coupled
+    // guard here, and the label set is pinned to the guards implemented
+    // below; a new exempt job cannot land without a human writing what
+    // makes its DB-lessness safe.
+    const dblessGuard: Record<string, string> = {
+      'pr-long-sims-a': 'lane',
+      'pr-long-sims-b': 'lane',
+      'release-i18n': 'i18n-tier',
+      'browser-gate': 'browser',
+      browser: 'browser',
+    };
+    expect(Object.keys(dblessGuard).sort()).toEqual(classes.flatMap((c) => c.dbless).sort());
+    expect(new Set(Object.values(dblessGuard))).toEqual(new Set(['lane', 'i18n-tier', 'browser']));
+    // The coupled guards for the DB-less classes (labels "lane" and
+    // "i18n-tier"). Lanes and the i18n tier:
+    // no member file may gate on TEST_DATABASE_URL (a pg suite becoming
+    // lane-resident would skip green in the DB-less lane forever). KNOWN
+    // LIMIT, recorded: this is a literal scan of the suite files themselves,
+    // blind to a gate reached through a helper import (today every pg suite
+    // inlines the variable; if the shared pg-gate helper follow-up ever
+    // lands, this guard must move to the helper's importers in the same
+    // change), and stripComments treats a /* inside a string literal as a
+    // block opener, which here blanks code toward a false pass.
+    for (const file of [...CI_LONG_SUITES, ...I18N_RELEASE_TIER_SUITES]) {
+      const gated = stripComments(
+        readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'),
+      ).includes('TEST_DATABASE_URL');
+      expect(gated, `${file} must not gate on TEST_DATABASE_URL (its job has no Postgres)`).toBe(
+        false,
+      );
+    }
+    // The browser jobs run vitest through npm run test:browser against a
+    // separate config (label "browser"); the guard pins the whole chain: the
+    // script targets the browser config, that config collects only
+    // tests/browser, and no file there gates on TEST_DATABASE_URL.
+    const pkg = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+    expect(pkg).toContain('"test:browser": "vitest run --config vitest.browser.config.ts"');
+    // RAW read on purpose: the include glob's /**/ parses as a block comment
+    // to every stripper in this repo (the documented string-literal caveat in
+    // helpers/strip_comments.ts), so stripping would blank the very line this
+    // asserts on.
+    const browserConfig = readFileSync(
+      new URL('../vitest.browser.config.ts', import.meta.url),
+      'utf8',
+    );
+    expect(browserConfig).toContain("include: ['tests/browser/**/*.browser.test.ts']");
+    const browserFiles = tsFilesUnder(fileURLToPath(new URL('../tests/browser', import.meta.url)));
+    expect(browserFiles.length).toBeGreaterThan(0);
+    for (const { file, full } of browserFiles) {
+      const gated = stripComments(readFileSync(full, 'utf8')).includes('TEST_DATABASE_URL');
+      expect(gated, `tests/browser/${file} must not gate on TEST_DATABASE_URL`).toBe(false);
+    }
+    // FILE-WIDE dead-letter negatives, deliberately on the RAW text (a
+    // commented-out 5433 mapping should red, the safe direction): 5433 is the
+    // dev-compose port that vite.config's intended-dead fallback DATABASE_URL
+    // names; a service mapping it ANYWHERE in CI (any job, quoted or
+    // host-bound) would turn the deliberately-dead unit-suite URLs into live
+    // connections. Positive controls first: the matchers must fire on every
+    // shape they exist to catch, so they cannot rot into unmatchable.
+    const portMap5433 = /5433:\d/;
+    const url5433 = /:5433\//;
+    expect(portMap5433.test('- 5433:5432')).toBe(true);
+    expect(portMap5433.test('- "5433:5432"')).toBe(true);
+    expect(portMap5433.test('- 127.0.0.1:5433:5432')).toBe(true);
+    expect(url5433.test('postgres://u:p@h:5433/db')).toBe(true);
+    for (const source of [workflow, nightly]) {
+      expect(source).not.toMatch(portMap5433);
+      expect(source).not.toMatch(url5433);
+    }
+    // The classification covers the two vitest-carrying workflow files;
+    // every OTHER workflow must stay free of test invocations, and the
+    // corpus is the git index (the shared-walker doctrine), so a NEW
+    // workflow file forces a decision here instead of running tests nobody
+    // classified.
+    const listed = spawnSync('git', ['ls-files', '.github/workflows'], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      encoding: 'utf8',
+    })
+      .stdout.trim()
+      .split('\n')
+      .sort();
+    const testFreeWorkflows = [
+      '.github/workflows/audit.yml',
+      '.github/workflows/ci-stall-rerun.yml',
+      '.github/workflows/desktop-publish.yml',
+      '.github/workflows/ota-publish.yml',
+    ];
+    expect(listed).toEqual(
+      ['.github/workflows/ci.yml', '.github/workflows/nightly.yml', ...testFreeWorkflows].sort(),
+    );
+    for (const file of testFreeWorkflows) {
+      const text = codeLines(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'));
+      expect(
+        testTokens.test(text),
+        `${file} carries a test invocation; classify it in this pin first`,
+      ).toBe(false);
+    }
   });
 });

@@ -24,8 +24,14 @@ export interface PostPlanInput {
   readonly aoFullRes: boolean;
   readonly bloom: boolean;
   readonly smaa: boolean;
+  /** Fuse edge AA into the output grade pass (the region-safe chain's post AA). */
+  readonly fxaa: boolean;
   readonly n8aoDisabled: boolean;
   readonly smaaDisabled: boolean;
+  readonly fxaaDisabled: boolean;
+  /** `?postshed=off` (render_dev_flags.ts): no shed twin is built and the
+   *  render budget's `post` level is not governable for the session. */
+  readonly postShedDisabled: boolean;
   readonly isWebGL2: boolean;
   readonly msaaSamples: number;
 }
@@ -37,6 +43,27 @@ export interface PostPipelinePlan {
     readonly aoScale: 0.5 | 1 | null;
   };
   readonly composerPasses: readonly PostComposerPass[];
+  /**
+   * The output-grade pass carries the fused FXAA arm. NOT a composer pass and
+   * NOT a render target: it is a define on a pass the chain already runs, which
+   * is exactly why it leaves `supportsDynamicResolution` alone.
+   */
+  readonly gradeFxaa: boolean;
+  /**
+   * The render budget's post shed (post_shed_core.ts, applied by
+   * post_shed.ts). `gradeFxaaTwin` builds a SECOND output-grade pass with
+   * the fused FXAA arm, disabled until the `smaa-to-fxaa` rung swaps it in
+   * for the tail SMAA. Like `gradeFxaa` it is a define on a pass shape the
+   * chain already has, NOT a new target and NOT a stage (it replaces
+   * `output-grade` in the frame it runs), so the target and stage pins
+   * below are untouched by it; it compiles under the post.initial-frame
+   * prewarm, never in a live frame. `chain` is the static input of the
+   * level's floor: which sheddable passes were actually built.
+   */
+  readonly shed: {
+    readonly gradeFxaaTwin: boolean;
+    readonly chain: { readonly smaa: boolean; readonly bloom: boolean; readonly ao: boolean };
+  };
   readonly singleComposerBuffer: boolean;
   readonly supportsDynamicResolution: boolean;
   readonly composerSamples: number;
@@ -86,6 +113,16 @@ export function postPipelinePlan(input: PostPlanInput): PostPipelinePlan {
   const useBloom = input.bloom && !input.gradeOnly;
   const useScreenFx = !input.gradeOnly;
   const useSmaa = input.smaa && !input.gradeOnly && !input.smaaDisabled;
+  // The fused arm belongs to the GRADE-ONLY chain, and saying so here makes it
+  // structural rather than a property of today's AA policy. On a composer chain
+  // it would be wrong twice over: the SMAA tail already resolves the same image,
+  // and the grade there writes an intermediate that ScreenFx re-aliases after
+  // it, so an AA arm inside the grade would land before the pass that undoes it.
+  // The post shed's grade twin (`shed.gradeFxaaTwin` below) is the one
+  // deliberate exception: it runs only on a rung where the SMAA tail is
+  // already skipped, so the frame's only AA is the fused arm, and ScreenFx
+  // re-aliases nothing while idle (it disables itself between ripples).
+  const useFxaa = input.fxaa && input.gradeOnly && !input.fxaaDisabled;
   // Preserve the shipped dev-override behavior: configured AO owns scene rasterization
   // storage even when ?n8ao=off temporarily selects the RenderPass attribution branch.
   const aoOwnsSceneStorage = input.ao && !input.gradeOnly;
@@ -195,7 +232,10 @@ export function postPipelinePlan(input: PostPlanInput): PostPipelinePlan {
   }
 
   if (useSmaa) {
-    renderTargets.push(target('smaa-edges', 1, 'rgba16f'), target('smaa-weights', 1, 'rgba16f'));
+    // ByteTargetSMAAPass re-types three's HalfFloat intermediates: edges is a
+    // 2-channel mask and weights are 4 blend weights, both defined on [0,1] and
+    // both 8-bit in the reference SMAA implementation.
+    renderTargets.push(target('smaa-edges', 1, 'rgba8'), target('smaa-weights', 1, 'rgba8'));
     fullscreenStages.push(
       stage('smaa-edges', 1, [composerReadTarget], 'smaa-edges'),
       stage('smaa-weights', 1, ['smaa-edges'], 'smaa-weights'),
@@ -210,6 +250,13 @@ export function postPipelinePlan(input: PostPlanInput): PostPipelinePlan {
       aoScale,
     },
     composerPasses,
+    gradeFxaa: useFxaa,
+    shed: {
+      gradeFxaaTwin: useSmaa && !input.postShedDisabled,
+      chain: input.postShedDisabled
+        ? { smaa: false, bloom: false, ao: false }
+        : { smaa: useSmaa, bloom: useBloom, ao: useAo },
+    },
     singleComposerBuffer,
     supportsDynamicResolution,
     composerSamples,

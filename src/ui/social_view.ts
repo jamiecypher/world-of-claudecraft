@@ -12,20 +12,27 @@
 // UI_PURE_CORES); world types are imported type-only from world_api so the same
 // model is derived from a Sim and a ClientWorld mirror.
 
+import { GUILD_ROSTER_BASE_MEMBERS } from '../sim/guild_roster';
 import type {
   FriendInfo,
   GuildMemberInfo,
+  GuildPledgeSettings,
+  MyPledgeInfo,
   PartyInfo,
   PartyMemberInfo,
   SocialInfo,
 } from '../world_api';
 
-export type SocialTab = 'friends' | 'guild' | 'ignore' | 'block' | 'raid';
+export type SocialTab = 'friends' | 'guild' | 'pledges' | 'ignore' | 'block' | 'raid';
 
 /** Structural identity of the panel: which tab, online or not, and the guild
- *  membership/rank (which changes the footer) plus the raid roster shape.
- *  Content within a tab (a friend's zone, a member's hp) does NOT count, so it
- *  refreshes in place rather than triggering a full rebuild. */
+ *  membership/rank (which changes the footer AND the officer-only Pledges tab)
+ *  plus the open-pledge count (the Pledges tab label carries it), the roster
+ *  cap and next page price (the footer's buy button is rendered from them, so
+ *  a bought page must rebuild it or it keeps advertising the old price), and
+ *  the raid roster shape. Content within a tab (a friend's zone, a member's
+ *  hp) does NOT count, so it refreshes in place rather than triggering a full
+ *  rebuild. */
 export function socialStructSig(
   tab: SocialTab,
   social: SocialInfo | null,
@@ -35,7 +42,8 @@ export function socialStructSig(
   const raidSig = party
     ? `${party.raid ? 1 : 0}:${party.leader}:${party.members.map((m) => `${m.pid}.${m.group}`).join(',')}`
     : 'solo';
-  return `${tab}|${social !== null}|${g?.id ?? 0}|${g?.rank ?? ''}|${raidSig}`;
+  const rosterSig = `${g?.memberCap ?? 0}:${g?.nextRosterPrice ?? 'none'}`;
+  return `${tab}|${social !== null}|${g?.id ?? 0}|${g?.rank ?? ''}|${g?.pledges?.length ?? 0}|${rosterSig}|${raidSig}`;
 }
 
 /** The status dot kind for a presence row: 'off' when offline, otherwise the
@@ -138,6 +146,19 @@ export interface GuildView {
     /** True iff the viewer may edit the billboard (rank leader or officer);
      *  UX only, the server enforces the real gate. */
     canEditMotd: boolean;
+    /** The guild's lifetime-XP colour tier (guildTierForLifetimeXp, mirrored
+     *  from the server): styles the guild-head name, matching the nameplate
+     *  ladder and the guild board. */
+    tier: number;
+    /** Roster expansion (docs/prd/guild-roster-expansion.md): the seats the
+     *  guild may fill, the copper price of the next 20-seat page (null once
+     *  the ladder is complete), and whether the viewer may buy it (leader
+     *  only, and only while a page is left). UX only: the server re-prices
+     *  from the guild row and refuses everyone else. A mirror from an older
+     *  server carries neither field and falls back to the base roster. */
+    memberCap: number;
+    nextRosterPrice: number | null;
+    canExpandRoster: boolean;
     rows: GuildRow[];
   } | null;
 }
@@ -181,9 +202,87 @@ export function guildView(social: SocialInfo | null, myName: string): GuildView 
       motd: guild.motd ?? '',
       motdSetBy: guild.motdSetBy ?? '',
       canEditMotd: me === 'leader' || me === 'officer',
+      tier: guild.tier ?? 0,
+      ...rosterOf(guild),
       rows,
     },
   };
+}
+
+/** Roster expansion (docs/prd/guild-roster-expansion.md), as the Guild tab
+ *  footer and its buy prompt read it: the guild's seat cap, the copper price
+ *  of the next page (null once the ladder is complete), and whether the
+ *  viewer may buy it (leader only, and only while a page is left). UX only:
+ *  the server re-prices from the guild row and refuses everyone else. */
+export interface GuildRosterView {
+  memberCap: number;
+  nextRosterPrice: number | null;
+  canExpandRoster: boolean;
+}
+
+/** The roster view WITHOUT the per-member rows guildView also maps: the
+ *  footer and the click handler only need these three facts, and a 1,000-seat
+ *  roster makes the row mapping the expensive half of a rebuild. Null for a
+ *  guildless viewer. A mirror from an older server carries neither roster
+ *  field and falls back to the base roster with nothing to buy. */
+export function guildRosterView(social: SocialInfo | null): GuildRosterView | null {
+  const guild = social?.guild ?? null;
+  return guild ? rosterOf(guild) : null;
+}
+
+function rosterOf(guild: NonNullable<SocialInfo['guild']>): GuildRosterView {
+  const nextRosterPrice = guild.nextRosterPrice ?? null;
+  return {
+    memberCap: guild.memberCap ?? GUILD_ROSTER_BASE_MEMBERS,
+    nextRosterPrice,
+    canExpandRoster: guild.rank === 'leader' && nextRosterPrice !== null,
+  };
+}
+
+// ---- guild pledge board (docs/prd/guild-pledge-board.md) -------------------
+
+/** One open pledge on the officer dashboard. */
+export interface PledgeRow {
+  name: string;
+  cls: string;
+  level: number;
+  /** Epoch ms of when the pledge was made; the painter formats the date. */
+  sinceMs: number;
+}
+
+/** The officer Pledges tab's view: the recruiting settings editor plus the
+ *  open pledges awaiting a decision. */
+export interface PledgePanelView {
+  settings: GuildPledgeSettings;
+  rows: PledgeRow[];
+}
+
+/**
+ * The Pledges tab (settings editor + accept/reject rows) exists only for the
+ * Guild Master and officers of a guild: null hides the tab entirely (plain
+ * members and the unguilded never see it; the server enforces the real gate,
+ * and only sends the pledge list to officer-plus anyway). Rows keep the
+ * server's order (oldest pledge first).
+ */
+export function pledgePanelView(social: SocialInfo | null): PledgePanelView | null {
+  const guild = social?.guild ?? null;
+  if (!guild || (guild.rank !== 'leader' && guild.rank !== 'officer')) return null;
+  return {
+    settings: guild.pledgeSettings ?? { enabled: true, minLevel: 1, note: '' },
+    rows: (guild.pledges ?? []).map((p) => ({
+      name: p.name,
+      cls: p.cls,
+      level: p.level,
+      sinceMs: p.sinceMs,
+    })),
+  };
+}
+
+/** The unguilded viewer's own standing pledge (shown on the guild tab's empty
+ *  state, with the withdraw action); null when guilded or not pledged. */
+export function myPledgeView(social: SocialInfo | null): MyPledgeInfo | null {
+  if (!social || social.guild) return null;
+  return social.myPledge ?? null;
 }
 
 /** Membership under 7 days marks a member a "recruit". */

@@ -310,6 +310,41 @@ export const EVERGARDEN_NPCS: Record<string, NpcDef> = {
     greeting:
       'Hand me that barrow, would you? These lawns do not walk themselves, whatever the hamlet thinks.',
   },
+  // The farming go-live: the tier-4 farmer of the parterre showcase
+  // (content/farm_patches.ts patch_evergarden), on the approach side of the
+  // beds (south of the z 872 row, the way in from Hedgewick), facing north
+  // across them (facing 0 looks along +z), well clear of The Parterre Walk's
+  // lane and of the hedge_knight camp at the far end of the site. Stock:
+  // compost PLUS all four tier-4 seeds, each at buyValue 64, put there by
+  // GATE 1 (Phase 11e). This header read "compost only ... seed-back and
+  // market goods (D11)" until then, the same revert hazard as the Highwatch
+  // twin. tests/farmer_npc_placement.test.ts pins the seat.
+  farmer_verbena: {
+    id: 'farmer_verbena',
+    name: 'Farmer Verbena',
+    title: 'Parterre Gardener',
+    pos: { x: 348.5, z: 867 },
+    facing: 0,
+    color: 0x7d9b5c,
+    questIds: [],
+    // GATE 1's tier-4 half, the same one edit and the same convention as
+    // farmer_hollis in zone3.ts (Phase 11e). buyValue 64 per seed on the item
+    // def (masterwrought DECISION D): the four-times-sell staple on sellValue
+    // 8, doubled as the bootstrap premium, because a tier-4 harvest expects
+    // only 0.41 seeds back and the counter must not become the cheap
+    // permanent source.
+    vendorItems: [
+      'compost',
+      'gilded_sunmelon_seed',
+      'evergarden_greens_seed',
+      'gilded_yam_seed',
+      'evergarden_pumpkin_seed',
+      'field_kit',
+    ],
+    farmer: true,
+    greeting:
+      'Mind the edging, $N, these beds are the pride of the parterre. Seed and compost are what I sell, and I will turn any withered husks you carry into more of it.',
+  },
 };
 
 export const EVERGARDEN_QUESTS: Record<string, QuestDef> = {
@@ -670,7 +705,14 @@ export const EVERGARDEN_PROPS: ZonePropsDef = {
     // the plan). The knights garrison the annex outside the northeast
     // corner; their wolves still prowl the gate lawn.
     ...DAWNHOLD_BUILDINGS,
-    { key: 'hexCannonballs', x: 276.5, z: 909, scale: 7 },
+    // measured from hex_cannonballs.glb (0.34 wide, 0.33 tall at scale 1,
+    // minus the 0.05 render sink props.ts gives every decorProp): a standable
+    // pyramid, not walk-through dressing, so a jump lands on top instead of
+    // falling through an uncollided pile (issue: cant jump on balls). h keeps
+    // spell line-of-sight at the pile's real height instead of the 4yd
+    // default. Boxed in on the east: only 0.12yd of clearance to the
+    // hexBarracks collider at (283, 908.5) r 5.2, so don't grow r here.
+    { key: 'hexCannonballs', x: 276.5, z: 909, scale: 7, r: 1.2, h: 2.25, standableTop: 2.25 },
     { key: 'hexWeaponRack', x: 250, z: 884, rot: 1.2, scale: 9 },
     // the leafy fox at the centre of the walled flower court: the maze
     // arches' topiary gatekeeper, a size larger as the court's
@@ -762,7 +804,9 @@ export const EVERGARDEN_PROPS: ZonePropsDef = {
     { key: 'hexWatchtower', x: 402, z: 720, rot: -2.2, scale: 6.5, r: 3, h: 8 },
     { key: 'hexWatchtower', x: 412, z: 1110, rot: 2.6, scale: 6.5, r: 3, h: 8 },
     // the north watch camp: the knights' kit beside their wolf hounds
-    { key: 'hexCannonballs', x: 406, z: 1114, scale: 5 },
+    // same standable pile, scaled down (see the gate-lawn pile above for the
+    // measured footprint the r/h/standableTop values are derived from)
+    { key: 'hexCannonballs', x: 406, z: 1114, scale: 5, r: 0.86, h: 1.59, standableTop: 1.59 },
     { key: 'hexWeaponRack', x: 415, z: 1113, rot: -0.8, scale: 8 },
     { key: 'hexFlag', x: 410, z: 1107, scale: 3 },
     // the gnome camps read as the groundskeepers' work yards

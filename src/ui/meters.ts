@@ -10,9 +10,15 @@
 // actually targeting (aggroTargetId). WHICH mob that is gets resolved live
 // every render by threat_subject_core.ts, never read off the encounter's
 // latched mainMobId: the latch froze the tab on the first mob of a pull and
-// then on its corpse. For a finished encounter with nothing live left, the tab
-// falls back to each member's damage on the latched mob AND says so in the
-// subtitle, because damage under a "Threat" heading reads as hate.
+// then on its corpse. A mob's hate table is wiped in place the instant it
+// dies, so the tab also keeps a per-mob snapshot of the last LIVE table it
+// saw (Encounter.threatSnapshotByMob, latched on every hit in onEvent): once
+// the subject dies, resolveThreatValues freezes on that snapshot rather than
+// recalculating the tab from damage, so a fight's real threat survives the
+// kill that just proved it. Only once no snapshot was ever taken (nothing
+// live was ever seen on this segment) does the tab fall back to each
+// member's damage on the latched mob, and say so in the subtitle, because
+// damage under a "Threat" heading reads as hate.
 //
 // The pet rule differs by TAB, and that split is the point. On damage/healing a
 // controlled pet (hunter, warlock, mage) folds into its owner's row, the way a
@@ -21,12 +27,15 @@
 // owner+pet number is measured against a threshold that is never applied to it,
 // which made every pet class read as though it should have pulled and had not.
 
+import type { Keybinds } from '../game/keybinds';
 import { CLASSES } from '../sim/data';
 import type { Entity, SimEvent } from '../sim/types';
 import type { IWorld } from '../world_api';
 import { abilityDisplayNameFromSource } from './ability_display_name';
 import { tEntity } from './entity_i18n';
 import { esc } from './esc';
+import type { HubActionBarSlot } from './hud/practice';
+import { HubLessonController, PracticeDpsController, practiceDpsModel } from './hud/practice';
 import { formatNumber, type TranslationKey, t } from './i18n';
 import {
   type BreakdownEntry,
@@ -36,12 +45,13 @@ import {
   buildGroupedMeterBreakdown,
   buildMeterBreakdown,
 } from './meters_breakdown_view';
+import { fmtDuration, fmtNum, fmtPerSecondRow } from './meters_format';
 import { MeterFrame } from './meters_frame';
-import { METER_FRAME_LIMITS, TABBED_METER_FRAME_LIMITS } from './meters_frame_core';
+import { METER_FRAME_LIMITS } from './meters_frame_core';
 import { buildMeterTabMenu, type MeterMenuRow } from './meters_menu_view';
 import { buildMeterRows, type MeterPet, type MeterTab } from './meters_rows_view';
 import type { SimpleMenuItem } from './simple_context_menu';
-import { resolveThreatSubject } from './threat_subject_core';
+import { resolveThreatSubject, resolveThreatValues } from './threat_subject_core';
 
 const ENCOUNTER_END_SECONDS = 5;
 const HISTORY_CAP = 8;
@@ -98,6 +108,14 @@ export interface Encounter {
   mainMobTemplateId: string | null;
   /** maxHp of the biggest mob damaged — used to pick the label */
   biggestMobHp: number;
+  /**
+   * Each engaged mob's live hate table, latched on every hit while it is
+   * still readable. A mob's table is wiped the instant it dies, so without
+   * this the Threat tab would fall through to the raw-damage fallback right
+   * when a fight's real numbers matter most: at the kill. Current/previous
+   * encounters only, exactly like `dmgByMob`.
+   */
+  threatSnapshotByMob: Map<number, Map<number, number>>;
 }
 
 function newEncounter(now: number): Encounter {
@@ -110,6 +128,7 @@ function newEncounter(now: number): Encounter {
     mainMobName: '',
     mainMobTemplateId: null,
     biggestMobHp: -1,
+    threatSnapshotByMob: new Map(),
   };
 }
 
@@ -182,6 +201,32 @@ export class MeterData {
     };
   }
 
+  private threatEntryBelongsToParty(
+    world: IWorld,
+    entityId: number,
+    partyPids: Set<number>,
+  ): boolean {
+    if (partyPids.has(entityId)) return true;
+    const entity = world.entities.get(entityId);
+    return entity?.kind === 'mob' && entity.ownerId !== null && partyPids.has(entity.ownerId);
+  }
+
+  private refreshThreatSnapshots(world: IWorld, partyPids: Set<number>): void {
+    if (!this.current) return;
+    for (const entity of world.entities.values()) {
+      if (entity.kind !== 'mob' || !entity.threat || entity.threat.size === 0) continue;
+      let partyOnTable = false;
+      for (const threatEntityId of entity.threat.keys()) {
+        if (this.threatEntryBelongsToParty(world, threatEntityId, partyPids)) {
+          partyOnTable = true;
+          break;
+        }
+      }
+      if (!partyOnTable) continue;
+      this.current.threatSnapshotByMob.set(entity.id, new Map(entity.threat));
+    }
+  }
+
   /** party membership check is supplied by the caller (self + party pids) */
   onEvent(ev: SimEvent, world: IWorld, partyPids: Set<number>, now: number): void {
     if (ev.type !== 'damage' && ev.type !== 'heal2') return;
@@ -195,10 +240,22 @@ export class MeterData {
     const targetInParty = partyPids.has(ev.targetId);
     if (!sourceInParty && !targetInParty) return;
 
-    // any party-involved combat keeps the encounter alive (tanking without
+    // A HoT's periodic tick (ev.hot) is passive residual healing, not fresh party
+    // activity: left alone it holds the segment open indefinitely (a HoT still
+    // ticking down after the kill, or kept rolling by the healer into the next
+    // pull, never let the 5s inactivity clock elapse), merging pulls together
+    // instead of resetting between them. A lone tick with no segment open must
+    // not spawn one either, so residual healing between pulls stays inert; while
+    // a segment IS open its healing still tallies, just without touching the
+    // clock that closes it.
+    const isPassiveHotTick = ev.type === 'heal2' && ev.hot === true;
+    if (isPassiveHotTick && !this.current) return;
+
+    // any other party-involved combat keeps the encounter alive (tanking without
     // dealing damage must not end the segment)
     if (!this.current) this.current = newEncounter(now);
-    this.lastActivity = now;
+    if (!isPassiveHotTick) this.lastActivity = now;
+    this.refreshThreatSnapshots(world, partyPids);
 
     if (ev.type === 'damage' && sourceInParty && ev.kind === 'hit' && ev.amount > 0) {
       const target = world.entities.get(ev.targetId);
@@ -211,6 +268,16 @@ export class MeterData {
           if (enc === this.current) {
             t.dmgByMob.set(ev.targetId, (t.dmgByMob.get(ev.targetId) ?? 0) + ev.amount);
           }
+        }
+        // Latch the mob's live hate table while it is still readable, so a
+        // kill's own hit does not erase the numbers it just proved: `target.threat`
+        // is cleared in place on death, so a reference here would go empty right
+        // alongside it, and reading it only at death is already too late (the
+        // server clears the table before this event is even processed). Never
+        // overwrite a real snapshot with an empty read (target already dead, or
+        // simply out of combat with nothing on its table yet).
+        if (target.threat && target.threat.size > 0) {
+          this.current.threatSnapshotByMob.set(ev.targetId, new Map(target.threat));
         }
         // encounter label/threat subject: the beefiest mob the party fought
         if (target.maxHp > this.current.biggestMobHp) {
@@ -298,6 +365,17 @@ export interface MetersDeps {
     y: number,
     onSelect: (act: string) => void,
   ) => void;
+  /** The hub practice coach's own deps (src/ui/hud/practice/hub_lesson_controller.ts):
+   *  present only on the host document that carries #hub-lesson-coach (the
+   *  game shells; absent on a bare test rig or a document without that
+   *  strip). Meters constructs the controller itself, mirroring the
+   *  practice DPS tracker below, so this stays the ONE seam a caller wires
+   *  rather than a second construction site. */
+  keybinds?: Keybinds;
+  actionBarSlots?(): readonly HubActionBarSlot[];
+  tooltipVisibleFor?(el: HTMLElement): boolean;
+  actionButtonForSlot?(slot: number): HTMLElement | null;
+  worldToScreen?(x: number, y: number, z: number): { x: number; y: number; behind: boolean };
 }
 
 /** A live controlled pet, resolved from the world for the threat tab. */
@@ -344,8 +422,9 @@ export interface PanelSpec {
   root: HTMLElement;
   /** null = the tabbed damage window; a tab = a detached single-meter window. */
   lockedTab: DetachableTab | null;
-  /** localStorage key this panel's box persists under. */
-  frameStorageKey: string;
+  /** localStorage key this panel's box persists under. Detached windows only:
+   *  the tabbed window's box lives on its damageMeter registry row instead. */
+  frameStorageKey?: string;
 }
 
 /**
@@ -366,6 +445,12 @@ export class MetersPanel {
   private readonly hintEl: HTMLElement;
   private rowPool: MeterRowNodes[] = [];
   private frame: MeterFrame | null = null;
+  /** Resolved ONCE at construction (static children of `root`, never
+   *  rebuilt): tabButtonElement/historyArrowElement used to re-query on
+   *  every call, which the hub practice coach (hub_lesson_controller.ts)
+   *  was doing every 250ms while a lesson is active. */
+  private readonly tabButtonEls: Partial<Record<Tab, HTMLElement>> = {};
+  private readonly historyArrowEl: HTMLElement;
 
   constructor(
     private readonly spec: PanelSpec,
@@ -382,6 +467,7 @@ export class MetersPanel {
     if (!spec.lockedTab) {
       for (const tab of ['dmg', 'heal', 'threat'] as Tab[]) {
         const tabButton = this.root.querySelector(`.mt-tab[data-tab="${tab}"]`) as HTMLElement;
+        this.tabButtonEls[tab] = tabButton;
         tabButton.textContent = t(TAB_SHORT_LABEL_KEY[tab]);
         tabButton.addEventListener('click', () => {
           this.tab = tab;
@@ -413,6 +499,7 @@ export class MetersPanel {
     const prev = this.root.querySelector('.mt-prev') as HTMLElement;
     const next = this.root.querySelector('.mt-next') as HTMLElement;
     const close = this.root.querySelector('.mt-close') as HTMLElement;
+    this.historyArrowEl = prev;
     prev.setAttribute('title', t('hud.meters.olderSegment'));
     next.setAttribute('title', t('hud.meters.newerSegment'));
     const closeKey: TranslationKey = spec.lockedTab ? 'hudChrome.meters.dock' : 'hud.meters.close';
@@ -427,17 +514,26 @@ export class MetersPanel {
 
     // The panel title doubles as the move handle (the chat box uses its tab
     // strip the same way); a press on any button inside it stays that button's.
+    // DETACHED windows only: the tabbed damage window is a movable HUD frame
+    // (HUD_FRAME_SPECS 'damageMeter'), so the Unlock Interface registry owns
+    // its drag, resize, hide and persistence instead of a private MeterFrame.
     const title = this.root.querySelector('.panel-title') as HTMLElement | null;
-    if (title && deps?.storage && deps.uiScale && deps.isMobileLayout) {
+    if (
+      title &&
+      spec.lockedTab &&
+      spec.frameStorageKey &&
+      deps?.storage &&
+      deps.uiScale &&
+      deps.isMobileLayout
+    ) {
       this.frame = new MeterFrame(
         {
           el: this.root,
           handles: [title, this.titleEl],
           storageKey: spec.frameStorageKey,
           fallbackSize: { w: METERS_DEFAULT_WIDTH, h: METERS_DEFAULT_HEIGHT },
-          // The tabbed window cannot shrink past its own chrome; a detached
-          // window carries far less and may go narrower.
-          limits: spec.lockedTab ? METER_FRAME_LIMITS : TABBED_METER_FRAME_LIMITS,
+          // Only detached windows reach here, and they carry little chrome.
+          limits: METER_FRAME_LIMITS,
         },
         {
           document,
@@ -463,13 +559,29 @@ export class MetersPanel {
   }
 
   setOpen(on: boolean): void {
-    this.root.style.display = on ? (this.frame?.isFramed ? 'flex' : 'block') : 'none';
+    this.root.style.display = on ? (this.isFramed ? 'flex' : 'block') : 'none';
     if (!this.spec.lockedTab) document.body.classList.toggle('meters-open', on);
     if (on) {
       // A box saved at another viewport must be re-clamped before it paints.
       this.frame?.refresh();
       this.render(true);
     }
+  }
+
+  /** Whether a custom box applies: a detached window's own MeterFrame, or the
+   *  tabbed window's registry mover (which reports through setRegistryFramed
+   *  since its display flip must be inline; see the mt-framed CSS comment). */
+  private get isFramed(): boolean {
+    return this.registryFramed || this.frame?.isFramed === true;
+  }
+
+  private registryFramed = false;
+
+  /** The damageMeter registry row's onPositioned arm: while a custom position
+   *  applies, an OPEN panel lays out as the fixed-height scrolling column. */
+  setRegistryFramed(active: boolean): void {
+    this.registryFramed = active;
+    if (this.isOpen) this.root.style.display = active ? 'flex' : 'block';
   }
 
   /** Switch the tabbed window's meter (used when a tab pops out). */
@@ -482,6 +594,44 @@ export class MetersPanel {
 
   get activeTab(): Tab {
     return this.tab;
+  }
+
+  /** This panel's tab button for `tab`, or null on a locked (detached) panel,
+   *  which has no tab strip to click at all. Read by the hub practice coach
+   *  (hub_lesson_controller.ts) to glow the button its "switch tabs" step
+   *  names, never by anything on a per-frame path. */
+  tabButtonElement(tab: Tab): HTMLElement | null {
+    if (this.spec.lockedTab) return null;
+    return this.tabButtonEls[tab] ?? null;
+  }
+
+  /** The "older segment" paging arrow: what a player presses to look back at
+   *  a run that just finished. Read by the hub practice coach's inspect-run
+   *  step, same non-hot-path caveat as tabButtonElement. */
+  get historyArrowElement(): HTMLElement | null {
+    return this.historyArrowEl;
+  }
+
+  /** Identity of the encounter segment currently displayed on this panel, and
+   *  whether it is the live "current" one: the hub practice coach's
+   *  history-inspection check needs BOTH (a click that pages to the wrong
+   *  fight, the all-time roll-up, or back onto the still-live segment must
+   *  not count as "inspecting that finished run"). Not on a per-frame path. */
+  viewedEncounterInfo(): { startedAt: number; isCurrent: boolean } | null {
+    const { enc } = this.viewedEncounter();
+    if (!enc) return null;
+    return { startedAt: enc.startedAt, isCurrent: enc === this.host.data.current };
+  }
+
+  /** The bar for `pid`'s OWN row (never a pet's) if one is currently laid
+   *  out and visible on this panel's tab, else null. Read by the hub
+   *  practice coach's read-row step; not on a per-frame path. */
+  rowElementForPid(pid: number): HTMLElement | null {
+    for (const row of this.rowPool) {
+      if (row.el.style.display === 'none') continue;
+      if (row.pid === pid && row.petName === null) return row.el;
+    }
+    return null;
   }
 
   /** Drop this panel's custom box, returning it to the stylesheet anchor. */
@@ -560,7 +710,7 @@ export class MetersPanel {
     // marker both need every member's pets, and re-walking the entity map per
     // bar is the one part of this render that scales with the world.
     const petsByOwner = isThreat ? this.host.petsByOwner() : null;
-    const { mob, liveThreat } = this.threatSubject(enc, petsByOwner);
+    const { mob, liveThreat, frozen } = this.threatSubject(enc, petsByOwner);
     const aggroPid = mob && !mob.dead ? mob.aggroTargetId : null;
     const subjectName = mob
       ? tEntity({ kind: 'mob', id: mob.templateId, field: 'name' })
@@ -573,12 +723,16 @@ export class MetersPanel {
         : enc.mainMobTemplateId
           ? tEntity({ kind: 'mob', id: enc.mainMobTemplateId, field: 'name' })
           : enc.mainMobName;
-    // Say plainly when the bars are the damage fallback rather than live hate:
-    // the numbers are honest, but under a "Threat" heading they read as hate and
-    // a player acts on them.
+    // Say plainly when the bars are the damage fallback rather than hate: the
+    // numbers are honest, but under a "Threat" heading they read as hate and a
+    // player acts on them. A FROZEN read is real hate too, just no longer
+    // live (the subject died or left mid-segment), so it gets its own line
+    // rather than reading like the damage fallback.
     this.subEl.textContent = isThreat
       ? liveThreat
-        ? t('hud.meters.target', { name: subjectName })
+        ? frozen
+          ? t('hudChrome.meters.threatFrozen', { name: subjectName })
+          : t('hud.meters.target', { name: subjectName })
         : subjectName
           ? t('hudChrome.meters.threatFallback', { name: subjectName })
           : t('hud.meters.noTargetEngaged')
@@ -657,8 +811,8 @@ export class MetersPanel {
   private threatSubject(
     enc: Encounter,
     petsByOwner: Map<number, Pet[]> | null,
-  ): { mob: Entity | null; liveThreat: Map<number, number> | null } {
-    if (this.tab !== 'threat') return { mob: null, liveThreat: null };
+  ): { mob: Entity | null; liveThreat: Map<number, number> | null; frozen: boolean } {
+    if (this.tab !== 'threat') return { mob: null, liveThreat: null, frozen: false };
     const world = this.host.world;
     const tracked = new Set(this.host.partyPids());
     for (const pets of petsByOwner?.values() ?? []) for (const pet of pets) tracked.add(pet.pid);
@@ -669,8 +823,10 @@ export class MetersPanel {
       fallbackMobId: enc.mainMobId,
     });
     const mob = subjectId !== null ? (world.entities.get(subjectId) ?? null) : null;
-    const liveThreat = mob && !mob.dead && mob.threat.size > 0 ? mob.threat : null;
-    return { mob, liveThreat };
+    const frozenSnapshot =
+      subjectId !== null ? (enc.threatSnapshotByMob.get(subjectId) ?? null) : null;
+    const { values: liveThreat, frozen } = resolveThreatValues(mob, frozenSnapshot);
+    return { mob, liveThreat, frozen };
   }
 
   /**
@@ -771,8 +927,9 @@ export class MetersPanel {
 /** The meters that can leave the main window; damage is always its home. */
 type DetachableTab = Exclude<Tab, 'dmg'>;
 
-const FRAME_KEYS: Record<'main' | DetachableTab, string> = {
-  main: 'woc_meters_frame',
+// The tabbed window has no key: its box is the damageMeter registry row's
+// (woc_hud_frame_meters), and the pre-frames 'woc_meters_frame' key is dead.
+const FRAME_KEYS: Record<DetachableTab, string> = {
   heal: 'woc_meters_frame_heal',
   threat: 'woc_meters_frame_threat',
 };
@@ -793,12 +950,67 @@ export class Meters {
   private readonly detached = new Map<DetachableTab, MetersPanel>();
   /** Detached windows hidden along with the tabbed one, to restore on reopen. */
   private reopenDetached: DetachableTab[] = [];
+  /**
+   * The practice DPS strip (src/ui/hud/practice/): a readout over this SAME
+   * encounter ledger for the local player's runs on a training dummy. It lives
+   * here rather than on the Hud so the two surfaces share one feed and one
+   * per-frame drive; null on a document without the strip (the /play shell).
+   */
+  private readonly practice: PracticeDpsController | null;
+  /**
+   * The Eastbrook hub practice coach (src/ui/hud/practice/): guided,
+   * step-at-a-time coaching for Drillmaster Hale's damage drill and the
+   * optional healing drill, over this SAME encounter ledger (so the coach
+   * can never disagree with what the tabs actually show). Lives here for
+   * the identical reason `practice` does: one feed, one per-frame drive.
+   * Null on a document without the strip (a bare test rig), or when the
+   * caller hands over no keybinds to resolve the coach's keycap chips.
+   */
+  private readonly hubLesson: HubLessonController | null;
 
   constructor(
     private world: IWorld,
     private deps?: MetersDeps,
   ) {
     this.data = new MeterData(performance.now());
+    const practiceEl = document.getElementById('practice-tracker');
+    this.practice = practiceEl
+      ? new PracticeDpsController({
+          element: practiceEl,
+          model: () =>
+            practiceDpsModel({
+              current: this.data.current,
+              history: this.data.history,
+              playerId: world.player.id,
+              targetTemplateId: this.targetTemplateId(),
+            }),
+          dummyName: (templateId) => tEntity({ kind: 'mob', id: templateId, field: 'name' }),
+        })
+      : null;
+    const hubLessonEl = document.getElementById('hub-lesson-coach');
+    this.hubLesson =
+      hubLessonEl && deps?.keybinds
+        ? new HubLessonController({
+            element: hubLessonEl,
+            world,
+            keybinds: deps.keybinds,
+            meters: {
+              anyWindowOpen: () => this.anyWindowOpen,
+              tabOpen: (tab: MeterTab) => this.tabOpen(tab),
+              tabButtonElement: (tab: MeterTab) => this.tabButtonElement(tab),
+              historyArrowElement: (tab: MeterTab) => this.historyArrowElement(tab),
+              rowElementForPid: (tab: MeterTab, pid: number) => this.rowElementForPid(tab, pid),
+              viewedEncounter: (tab: MeterTab) => this.viewedEncounter(tab),
+              current: () => this.current(),
+              history: () => this.history(),
+            },
+            storage: deps.storage,
+            actionBarSlots: deps.actionBarSlots,
+            tooltipVisibleFor: deps.tooltipVisibleFor,
+            actionButtonForSlot: deps.actionButtonForSlot,
+            worldToScreen: deps.worldToScreen,
+          })
+        : null;
     const host: PanelHost = {
       world,
       data: this.data,
@@ -813,7 +1025,6 @@ export class Meters {
       {
         root: document.querySelector('#meters-window') as HTMLElement,
         lockedTab: null,
-        frameStorageKey: FRAME_KEYS.main,
       },
       host,
       deps,
@@ -876,6 +1087,70 @@ export class Meters {
     return this.detached.get(tab)?.isOpen ?? false;
   }
 
+  /** The panel actually SHOWING `tab` right now: its detached window when it
+   *  has one open, else the tabbed window when it is open and on that tab,
+   *  else null. Read by the hub practice coach (hub_lesson_controller.ts) to
+   *  find the row/history-arrow it glows; not on a per-frame path. */
+  private panelShowing(tab: MeterTab): MetersPanel | null {
+    if (tab !== 'dmg') {
+      const detached = this.detached.get(tab);
+      if (detached?.isOpen) return detached;
+    }
+    return this.main.isOpen && this.main.activeTab === tab ? this.main : null;
+  }
+
+  /** True while ANY meters surface is open, on any tab: the hub coach's
+   *  "open a window at all" gate, before it asks for a specific tab. */
+  get anyWindowOpen(): boolean {
+    if (this.main.isOpen) return true;
+    for (const panel of this.detached.values()) if (panel.isOpen) return true;
+    return false;
+  }
+
+  /** True while a surface showing `tab` is open right now (docked or its own
+   *  detached window). */
+  tabOpen(tab: MeterTab): boolean {
+    return this.panelShowing(tab) !== null;
+  }
+
+  /** The main window's tab-switch button for `tab`, only while a click on it
+   *  would actually change anything (the main window is open, on a
+   *  different tab, and `tab` is not already off in its own detached
+   *  window). Null otherwise: nothing to glow. */
+  tabButtonElement(tab: MeterTab): HTMLElement | null {
+    if (!this.main.isOpen || this.main.activeTab === tab) return null;
+    if (tab !== 'dmg' && this.isDetached(tab)) return null;
+    return this.main.tabButtonElement(tab);
+  }
+
+  /** The "older segment" arrow of whichever panel is showing `tab`. */
+  historyArrowElement(tab: MeterTab): HTMLElement | null {
+    return this.panelShowing(tab)?.historyArrowElement ?? null;
+  }
+
+  /** The local player's own row on whichever panel is showing `tab`. */
+  rowElementForPid(tab: MeterTab, pid: number): HTMLElement | null {
+    return this.panelShowing(tab)?.rowElementForPid(pid) ?? null;
+  }
+
+  /** Identity of whatever segment is currently displayed on the panel
+   *  showing `tab`, or null while no such panel is open. */
+  viewedEncounter(tab: MeterTab): { startedAt: number; isCurrent: boolean } | null {
+    return this.panelShowing(tab)?.viewedEncounterInfo() ?? null;
+  }
+
+  /** The live encounter, or null between fights. HubLessonEncounterLike-shaped
+   *  (src/ui/hud/practice/hub_lesson_controller.ts): the hub practice coach's
+   *  read of the SAME ledger the tabs render, no second combat ledger. */
+  current(): Encounter | null {
+    return this.data.current;
+  }
+
+  /** Finished encounters, newest first. */
+  history(): readonly Encounter[] {
+    return this.data.history;
+  }
+
   /**
    * Paint a tab's right-click menu through Hud's shared popup box. Localizing
    * the rows here keeps the pure core (which decides WHICH row) string-free.
@@ -897,10 +1172,17 @@ export class Meters {
     });
   }
 
-  /** Return every panel to its stylesheet anchor (the layout reset path). */
+  /** Return every panel to its stylesheet anchor (the layout reset path).
+   *  The tabbed window's box is the registry's (interfaceUnlock.resetAll
+   *  covers it); this resets the two detached windows' own MeterFrames. */
   resetFrames(): void {
     this.main.resetFrame();
     for (const panel of this.detached.values()) panel.resetFrame();
+  }
+
+  /** Forwarded from the damageMeter registry row's onPositioned. */
+  mainFramed(active: boolean): void {
+    this.main.setRegistryFramed(active);
   }
 
   private restoreDetached(): void {
@@ -953,14 +1235,36 @@ export class Meters {
 
   onEvent(ev: SimEvent): void {
     this.data.onEvent(ev, this.world, this.partyPids(), performance.now());
+    // The hub lesson's healing track has no mainMobTemplateId field to key
+    // off (see hub_lesson_controller.ts header): it taps the raw heal2 event
+    // directly, after MeterData has already folded it into the ledger above.
+    this.hubLesson?.onEvent(ev);
+  }
+
+  /** Template id of the local player's current target, for the practice strip. */
+  private targetTemplateId(): string | null {
+    const targetId = this.world.player.targetId;
+    if (targetId === null) return null;
+    return this.world.entities.get(targetId)?.templateId ?? null;
   }
 
   /** called every hud frame; each open panel renders at ~4Hz */
   update(): void {
     const now = performance.now();
     this.data.update(this.world, this.partyPids(), now);
+    this.practice?.update(now);
+    this.hubLesson?.update(now);
     this.main.update(now);
     for (const panel of this.detached.values()) panel.update(now);
+  }
+
+  /** Tears down the hub practice coach's listeners/glow/world prompt. Meters
+   *  is presently constructed once per Hud (a fresh page load separates
+   *  sessions), so nothing calls this in production yet; it exists so tests
+   *  can construct and discard multiple controllers against a shared DOM
+   *  without leaking listeners onto the next instance's elements. */
+  dispose(): void {
+    this.hubLesson?.dispose();
   }
 
   render(force = false): void {
@@ -986,37 +1290,4 @@ function breakdownRowLabel(row: BreakdownRow, nested: boolean): string {
     : t('hudChrome.meters.melee');
   if (nested) return ability;
   return row.petName ? t('hudChrome.meters.petAbility', { pet: row.petName, ability }) : ability;
-}
-
-// Compact damage/heal/threat number. Digits route through formatNumber so the
-// numerals/decimal mark follow the active locale, while the classic English
-// k/m suffixes + thresholds are preserved (useGrouping:false keeps the readout
-// byte-identical to the historical `toFixed(1)`/`Math.round` form in en).
-function fmtNum(v: number): string {
-  if (v >= 1_000_000)
-    return `${formatNumber(v / 1_000_000, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })}m`;
-  if (v >= 10_000)
-    return `${formatNumber(v / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false })}k`;
-  return formatNumber(Math.round(v), { maximumFractionDigits: 0, useGrouping: false });
-}
-
-// "{rate}/s" cell, e.g. "1.2k/s" — the /s unit comes from the localizable key.
-function fmtPerSecond(v: number): string {
-  return t('hudChrome.meters.perSecond', { value: fmtNum(v) });
-}
-
-// "{total} ({rate}/s)" cell, e.g. "12.3k (1.2k/s)". Defined at module scope so
-// the imported t() is in view (the render loop shadows `t` with a tally row).
-function fmtPerSecondRow(total: number, rate: number): string {
-  return t('hudChrome.meters.perSecondRow', { total: fmtNum(total), rate: fmtPerSecond(rate) });
-}
-
-// "Xm Ys" / "Ys" duration; the m/s units come from localizable keys, digits via
-// formatNumber.
-function fmtDuration(s: number): string {
-  const m = Math.floor(s / 60);
-  const num = (n: number) => formatNumber(n, { maximumFractionDigits: 0, useGrouping: false });
-  return m > 0
-    ? t('hudChrome.meters.minutesSeconds', { m: num(m), s: num(Math.round(s % 60)) })
-    : t('hudChrome.meters.seconds', { s: num(Math.round(s)) });
 }

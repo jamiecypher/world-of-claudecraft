@@ -4,9 +4,12 @@
 // both the renderer and the NameplatePainter can share objectDisplayName without
 // a renderer <-> painter import cycle.
 
-import type { Entity } from '../sim/types';
+import { IGNIVAR_LORE_OBJECTS } from '../sim/content/ignivar_raid_lore';
+import { type Entity, REALM_BUILDER_MONUMENT_TEMPLATE_ID } from '../sim/types';
 import { dungeonDisplayName, tEntity } from '../ui/entity_i18n';
+import { feastTitleFor } from '../ui/hud/professions/feast_title';
 import { t } from '../ui/i18n';
+import { localizeSimText } from '../ui/sim_i18n';
 
 export function mobDisplayName(mobId: string): string {
   return tEntity({ kind: 'mob', id: mobId, field: 'name' });
@@ -22,6 +25,9 @@ export function objectDisplayName(entity: Entity): string {
   }
   if (entity.templateId === 'noticeboard_eastbrook') {
     return t('worldContent.noticeboardName');
+  }
+  if (entity.templateId === REALM_BUILDER_MONUMENT_TEMPLATE_ID) {
+    return t('worldContent.realmBuilderMonumentName');
   }
   if (entity.templateId === 'soulwell') {
     return tEntity({ kind: 'ability', id: 'soulwell', field: 'name' });
@@ -78,6 +84,21 @@ export function objectDisplayName(entity: Entity): string {
     return entity.templateId === 'dungeon_exit'
       ? t('worldContent.dungeonExitName', { name: dungeonName })
       : dungeonName;
+  }
+  // A placed feast of ANY tier (Phase 12; widened by masterwrought Phase 11k):
+  // the entity's wire name is the PLACER'S raw player name, a VALUE, and the
+  // displayed title composes it into the localized "{name}'s <Feast>" here on
+  // the painter side (sim and server stay language-agnostic). The rule lives
+  // in the shared src/ui/hud/professions/feast_title.ts leaf, which src/ui/entity_display_name
+  // also reads, so the world label and the target frame cannot drift.
+  const feastTitle = feastTitleFor(entity.templateId, entity.name);
+  if (feastTitle !== null) return feastTitle;
+  // These four development-raid records are interactOnly narrative props, not
+  // inventory items. Their lore handler returns before generic pickup, so keep
+  // them out of ITEMS (and its mandatory icon-art contract) while still giving
+  // their authored entity names an exact localization source.
+  if (entity.objectItemId && Object.hasOwn(IGNIVAR_LORE_OBJECTS, entity.objectItemId)) {
+    return localizeSimText(entity.name) ?? entity.name;
   }
   // Collectible/quest ground objects carry the item id they grant; localize the
   // nameplate through the item dictionary instead of the raw English name.

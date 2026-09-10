@@ -31,6 +31,7 @@ vi.mock('../server/db', () => ({
   loadAccountFlair: vi.fn(async () => ({ ai: false, streamer: false, links: {} })),
   // bank_ledger.ts (imported via game.ts recordBankOp) reads this at call time.
   insertBankLedgerRow: vi.fn(async () => {}),
+  insertBankLedgerRows: vi.fn(async () => {}),
   acquireCharacterLease: vi.fn(async () => true),
   releaseCharacterLease: vi.fn(async () => {}),
   heartbeatCharacterLeases: vi.fn(async () => {}),
@@ -316,7 +317,7 @@ describe('the bg self key over the wire', () => {
 });
 
 describe('match-scoped interest: own team and field objects, never enemy players', () => {
-  // The rule under test (server/game.ts bgWideInterestApplies): inside one
+  // The rule under test (server/interest_policy.ts bgWideInterestApplies): inside one
   // battleground slot the raised radius covers your OWN team and the field's
   // non-player entities; an enemy PLAYER falls back to the open-world radii, so
   // their entity record (position, facing, hp, resource, cast, auras) is never

@@ -150,4 +150,34 @@ export const table: ReliquaryLocaleTable = {
     name: 'Riftbanden',
     desc: 'De persoonlijke Riftbanden, geslagen voor elke kampioen in de groep die de eerste voltooiing van een gerangschikte Rift wint. Een personage kan alleen het zijne bezitten.',
   },
+  conquerors_ignivar: {
+    name: 'Smeltkroes van de Laatste Bron',
+    desc: 'Epische buit van Ignivar, Heraut van de Laatste Vlam.',
+  },
+  conquerors_ignivar_heroic: {
+    name: 'Heroïsch: Smeltkroes van de Laatste Bron',
+    desc: 'Alleen heroïsche wapens van Ignivar, Heraut van de Laatste Vlam.',
+  },
+  conquerors_varkhul: {
+    name: 'De Binnenste Smeltkroes',
+    desc: 'Epische buit van Varkhul, Smidvader van de Laatste Vlam.',
+  },
+  conquerors_varkhul_heroic: {
+    name: 'Heroïsch: De Binnenste Smeltkroes',
+    desc: 'Alleen heroïsche schilden en wapens van Varkhul, Smidvader van de Laatste Vlam.',
+  },
+  conquerors_set_bramblehide: {
+    name: "Roots' Doornhuid",
+    desc: 'De volledige leren uitrustingsfamilie Roots’ Doornhuid.',
+  },
+  professions_crucible: {
+    desc: 'Elf in raids vervaardigde collecties, elk met een borststuk, riem en paar laarzen. Handleidingen en formules zijn kennis, geen relieken.',
+
+    name: 'Smeltkroesvakmanschap',
+  },
+
+  professions_forgebreaker: {
+    name: 'Smederijbreker',
+    desc: 'De stem van de Laatste Bron, bevrijd uit de smidse en gedragen in een hamer die je zelf hebt gemaakt.',
+  },
 };

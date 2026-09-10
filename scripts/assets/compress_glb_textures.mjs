@@ -18,36 +18,76 @@
 //
 // Per file: webp textures are first transcoded to png (toktx cannot read webp),
 // then normal/occlusion slots go to UASTC (quality) and everything else to
-// ETC1S (size), then meshopt is re-applied when the source file used
-// EXT_meshopt_compression (reading decodes it; without re-encoding the file
-// would grow). Files whose embedded textures are already all KTX2, and files
-// with no embedded textures at all (e.g. the Eastbrook kit, which uses a shared
-// external atlas and carries provenance extras), are skipped without a write.
+// ETC1S (size) EXCEPT baseColorTexture on a Tripo AI-generated material
+// (hasTripoGeneratedMaterial), which also goes to UASTC: Tripo's painterly PBR
+// output is detailed, high-frequency content that measurably loses fidelity
+// under ETC1S's low-bitrate block palette, unlike the CC0 kits' flat-shaded
+// stylized textures, which compress cleanly under ETC1S and stay on the
+// smaller codec. This only affects a file's FIRST conversion (see below), so
+// it improves newly generated Tripo assets going forward; an already-shipped
+// Tripo GLB's baseColor was already lossily encoded to ETC1S at that time and
+// has no pristine source left to re-derive a UASTC version from. Then meshopt
+// is re-applied when the source file used EXT_meshopt_compression (reading
+// decodes it; without re-encoding the file would grow). Files whose embedded
+// textures are already all KTX2, and files with no embedded textures at all
+// (e.g. the Eastbrook kit, which uses a shared external atlas and carries
+// provenance extras), are skipped without a write.
 // After transforming, the script asserts the structural invariants (skins,
 // animations, meshes, nodes, extras-bearing nodes) match the source and aborts
 // the file on any mismatch.
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Mode, toktx } from '@gltf-transform/cli';
 import { NodeIO } from '@gltf-transform/core';
-import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { ALL_EXTENSIONS, EXTMeshoptCompression } from '@gltf-transform/extensions';
 import { meshopt, textureCompress } from '@gltf-transform/functions';
 import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
-import sharp from 'sharp';
 import {
   classifyGlb,
   glbJsonChunk,
+  hasTripoGeneratedMaterial,
   snapshotMismatch,
   structuralSnapshot,
   weaponVfxModelKeys,
 } from './lib/glb_texture_compression_core.mjs';
+
+// Use the exact Sharp runtime owned by gltf-transform CLI. Loading a second
+// Sharp major/minor in the same Windows process loads a second libvips DLL and
+// fails with ERR_DLOPEN_FAILED 127 before conversion starts.
+const rootRequire = createRequire(import.meta.url);
+const cliRequire = createRequire(rootRequire.resolve('@gltf-transform/cli'));
+const sharp = (await import(pathToFileURL(cliRequire.resolve('sharp')).href)).default;
+// On Windows, adding KTX's DLL directory before Sharp initializes can make the
+// loader pick incompatible DLL names. Allow callers to expose the executable
+// only after libvips is resident; ordinary PATH-based installs need no override.
+if (process.env.KTX_BIN) {
+  process.env.PATH = `${process.env.PATH ?? ''}${path.delimiter}${process.env.KTX_BIN}`;
+}
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DEFAULT_DIR = path.join(ROOT, 'public', 'models');
 
 // Slots that favor UASTC's higher quality over ETC1S's smaller size.
 const UASTC_SLOTS = /^(normalTexture|occlusionTexture)$/;
+// Tripo AI-generated content (hasTripoGeneratedMaterial) additionally routes
+// baseColorTexture through UASTC: its painterly PBR output visibly loses
+// crispness under ETC1S's low-bitrate block palette (a measured ~19 dB PSNR
+// gap on shipped Tripo art), unlike the CC0 kits' flat-shaded stylized
+// textures, which compress cleanly under ETC1S and stay on the smaller codec.
+// That quality win has a real, measured cost, not just a size line item: on
+// shipped Tripo baseColors, UASTC (the pipeline's exact uastc-quality 2, zstd
+// 18 flags) runs 3.0x to 3.7x the ETC1S byte count, and doubles GPU-resident
+// size (ETC1S's 4 bpp BC1 transcode versus UASTC's 8 bpp BC7). 198 of the
+// 1330 shipped GLBs carry a tripo_ material; their baseColors are 13.8 MB of
+// the 162 MB model corpus today, so this adds roughly 30 MB as that set turns
+// over. That is the exact decode-amplification budget this file exists to
+// protect (see the header: the iOS jetsam kill at 1.54 GB resident) and the
+// Play 500 MB compressed-download cap (tests/native_assets_pack.test.ts), so
+// this carve-out is a maintainer-approved trade, not a default to widen
+// casually to more slots or more materials.
+const UASTC_SLOTS_WITH_BASE_COLOR = /^(normalTexture|occlusionTexture|baseColorTexture)$/;
 
 function excludedGlbPaths() {
   const source = fs.readFileSync(path.join(ROOT, 'src', 'render', 'weapon_vfx.ts'), 'utf8');
@@ -82,19 +122,30 @@ async function convertFile(io, file, { dryRun }) {
   const srcBuf = fs.readFileSync(file);
   const srcJson = glbJsonChunk(srcBuf);
   const cls = classifyGlb(srcJson);
+  const losslessMeshopt =
+    cls.hadMeshopt && !(srcJson.extensionsUsed ?? []).includes('KHR_mesh_quantization');
   if (cls.skip) return { file, status: 'skipped', before: srcBuf.length, after: srcBuf.length };
   if (dryRun) return { file, status: 'would-convert', before: srcBuf.length, after: srcBuf.length };
 
   const doc = await io.readBinary(srcBuf);
+  const uastcSlots = hasTripoGeneratedMaterial(srcJson) ? UASTC_SLOTS_WITH_BASE_COLOR : UASTC_SLOTS;
   const transforms = [
     textureCompress({ encoder: sharp, targetFormat: 'png', formats: /^image\/webp$/ }),
     // encoder feeds the transform's own resize path: ktx requires dimensions
     // that are multiples of four, and NPOT sources get resized via sharp first.
-    toktx({ mode: Mode.UASTC, slots: UASTC_SLOTS, jobs: 2, encoder: sharp }),
+    toktx({ mode: Mode.UASTC, slots: uastcSlots, jobs: 2, encoder: sharp }),
     toktx({ mode: Mode.ETC1S, jobs: 2, encoder: sharp }),
   ];
-  if (cls.hadMeshopt) transforms.push(meshopt({ encoder: MeshoptEncoder, level: 'high' }));
+  if (cls.hadMeshopt && !losslessMeshopt) {
+    transforms.push(meshopt({ encoder: MeshoptEncoder, level: 'high' }));
+  }
   await doc.transform(...transforms);
+  if (losslessMeshopt) {
+    doc
+      .createExtension(EXTMeshoptCompression)
+      .setRequired(true)
+      .setEncoderOptions({ method: EXTMeshoptCompression.EncoderMethod.FILTER });
+  }
   const outBuf = Buffer.from(await io.writeBinary(doc));
 
   const outJson = glbJsonChunk(outBuf);

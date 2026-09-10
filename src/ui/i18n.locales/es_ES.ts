@@ -146,16 +146,16 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
   'delveUi.board.marks': 'Marcas de Profundidad: {count}',
   'delveUi.board.openDelveAria': 'Abrir el Tablón de Profundidades desde {name}',
   'delveUi.board.title': 'Tablón de Profundidades',
-  'delveUi.boss.varric.bell.log': 'El Diácono Varric empieza a tañer la campana funeraria.',
-  'delveUi.boss.varric.bell.warning': '¡Apártate del Diácono Varric!',
+  'delveUi.boss.varric.bell.log': 'El Diácono Vandric empieza a tañer la campana funeraria.',
+  'delveUi.boss.varric.bell.warning': '¡Apártate del Diácono Vandric!',
   'delveUi.boss.varric.mid30': 'La campana funeraria responde a cada nombre que pronuncia.',
   'delveUi.boss.varric.mid60':
-    'El Diácono Varric lee nombres del registro con un júbilo tembloroso.',
+    'El Diácono Vandric lee nombres del registro con un júbilo tembloroso.',
   'delveUi.boss.varric.pull':
     'Pisas el polvo sagrado con un propósito impuro. Arrodíllate y deja que te cuenten.',
-  'delveUi.boss.varric.raise.emote': '¡El Diácono Varric invoca nombres desde las tumbas rotas!',
+  'delveUi.boss.varric.raise.emote': '¡El Diácono Vandric invoca nombres desde las tumbas rotas!',
   'delveUi.boss.varric.raise.interrupt_ok': 'El rito sepulcral vacila.',
-  'delveUi.boss.varric.raise.log': 'El Diácono Varric empieza a alzar a los muertos.',
+  'delveUi.boss.varric.raise.log': 'El Diácono Vandric empieza a alzar a los muertos.',
   'delveUi.boss.varric.raise.object': 'La tumba agrietada se estremece con un aliento robado.',
   'delveUi.boss.varric.raise.warning': '¡Detén el rito sepulcral!',
   'delveUi.companion.tessa.combat_start':
@@ -197,8 +197,6 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
   'entities.abilities.blazing_barrier.description':
     'Rodéate de fuego para absorber {damage} de daño durante 60 s. (Fuego)',
   'entities.abilities.cold_snap.name': 'Llamada invernal',
-  'entities.abilities.cold_snap.description':
-    'Restablece el tiempo de reutilización de Paso centelleante, Velo de Escarcha e Invisibilidad mejorada. (Talento de mago)',
   'entities.abilities.greater_invisibility.name': 'Invisibilidad mejorada',
   'entities.abilities.hot_streak.name': 'Racha ardiente',
   'entities.abilities.hot_streak.description':
@@ -247,6 +245,7 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
   'sim.delve.duringArena': 'No puedes entrar en una Profundidad durante un combate de arena.',
   'sim.delve.duringDuel': 'No puedes entrar en una Profundidad durante un duelo.',
   'sim.delve.graveFalters': 'El rito sepulcral vacila.',
+  'sim.delve.enemiesRemain': 'Acaba primero con los enemigos restantes.',
   'sim.delve.levelRequired': 'Debes ser nivel {level} para entrar en {name}.',
   'sim.delve.mechanismOpen':
     'Un mecanismo se abre con un chasquido cerca. Se abre un pasaje hacia el norte. Busca el portal de salida más adelante.',
@@ -426,7 +425,7 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
   'entities.abilities.maul.specNote_feral':
     'Cada golpe que conecta añade 1 de Sangre Antigua; con 3 de Sangre Antigua este botón se convierte en Quiebramédula: un golpe de 78 a 96 de daño con mucha amenaza; por debajo de la mitad de salud, en su lugar te protege con un escudo equivalente al 18% de tu salud máxima y te devuelve 15 de ira.',
   'entities.abilities.ossuary_mark.description':
-    'Marca a un enemigo durante 12 s, almacenando el 20% del daño que tú y tus no muertos infligís. Vuelve a lanzarla para detonarla. Si el enemigo marcado muere, explota en un radio de 6 m y crea 1 Fragmento de alma.',
+    'Marca a un enemigo durante 15 s, almacenando el 20% del daño que tú y tus no muertos infligís. Vuelve a lanzarla para detonarla. Si el enemigo marcado muere, explota en un radio de 6 yardas y crea 1 Fragmento de alma.',
   'entities.abilities.ossuary_mark.name': 'Ossuary Mark',
   'entities.abilities.rake.specNote_feral':
     'Cada golpe que conecta añade 1 de Sangre Antigua (máx. 3).',
@@ -473,7 +472,7 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
     'Añade 1 de Ritual de Veneno y prolonga tu herida de Desgarro venenoso 6 s (nunca supera los 20 s).',
   'entities.items.soul_stone.name': 'Piedra de alma',
   'hud.pet.abyssalChainDesc':
-    'Ordena a tu Gloomshade que arrastre a un enemigo normal de más de 8 m y hasta 20 m de vuelta hacia sí. Los jefes no pueden ser arrastrados. Tiempo de reutilización: 15 segundos. Haz clic con el botón derecho, mantén la pulsación táctil, o pulsa Mayús+Intro para alternar el lanzamiento automático.',
+    'Ordena a tu Duskmurk que arrastre a un enemigo normal de más de 8 m y hasta 20 m de vuelta hacia sí. Los jefes no pueden ser arrastrados. Tiempo de reutilización: 15 segundos. Haz clic con el botón derecho, mantén la pulsación táctil, o pulsa Mayús+Intro para alternar el lanzamiento automático.',
   'hud.pet.autocastOff':
     'Lanzamiento automático desactivado. Haz clic con el botón derecho, mantén la pulsación táctil, o pulsa Mayús+Intro para activarlo.',
   'hud.pet.autocastOn':
@@ -486,8 +485,6 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
     'Reduce el daño recibido un {pct}%. El {mana}% de todo el daño que infliges se convierte en maná',
   'hudChrome.auraEffect.galeheartWeapon':
     'Completar la cadencia del Espíritu Guerrero de {steps} golpes hace eco del golpe {count} veces, infligiendo un {pct}% de su daño como daño de Naturaleza',
-  'hudChrome.warlock.doomMeterLock': 'Bloquear la barra de recurso de Aflicción',
-  'hudChrome.warlock.doomMeterUnlock': 'Mover la barra de recurso de Aflicción',
   'hudChrome.warlock.fateThreadsStatus': '{value} de {max} Hilos del destino.',
   'hudChrome.bags.itemAriaLocked': '{item}, cantidad {count}, artículo bloqueado',
   'hudChrome.bags.itemLockedLine': 'Artículo bloqueado',
@@ -517,4 +514,18 @@ export const es_ES: Partial<Record<TranslationKey, string>> = {
     'Ese código de diseño procede de una versión más reciente del juego.',
   'auth.designCodeErrMalformed':
     'Ese código de diseño está dañado. Copia el código completo e inténtalo de nuevo.',
+  // Bank slot and Strongbox Charter purchase retry hints (es_ES prefers "vuelve a
+  // intentarlo" over es-LatAm "inténtalo de nuevo", matching this file's existing
+  // retry phrasing, see hudChrome.chatQuota above).
+  'hudChrome.bank.rungInProgress':
+    'Todavía se está completando una compra para este personaje. Vuelve a intentarlo en un momento.',
+  'hudChrome.bank.rungOutage':
+    'No se pudo confirmar la compra. Vuelve a intentarlo con este botón y no se te cobrará dos veces. Si recargas el juego antes, puedes perder esa protección.',
+  'hudChrome.wocStore.charter.inProgress':
+    'Todavía se está completando una compra para este personaje. Vuelve a intentarlo en un momento.',
+  'hudChrome.wocStore.charter.outage':
+    'No se pudo confirmar la compra. Vuelve a intentarlo con este botón y no se te cobrará dos veces. Si recargas el juego antes, puedes perder esa protección.',
+  'hudChrome.bags.capacityPools':
+    'Artículos {generalUsed}/{generalTotal}, materiales {materialsUsed}/{materialsTotal}',
+  'hudChrome.bags.emptyMaterialsOnly': 'Solo para materiales',
 };

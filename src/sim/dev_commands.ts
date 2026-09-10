@@ -1,13 +1,26 @@
+import { applyCourserDaze } from './combat/hunter_shared';
 import { DEV_KIT_ROLES, devKitRole } from './content/dev_kit_roles';
-import { MOUNT_KEYS, TRAINING_MOUNT_KEY } from './content/mounts';
+import { MOUNT_SKIN_IDS } from './content/mount_skins';
+import { MOUNT_KEYS } from './content/mounts';
 import { GATHERING_PROFESSIONS } from './content/professions';
 import { DUNGEONS, ITEMS, MOBS, NPCS } from './data';
 import { equipBestInSlotForDev } from './dev/bis_gear';
 import { applyDevKit } from './dev_kit';
 import { createGroundObject, createMob } from './entity';
-import { enterDungeon } from './instances/dungeons';
+import {
+  ignivarDevRaidTravelRoster,
+  setupIgnivarDevRaid,
+  stageIgnivarDevRaidAtApproach,
+} from './ignivar_dev_raid';
+import { IGNIVAR_FORGE_APPROACH_ID, IGNIVAR_RAID_ARENA_ID } from './ignivar_raid_ids';
+import { enterDungeon, instanceInfoAt } from './instances/dungeons';
 import { mountItemId, mountOwned } from './mounts';
 import { MOUNT_TRAIN_MIN_LEVEL } from './mounts_training';
+import {
+  isNythraxisDevMechanic,
+  pokeNythraxisDevMechanic,
+  setupNythraxisDevRaid,
+} from './nythraxis_dev_raid';
 import { isGatheringProfessionId, queueGatheringGrant } from './professions/gathering';
 import { placeMobileStationForPlayer } from './professions/mobile_station';
 import { cancelProfessionSessionOnDisplacement } from './professions/session_teardown';
@@ -20,6 +33,7 @@ import type { SimContext } from './sim_context';
 import { bgQueueJoin, bgQueueSize, devEndBg, devStartBg } from './social/battleground';
 import { revivePlayerAt } from './spirit';
 import { MAX_LEVEL, type RiftTier } from './types';
+import { setupVarkhulDevRaid } from './varkhul_dev_raid';
 
 const MAX_DEV_SPAWNS = 20;
 const DEV_SPAWN_RADIUS = 4;
@@ -98,6 +112,7 @@ export function resetCombatForDev(ctx: SimContext, pid: number): void {
   player.queuedOnSwing = null;
   player.queuedCastAbility = null;
   player.queuedCastAim = null;
+  player.queuedCastTargetId = null;
 
   for (const entity of ctx.entities.values()) {
     if (entity.kind !== 'mob') continue;
@@ -194,6 +209,38 @@ export function handleDevChat(
     return null;
   }
 
+  if (/^\/(?:dev\s+daze|devdaze)\s*$/i.test(raw)) {
+    const player = ctx.entities.get(pid);
+    if (!player) return null;
+    applyCourserDaze(ctx, player);
+    emitDevLog(ctx, pid, "[dev] Applied the Courser's Guise daze (movement speed halved for 4s).");
+    return null;
+  }
+
+  if (/^\/(?:dev\s+fear|devfear)\s*$/i.test(raw)) {
+    // A movement-only test hook for the fear wall guard: it deliberately omits the
+    // breaksOnDamage / breakThreshold / DR handling a real cast fear sets, so the
+    // flee window is stable to watch. Do not "complete" it into a real fear.
+    const player = ctx.entities.get(pid);
+    if (!player) return null;
+    ctx.applyAura(player, {
+      id: 'fear_incap',
+      name: 'Fear',
+      kind: 'incapacitate',
+      remaining: 8,
+      duration: 8,
+      value: player.facing, // flee straight along your facing: aim at a wall to test the guard
+      sourceId: player.id,
+      school: 'shadow',
+    });
+    emitDevLog(
+      ctx,
+      pid,
+      '[dev] Feared for 8s along your facing. Face a wall to watch the guard steer you around it.',
+    );
+    return null;
+  }
+
   const giveMatch = /^\/(?:dev\s+give|devgive)\s+(\S+)(?:\s+(\d+))?\s*$/i.exec(raw);
   if (giveMatch) {
     const itemId = giveMatch[1];
@@ -228,6 +275,22 @@ export function handleDevChat(
         `[dev] Granted ${granted} mount reins (${MOUNT_KEYS.length} owned)${levelNote}. Use a reins item from your bags to ride.`,
       );
     }
+    return null;
+  }
+
+  // Grant every catalog mount skin to the (offline, session-local) account
+  // cosmetics so the Cosmetics window can be exercised without the store.
+  // Server-side the session cosmetics are the authority, so this only ever
+  // affects the offline Sim's own mirror.
+  if (/^\/(?:dev\s+mountskins?|devmountskins?)\s*$/i.test(raw)) {
+    const owned = new Set(ctx.accountCosmetics.mountSkinIds);
+    for (const id of MOUNT_SKIN_IDS) owned.add(id);
+    ctx.accountCosmetics = { ...ctx.accountCosmetics, mountSkinIds: [...owned] };
+    emitDevLog(
+      ctx,
+      pid,
+      `[dev] Granted ${MOUNT_SKIN_IDS.length} mount skins to the account. Wear one from the Cosmetics screen.`,
+    );
     return null;
   }
 
@@ -325,6 +388,69 @@ export function handleDevChat(
     return null;
   }
 
+  // Farming grow-now: bring a growing plot's deadline forward to right now, so
+  // a whole plant-grow-harvest cycle is walkable (and testable) without waiting
+  // out a real crop duration. WRITES STATE AND DRAWS NOTHING: it moves
+  // readyAtMs only, leaving plantedAtMs and the hidden pre-rolled outcome slots
+  // (survivalRoll, yieldSeed) exactly as plant time left them. That is the
+  // whole point, and it is load-bearing beyond convenience: the growth script
+  // is rolled ONCE at plant time, so "grow now" and "wait it out" must resolve
+  // to the identical harvest. The parity scenario states that equivalence, and
+  // the ready-notice and journal phases lean on this cheat to reach a ready
+  // plot in one step.
+  //
+  // A plot already at or past its deadline is left ALONE rather than restamped:
+  // it is already ready, and rewriting a settled timestamp would be a state
+  // change that buys nothing. With a bed argument the lookup is against the
+  // CALLER'S OWN plots, not FARM_BED_IDS: a perfectly real bed with nothing
+  // planted in it is the interesting refusal, and a bed allowlist would answer
+  // "fine" to it.
+  const farmGrowMatch = /^\/(?:dev\s+farmgrow|devfarmgrow)(?:\s+(\S+))?\s*$/i.exec(raw);
+  if (farmGrowMatch) {
+    const meta = ctx.players.get(pid);
+    if (!meta) return null;
+    const bedId = farmGrowMatch[1];
+    // The write-side anchor rule's third statement (plantCrop floors its
+    // plant time and the loader floors its re-anchor the same way): an
+    // unfloored 0 from a fresh never-ticked offline Sim would write a
+    // readyAtMs the loader's positivity arm destroys as tampered.
+    const nowMs = Math.max(ctx.lockoutNowMs(), 1);
+    if (bedId !== undefined) {
+      const plot = meta.farmPlots.get(bedId);
+      if (!plot) {
+        ctx.error(pid, `[dev] No plot on bed '${bedId}'.`);
+        return null;
+      }
+      if (plot.readyAtMs > nowMs) {
+        plot.readyAtMs = nowMs;
+        emitDevLog(ctx, pid, `[dev] Bed ${bedId} is ready.`);
+      } else {
+        // Honest no-work reply, matching the all-plots arm's advanced count: a
+        // settled plot is left alone, and its pre-rolled outcome may well be
+        // withered, so claiming "is ready" here could mislead a dev testing
+        // wither flows.
+        emitDevLog(ctx, pid, `[dev] Bed ${bedId} was already settled; nothing to advance.`);
+      }
+      return null;
+    }
+    if (meta.farmPlots.size === 0) {
+      ctx.error(pid, '[dev] You have no planted beds.');
+      return null;
+    }
+    let advanced = 0;
+    for (const plot of meta.farmPlots.values()) {
+      if (plot.readyAtMs <= nowMs) continue;
+      plot.readyAtMs = nowMs;
+      advanced++;
+    }
+    emitDevLog(
+      ctx,
+      pid,
+      `[dev] Advanced ${advanced} farm plot${advanced === 1 ? '' : 's'} to ready (${meta.farmPlots.size} planted).`,
+    );
+    return null;
+  }
+
   const botMatch = /^\/(?:dev\s+bot|devbot)\s+(\S+)\s*$/i.exec(raw);
   if (botMatch) {
     const botName = botMatch[1];
@@ -397,10 +523,25 @@ export function handleDevChat(
     return null;
   }
 
-  if (/^\/(?:dev\s+bis|devbis)\s*$/i.test(raw)) {
-    const equipped = equipBestInSlotForDev(ctx, pid);
+  const bisMatch = /^\/(?:dev\s+bis|devbis)(?:\s+(\S+))?\s*$/i.exec(raw);
+  if (bisMatch) {
+    const meta = ctx.players.get(pid);
+    if (!meta) return null;
+    const spec = bisMatch[1] ?? meta.talents.spec ?? null;
+    if (spec && !devKitRole(meta.cls, spec)) {
+      const known = (DEV_KIT_ROLES[meta.cls] ?? []).map((role) => role.spec).join(', ');
+      ctx.error(pid, `[dev] '${spec}' is not a ${meta.cls} spec. Try: ${known}.`);
+      return null;
+    }
+    const equipped = equipBestInSlotForDev(ctx, pid, spec ?? undefined);
     if (equipped === 0) ctx.error(pid, '[dev] Could not outfit best-in-slot gear.');
-    else emitDevLog(ctx, pid, `[dev] Equipped ${equipped} best-in-slot epic pieces.`);
+    else if (spec) {
+      emitDevLog(
+        ctx,
+        pid,
+        `[dev] Equipped the top-parse ${meta.cls} ${spec} loadout: ${equipped} pieces.`,
+      );
+    } else emitDevLog(ctx, pid, `[dev] Equipped ${equipped} best-in-slot epic pieces.`);
     return null;
   }
 
@@ -484,8 +625,9 @@ export function handleDevChat(
     }
     const difficulty = dungeonMatch[2]?.toLowerCase() === 'heroic' ? 'heroic' : 'normal';
     ctx.setDungeonDifficulty(difficulty, pid);
-    enterDungeon(ctx, dungeonId, pid, true);
-    emitDevLog(ctx, pid, `[dev] Entering ${dungeonId} (${difficulty}).`);
+    if (enterDungeon(ctx, dungeonId, pid, true)) {
+      emitDevLog(ctx, pid, `[dev] Entering ${dungeonId} (${difficulty}).`);
+    }
     return null;
   }
 
@@ -665,10 +807,188 @@ export function handleDevChat(
     if (entity) {
       entity.devGod = !entity.devGod;
       if (entity.devGod) {
+        entity.profilerInvulnerable = false;
         entity.hp = entity.maxHp;
         entity.resource = entity.maxResource;
       }
       emitDevLog(ctx, pid, `[dev] God mode ${entity.devGod ? 'ON' : 'OFF'}.`);
+    }
+    return null;
+  }
+
+  const freezeMatch = /^\/(?:dev\s+freezemobs|devfreezemobs)(?:\s+(on|off))?\s*$/i.exec(raw);
+  if (freezeMatch) {
+    // Sim-wide, unlike noaggro's per-player flag: the placer wants the whole
+    // pack statue-still, not just blind to one designer. Bare form toggles;
+    // an explicit on/off is idempotent so the placer can assert a state on
+    // open and close without tracking what the user toggled by hand.
+    const wanted = freezeMatch[1] ? freezeMatch[1].toLowerCase() === 'on' : undefined;
+    const frozen = ctx.setDevMobsFrozen(wanted);
+    emitDevLog(
+      ctx,
+      pid,
+      frozen
+        ? '[dev] Mobs FROZEN in place: no wander, no aggro, no swings (place freely).'
+        : '[dev] Mobs unfrozen: the world moves again.',
+    );
+    return null;
+  }
+
+  if (/^\/(?:dev\s+noaggro|devnoaggro)\s*$/i.test(raw)) {
+    const entity = ctx.entities.get(pid);
+    if (entity) {
+      entity.devNoAggro = !entity.devNoAggro;
+      emitDevLog(
+        ctx,
+        pid,
+        entity.devNoAggro
+          ? '[dev] No-aggro ON: mobs will not pull you (position them freely).'
+          : '[dev] No-aggro OFF.',
+      );
+    }
+    return null;
+  }
+
+  if (/^\/(?:dev\s+immortal|devimmortal)\s*$/i.test(raw)) {
+    const entity = ctx.entities.get(pid);
+    if (entity) {
+      entity.profilerInvulnerable = !entity.profilerInvulnerable;
+      if (entity.profilerInvulnerable) {
+        entity.devGod = false;
+        entity.hp = entity.maxHp;
+        entity.resource = entity.maxResource;
+      }
+      emitDevLog(
+        ctx,
+        pid,
+        entity.profilerInvulnerable
+          ? '[dev] Immortal mode ON (normal outgoing damage).'
+          : '[dev] Immortal mode OFF.',
+      );
+    }
+    return null;
+  }
+
+  const ignivarRaidMatch = raw.match(/^\/(?:dev\s+ignivarraid|devignivarraid)(?:\s+(boss))?\s*$/i);
+  if (ignivarRaidMatch) {
+    const player = ctx.entities.get(pid);
+    const currentRoom = player ? instanceInfoAt(ctx, player.pos)?.dungeonId : null;
+    const skipToBoss = ignivarRaidMatch[1]?.toLowerCase() === 'boss';
+    if (currentRoom === IGNIVAR_FORGE_APPROACH_ID && !skipToBoss) {
+      const result = stageIgnivarDevRaidAtApproach(ctx, pid);
+      if (!result.ok) ctx.error(pid, `[dev] ${result.message}`);
+      else
+        emitDevLog(
+          ctx,
+          pid,
+          '[dev] Ignivar approach formation reset. Use /dev ignivarraid boss to move the practice raid directly to Ignivar.',
+        );
+      return null;
+    }
+    if (currentRoom !== IGNIVAR_RAID_ARENA_ID && !skipToBoss) {
+      ctx.setDungeonDifficulty('normal', pid);
+      if (!enterDungeon(ctx, IGNIVAR_RAID_ARENA_ID, pid, true)) return null;
+      const result = setupIgnivarDevRaid(ctx, pid);
+      if (!result.ok) {
+        ctx.error(pid, `[dev] ${result.message}`);
+        return null;
+      }
+      const raid = ctx.partyOf(pid);
+      if (!raid) {
+        ctx.error(pid, '[dev] The Ignivar test raid did not form.');
+        return null;
+      }
+      for (const memberId of raid.members) {
+        enterDungeon(ctx, IGNIVAR_FORGE_APPROACH_ID, memberId, true);
+      }
+      const staged = stageIgnivarDevRaidAtApproach(ctx, pid);
+      if (!staged.ok) {
+        ctx.error(pid, `[dev] ${staged.message}`);
+        return null;
+      }
+      emitDevLog(
+        ctx,
+        pid,
+        `[dev] Ignivar raid ready: ${result.allies} stationary, invulnerable allies entered the Halls of the First Tempering in a spread formation. Defeat all five automaton packs to open the Herald gate, then use /dev ignivarraid again in Ignivar's room to place the soak pods. Use /dev ignivarraid boss to skip there now.`,
+      );
+      return null;
+    }
+    if (currentRoom !== IGNIVAR_RAID_ARENA_ID) {
+      if (currentRoom === null) ctx.setDungeonDifficulty('normal', pid);
+      const travelRoster = ignivarDevRaidTravelRoster(ctx, pid);
+      if (!travelRoster.ok) {
+        ctx.error(pid, `[dev] ${travelRoster.message}`);
+        return null;
+      }
+      for (const memberId of travelRoster.memberIds) {
+        if (!enterDungeon(ctx, IGNIVAR_RAID_ARENA_ID, memberId, true)) return null;
+      }
+    }
+    const result = setupIgnivarDevRaid(ctx, pid);
+    if (!result.ok) ctx.error(pid, `[dev] ${result.message}`);
+    else {
+      emitDevLog(
+        ctx,
+        pid,
+        `[dev] Ignivar raid ${result.reused ? 'reset' : 'ready'}: ${result.allies} stationary, invulnerable allies in spread soak pods. They stay outside Brand range; join the marked pod as the fourth Shared Pyre soaker. On Heroic, Chains of the Forge links all 10 players into five proximity pairs; stay within 10 yards of your partner, and never cross another pair's chain because it severs and kills the intruder.`,
+      );
+    }
+    return null;
+  }
+
+  // [dev] The solo Nythraxis practice raid: nine anchored, invulnerable bots
+  // spread across the hall so every mechanic has targets, then the mechanic
+  // pokes (src/sim/nythraxis_dev_raid.ts).
+  const nythraxisRaidMatch = raw.match(
+    /^\/(?:dev\s+nythraxisraid|devnythraxisraid)(?:\s+(normal|heroic))?\s*$/i,
+  );
+  if (nythraxisRaidMatch) {
+    const difficulty = nythraxisRaidMatch[1]?.toLowerCase() as 'normal' | 'heroic' | undefined;
+    const result = setupNythraxisDevRaid(ctx, pid, difficulty);
+    if (!result.ok) ctx.error(pid, `[dev] ${result.message}`);
+    else {
+      emitDevLog(
+        ctx,
+        pid,
+        `[dev] Nythraxis raid ${result.reused ? 'reset' : 'ready'} (${result.difficulty === 'heroic' ? 'Heroic' : 'Normal'}): ${result.allies} stationary, invulnerable allies spread across the hall. Pull him, then /dev nyx <curse|spike|eruption|sigil|gravefire|rend|rage|storm|wards|phase2|phase3|enrage [sec]> forces a mechanic.`,
+      );
+    }
+    return null;
+  }
+  const nyxMatch = raw.match(/^\/(?:dev\s+nyx|devnyx)\s+([a-z0-9]+)(?:\s+(\d+))?\s*$/i);
+  if (nyxMatch) {
+    const verb = nyxMatch[1].toLowerCase();
+    if (!isNythraxisDevMechanic(verb)) {
+      ctx.error(
+        pid,
+        '[dev] Usage: /dev nyx <curse|spike|eruption|sigil|gravefire|rend|rage|storm|wards|phase2|phase3|enrage [sec]>.',
+      );
+      return null;
+    }
+    const result = pokeNythraxisDevMechanic(
+      ctx,
+      pid,
+      verb,
+      nyxMatch[2] === undefined ? undefined : Number(nyxMatch[2]),
+    );
+    if (!result.ok) ctx.error(pid, `[dev] ${result.message}`);
+    else emitDevLog(ctx, pid, `[dev] ${result.message}`);
+    return null;
+  }
+
+  const varkhulRaidMatch = raw.match(
+    /^\/(?:dev\s+varkhulraid|devvarkhulraid)(?:\s+(normal|heroic))?\s*$/i,
+  );
+  if (varkhulRaidMatch) {
+    const difficulty = varkhulRaidMatch[1]?.toLowerCase() as 'normal' | 'heroic' | undefined;
+    const result = setupVarkhulDevRaid(ctx, pid, difficulty);
+    if (!result.ok) ctx.error(pid, `[dev] ${result.message}`);
+    else {
+      emitDevLog(
+        ctx,
+        pid,
+        `[dev] Varkhul raid ${result.reused ? 'reset' : 'ready'} (${result.difficulty === 'heroic' ? 'Heroic' : 'Normal'}): ${result.allies} stationary, invulnerable allies spread around the Inner Crucible. Use /dev varkhulraid normal or /dev varkhulraid heroic to rebuild the room at that difficulty.`,
+      );
     }
     return null;
   }
@@ -749,7 +1069,7 @@ export function handleDevChat(
   if (/^\/dev(?:\s|$)/i.test(raw)) {
     ctx.error(
       pid,
-      'Dev commands: /dev gui, /dev level, /dev tp, /dev spawn, /dev despawn, /dev killtarget, /dev give, /dev kit, /dev mounts, /dev mountquest, /dev gold, /dev quest, /dev quests, /dev attune, /dev mobilestation, /dev gather, /dev bot, /dev vendor, /dev bg, /dev bis, /dev lfg, /dev portal [seed] [level] [C|B|A|S] [infernal|random], /dev cascade, /dev sandbox, /dev smite, /dev god, /dev heal, /dev hp <1-100>, /dev resource, /dev cooldowns, /dev revive, /dev combatreset, /dev dungeon, /dev raid, /dev kill',
+      'Dev commands: /dev gui, /dev level, /dev tp, /dev spawn, /dev despawn, /dev killtarget, /dev give, /dev kit, /dev mounts, /dev mountquest, /dev gold, /dev quest, /dev quests, /dev attune, /dev mobilestation, /dev gather, /dev bot, /dev vendor, /dev bg, /dev bis, /dev lfg, /dev portal [seed] [level] [C|B|A|S] [infernal|random], /dev cascade, /dev sandbox, /dev smite, /dev god, /dev noaggro, /dev freezemobs, /dev immortal, /dev ignivarraid [boss], /dev varkhulraid [normal|heroic], /dev nythraxisraid [normal|heroic], /dev nyx <mechanic> [sec], /dev heal, /dev hp <1-100>, /dev resource, /dev cooldowns, /dev revive, /dev combatreset, /dev daze, /dev fear, /dev dungeon, /dev raid, /dev kill',
     );
     return null;
   }

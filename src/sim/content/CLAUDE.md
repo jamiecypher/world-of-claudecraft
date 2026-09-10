@@ -18,8 +18,13 @@ instead of the `data.ts` spread: `mailboxes.ts`/`letters.ts` (mail,
 `enchants.ts` (`src/sim/professions/enchanting.ts`), `dungeon_difficulty.ts`
 (`src/sim/instances/`), `vendor_row_gates.ts` (the vendor buy path in
 `src/sim/items.ts` and, sharing the one resolver, the vendor window's pure view
-core). All shapes are typed in `../types.ts`: add a field there first if you
-need one.
+core), `farm_patches.ts` (garden-bed geography plus the farming persistence
+allowlists, read directly by `sim.ts` and, as a static IWorld read, by
+`src/net/online.ts`; deliberately fishing-shaped, never a `GatherNodeType`).
+All shapes are typed in `../types.ts`: add a field there first if you
+need one. (`farm_patches.ts` is the exception: its defs are
+its own persisted-key contract, typed in-file with the destroy-on-load rename
+warnings.)
 
 ## Where a new thing lands
 - **New content RECORD** (mob/quest/item/ability/zone/recipe/node): a declarative
@@ -75,8 +80,12 @@ you cannot infer from the file alone.
   requirements on NPC vendor rows, plus the one resolver both the authoritative
   buy path and the vendor view call), `profession_items.ts` (corpse-harvest
   components, Pristine specimens, master-stocked reagents; crafting materials
-  are common/white ON PURPOSE so the junk sweep never vendors a reagent).
-  Mechanics live in `src/sim/professions/`, never here.
+  are common/white ON PURPOSE so the junk sweep never vendors a reagent),
+  `farm_patches.ts` (`FARM_PATCHES` garden-bed
+  sites, deep-frozen, plus the `FARM_BED_IDS`/`FARM_CROP_IDS` persistence
+  allowlists; bed and crop ids are PERSISTED SAVE KEYS, never rename; placement
+  guarded by `tests/farm_patch_placement.test.ts`). Mechanics live in
+  `src/sim/professions/`, never here.
 - **Mounts:** `mounts.ts`, the declarative mount catalog (`MountKey` keyed),
   shared by the Sim's gates/hooks, the renderer's GLB mapping, and the HUD
   Mounts window. Every mount is a GROUND mount by design (no flying); the
@@ -122,14 +131,15 @@ cross-reference it; do not invent costs/levels/damage.
 FIXTURE, not just data, so it inherits the screens `generateDecorations`
 (`src/sim/world.ts`) applies to procedurally seated props: a yard of freeboard
 over the water surface, walkable slope, no collider overlap, clear of a road, and
-outside a reserved venue footprint such as `SOWFIELD_EXCLUDE` (the boarball
-ground). Two guards own parts of that: `tests/placement_integrity.test.ts` walks
-the calm-pad roster for classic ground and road reachability, and
+outside a reserved venue footprint (the retired Sowfield's exclusion shell was
+the exemplar; the New Eastbrook town reserve is the successor). Two guards own
+parts of that: `tests/placement_integrity.test.ts` walks the calm-pad roster
+for classic ground and road reachability, and
 `tests/gather_node_placement.test.ts` holds every gather-node coordinate to the
 full list. Neither covers a NEW fixture category by itself, so a new authored
 placement type needs its own coordinate arm in the same change. Skipping this has
 shipped twice: six herb patches on a lake floor, and a sheenleaf patch growing
-inside the Vale Cup pitch.
+inside the old boarball pitch.
 - **Quest:** add to the owning zone module's `<NAME>_QUESTS` (legacy trio:
   `ZONE{N}_QUESTS`) with `giverNpcId`, `turnInNpcId` (or `turnInNpcIds`
   for multiple valid turn-ins), `text`, `objectives[]` of `{type:'kill',targetMobId}`,
@@ -161,7 +171,11 @@ inside the Vale Cup pitch.
   contract. Read the item's live name, quest/recipe relationship, set, and tier
   data before approving art; old icon subject matter is not authoritative when it
   contradicts content. Generated Heroic variants intentionally inherit their base
-  item's painting.
+  item's painting. A new rare-or-better EQUIPPABLE whose source level lands at
+  20 or above also joins the level-20 shelf sweep in
+  `tests/crafted_wearability.test.ts`, whose membership count is pinned
+  EXACTLY (its own comment says why); re-pin it deliberately in the same
+  change.
 - **Gather node:** add a `GatherNodeDef` (typed in `../types.ts`) to
   `gather_nodes.ts`; `level` is a one-time snapshot of the zone's `levelRange`
   midpoint, not a live lookup. Yield/respawn per node TYPE lives in
@@ -172,7 +186,7 @@ inside the Vale Cup pitch.
   `tests/gather_node_placement.test.ts` holds it to dry ground both under the
   prop AND across its whole `INTERACT_RANGE` harvest reach (a gatherer never
   wades to work a patch), plus slope, burial, hub reachability, zone containment,
-  spacing, named-mob clearance, and the Sowfield screen. Run it after moving any
+  spacing, and named-mob clearance. Run it after moving any
   `pos`. Tests: `tests/gather_nodes.test.ts`, `tests/gather_node_harvest.test.ts`,
   `tests/gather_node_placement.test.ts`.
 
@@ -211,6 +225,29 @@ The S3 guard mechanism and its blind spots are documented in `src/sim/CLAUDE.md`
   `src/ui/i18n.locales/<lang>.ts` overlays). Numbers baked into `description` copy
   (e.g. "15% harder") are part of the copy; don't hand-build money/number strings as
   gameplay data: the engine formats those for display.
+
+## Naming originality (the IP rule): verify BEFORE a name ships
+Every new player-visible proper noun authored in this directory (item, material,
+recipe output, mob, NPC name or title, quest name, zone, POI label, graveyard label,
+dungeon, delve, ability, talent/spec/mastery name, choice-row option, deed name or
+title, enchant, mount, weapon skin, augment, rift theme noun) is checked for
+collisions with other games in the SAME change that adds it, never retroactively:
+- **The bar:** never reuse a coined term (an invented token: "Arcanite",
+  "Eldershine", "Gloamkin") or a full name distinctive to another game or franchise
+  in the same role ("Fleetmend" as a heal, "Tombpetal" as armor). Generic words and
+  shared fantasy English never count ("Iron Sword", "Fireball"); a term used across
+  many unrelated properties is shared vocabulary, not a collision.
+- **The check:** for any coined-looking token or distinctive multi-word name, run a
+  quoted exact-phrase web search plus a coined-token search against the major game
+  wikis (WoW, RuneScape, FFXIV, GW2, ESO, Diablo, PoE at minimum). Record borderline
+  verdicts in the PR so the reviewer sees the call.
+- **If a shipped name collides anyway:** the rename is DISPLAY-ONLY (ids are frozen
+  and never change). The English moves in the content def and the i18n catalog
+  together, sim_i18n matcher rows update in the same change (S3 guard), the five
+  non-Latin overlays get real fills of the new name (M16), stale Latin overlay rows
+  strip to pending for the release fill, guide content is regenerated, and the new
+  literal gets a pin in `tests/originality_renames.test.ts`. The audited catalog of
+  every shipped name and the worked protocol: `docs/design/naming-audit.md`.
 
 ## This data also feeds the public Guide/wiki
 The Guide at `/wiki` (`src/guide/`) is generated from THIS directory, so player-facing
@@ -304,7 +341,12 @@ contract is `docs/design/reliquary.md`.
   are display-only through the i18n catalog; the id stays frozen. Watch the
   generated tier too: dropping a base item from a mob's `loot[]` also deletes its
   generated `heroic_<id>` variant def, which players may hold. Only an item that
-  never left your unmerged feature branch may be deleted outright.
-  `tests/shipped_item_ids.test.ts` pins every shipped id against `ITEMS`
-  (append-only golden; after a release re-mint with `UPDATE_SHIPPED_ITEMS=1` and
-  review the diff as additions-only).
+  never left your unmerged feature branch may be deleted outright, and note that
+  escape is closed in practice on a branch whose ids are already pinned (see the
+  cadence below). `tests/shipped_item_ids.test.ts` pins every shipped id against
+  `ITEMS` (append-only golden; re-mint PER CONTENT CHANGE, in the same commit
+  that mints the id, with `UPDATE_SHIPPED_ITEMS=1`, and review the diff as
+  additions-only). AMENDED 2026-09-01 by masterwrought ruling
+  qr-19-shipped-id-golden-remint-cadence: this used to read "after a release",
+  which is not what any content change here has ever done, and the check is a
+  subset filter so nothing ever red-flagged the drift.

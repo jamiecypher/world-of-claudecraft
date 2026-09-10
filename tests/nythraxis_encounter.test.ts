@@ -96,13 +96,26 @@ describe('Nythraxis encounter module (N1)', () => {
   });
 
   it('transitions to phase two at 70%: room War Stomp stun + Aldric + lit wardstones', () => {
-    const { ctx, boss, tank } = setup();
+    const { sim, ctx, boss, tank } = setup();
     boss.hp = Math.floor(boss.maxHp * 0.69);
     nythraxis.updateNythraxisEncounter(ctx, boss);
     expect(boss.nythraxis?.phase).toBe('transition');
     expect(tank.auras.find((a) => a.id === 'nythraxis_transition_stun')).toMatchObject({
       unbreakableControl: true,
     });
+    // The transition slam carries its VFX routing id: with none, the render
+    // side could never resolve this cue to a spec (see the constant's header
+    // for why it is not the display string 'Shuddering Stomp').
+    expect(sim.events).toContainEqual(
+      expect.objectContaining({
+        type: 'spellfx',
+        sourceId: boss.id,
+        targetId: boss.id,
+        school: 'physical',
+        fx: 'nova',
+        ability: nythraxis.NYTHRAXIS_SHUDDERING_STOMP_CAST_ID,
+      }),
+    );
     const aldric = [...ctx.entities.values()].find(
       (e) => e.templateId === 'brother_aldric_raid' && !e.dead,
     );
@@ -332,6 +345,69 @@ describe('Nythraxis encounter module (N1)', () => {
     expect(b.hp).toBe(250);
   });
 
+  it('a Direhowl debuff on the boss cannot save an unstacked heroic Soul Rend mark', () => {
+    // Same fix and reasoning as the Deathless Rage case above: an unstacked
+    // heroic mark (150% of max hp, share 1) is the "guaranteed kill through
+    // any topped-off health bar" this file's own comment promises.
+    const { ctx, boss, dps } = setup({ difficulty: 'heroic', dpsCount: 7 });
+    const st = nythraxis.initNythraxisEncounter(boss);
+    st.phase = 2;
+    const [a] = dps;
+    a.maxHp = 1000;
+    a.hp = 1000;
+    st.soulRendMarks = [{ playerId: a.id, remaining: 0 }];
+    ctx.applyAura(boss, {
+      id: 'demoralizing_shout_ap',
+      name: 'Direhowl',
+      kind: 'buff_dmg_done',
+      remaining: 20,
+      duration: 20,
+      value: -0.2,
+      sourceId: a.id,
+      school: 'physical',
+    });
+
+    nythraxis.updateNythraxisSoulRend(ctx, boss, st);
+
+    expect(a.dead).toBe(true);
+  });
+
+  it('a Direhowl debuff still mitigates a stacked heroic Soul Rend split', () => {
+    // A stacked pair (75% each) was never claimed as a guaranteed kill, so
+    // Direhowl mitigating it is the ability working as intended, not the bug
+    // the unstacked case above guards against.
+    const { ctx, boss, dps } = setup({ difficulty: 'heroic', dpsCount: 7 });
+    const st = nythraxis.initNythraxisEncounter(boss);
+    st.phase = 2;
+    const [a, b] = dps;
+    b.pos = { ...a.pos };
+    a.maxHp = 1000;
+    a.hp = 1000;
+    b.maxHp = 1000;
+    b.hp = 1000;
+    st.soulRendMarks = [
+      { playerId: a.id, remaining: 0 },
+      { playerId: b.id, remaining: 0 },
+    ];
+    ctx.applyAura(boss, {
+      id: 'demoralizing_shout_ap',
+      name: 'Direhowl',
+      kind: 'buff_dmg_done',
+      remaining: 20,
+      duration: 20,
+      value: -0.2,
+      sourceId: a.id,
+      school: 'physical',
+    });
+
+    nythraxis.updateNythraxisSoulRend(ctx, boss, st);
+
+    // Unmitigated leaves 250 each (see the 75%-per-pair test above); the -20%
+    // Direhowl cut on top of the 75% hit leaves more.
+    expect(a.hp).toBe(400);
+    expect(b.hp).toBe(400);
+  });
+
   it('heroic Deathless Rage is lethal on a failed wardstone channel (115% max hp)', () => {
     const heroic = setup({ difficulty: 'heroic' });
     let st = nythraxis.initNythraxisEncounter(heroic.boss);
@@ -357,6 +433,89 @@ describe('Nythraxis encounter module (N1)', () => {
     for (const p of [normal.tank, ...normal.dps]) {
       expect(p.dead).toBe(false);
       expect(p.hp).toBe(180);
+    }
+  });
+
+  it('a Direhowl debuff on the boss cannot save the raid from a failed heroic channel', () => {
+    // Direhowl (demoralizing_shout) lands a -20% buff_dmg_done aura on the boss
+    // (effect_dispatch.ts aoeAttackPower pct form). Deathless Rage on a failed
+    // heroic channel is a scripted, rng-free wipe calibrated at 115% of max hp
+    // specifically so it clears the raid outright; it must not be pulled back
+    // under 100% just because a warrior timed a raid cooldown on the boss.
+    const heroic = setup({ difficulty: 'heroic' });
+    const st = nythraxis.initNythraxisEncounter(heroic.boss);
+    st.phase = 2;
+    st.deathlessCastRemaining = 0.01; // completes this update, no channels ran
+    for (const p of [heroic.tank, ...heroic.dps]) {
+      p.maxHp = 1000;
+      p.hp = 1000;
+    }
+    heroic.ctx.applyAura(heroic.boss, {
+      id: 'demoralizing_shout_ap',
+      name: 'Direhowl',
+      kind: 'buff_dmg_done',
+      remaining: 20,
+      duration: 20,
+      value: -0.2,
+      sourceId: heroic.tank.id,
+      school: 'physical',
+    });
+    nythraxis.updateNythraxisDeathlessRage(heroic.ctx, heroic.boss, st);
+    for (const p of [heroic.tank, ...heroic.dps]) expect(p.dead).toBe(true);
+  });
+
+  it('Veilbound Mark on the boss cannot save a full-health player from failed heroic Deathless Rage', () => {
+    const heroic = setup({ difficulty: 'heroic' });
+    const st = nythraxis.initNythraxisEncounter(heroic.boss);
+    st.phase = 2;
+    st.deathlessCastRemaining = 0.01; // completes this update, no channels ran
+    heroic.tank.maxHp = 1000;
+    heroic.tank.hp = 1000;
+    heroic.ctx.applyAura(heroic.boss, {
+      id: 'veilbound_mark',
+      name: 'Veil Mark',
+      kind: 'dot',
+      remaining: 6,
+      duration: 6,
+      value: 12,
+      sourceId: heroic.tank.id,
+      school: 'holy',
+    });
+
+    nythraxis.updateNythraxisDeathlessRage(heroic.ctx, heroic.boss, st);
+
+    expect(heroic.tank.dead).toBe(true);
+  });
+
+  it('a Direhowl debuff still mitigates the survivable normal-mode Deathless Rage hit', () => {
+    // Normal's 82% was never calibrated as a guaranteed kill (unlike heroic's
+    // 115%), so the alreadyFinal skip above must stay heroic-only: Direhowl
+    // reducing an ordinary, survivable hit is the ability working as intended,
+    // not the bug this file's heroic test guards against.
+    const normal = setup();
+    const st = nythraxis.initNythraxisEncounter(normal.boss);
+    st.phase = 2;
+    st.deathlessCastRemaining = 0.01;
+    for (const p of [normal.tank, ...normal.dps]) {
+      p.maxHp = 1000;
+      p.hp = 1000;
+    }
+    normal.ctx.applyAura(normal.boss, {
+      id: 'demoralizing_shout_ap',
+      name: 'Direhowl',
+      kind: 'buff_dmg_done',
+      remaining: 20,
+      duration: 20,
+      value: -0.2,
+      sourceId: normal.tank.id,
+      school: 'physical',
+    });
+    nythraxis.updateNythraxisDeathlessRage(normal.ctx, normal.boss, st);
+    // Unmitigated normal Deathless Rage leaves 180 hp (see the 115%/82% test
+    // above); the -20% Direhowl cut on top of the 82% hit leaves more.
+    for (const p of [normal.tank, ...normal.dps]) {
+      expect(p.dead).toBe(false);
+      expect(p.hp).toBe(344);
     }
   });
 
@@ -408,31 +567,56 @@ describe('Nythraxis encounter module (N1)', () => {
     expect(boss.auras.some((a) => a.id === 'nythraxis_deathless_stun')).toBe(true);
   });
 
-  it('heroic Dread Curse stacks on the active tank and resets on a tank swap', () => {
-    const { ctx, boss, tank, dps } = setup({ difficulty: 'heroic' });
-    const st = nythraxis.initNythraxisEncounter(boss);
-    st.phase = 1;
-    st.dreadCurseTimer = 0.01;
-    nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
-    let curse = tank.auras.find((a) => a.id === 'nythraxis_dread_curse');
-    expect(curse?.stacks).toBe(1);
-    expect(curse?.value).toBeCloseTo(0.1);
+  it('Dread Curse stacks on the aggro holder on BOTH difficulties and survives a tank swap', () => {
+    for (const difficulty of ['normal', 'heroic'] as const) {
+      const { sim, ctx, boss, tank, dps } = setup({ difficulty });
+      const st = nythraxis.initNythraxisEncounter(boss);
+      st.phase = 1;
+      const perStack = difficulty === 'heroic' ? 0.45 : 0.35;
+      st.dreadCurseTimer = 0.01;
+      nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
+      let curse = tank.auras.find((a) => a.id === 'nythraxis_dread_curse');
+      expect(curse?.stacks, difficulty).toBe(1);
+      expect(curse?.value, difficulty).toBeCloseTo(perStack);
+      expect(curse?.kind, difficulty).toBe('vuln_source');
+      expect(curse?.encounterOwned, difficulty).toBe(true);
+      expect(st.dreadCurseTimer, difficulty).toBe(12);
 
-    st.dreadCurseTimer = 0.01;
-    nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
-    curse = tank.auras.find((a) => a.id === 'nythraxis_dread_curse');
-    expect(curse?.stacks).toBe(2);
-    expect(curse?.value).toBeCloseTo(0.2);
+      st.dreadCurseTimer = 0.01;
+      nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
+      curse = tank.auras.find((a) => a.id === 'nythraxis_dread_curse');
+      expect(curse?.stacks, difficulty).toBe(2);
+      expect(curse?.value, difficulty).toBeCloseTo(perStack * 2);
+      // The second stack is the swap point: the raid gets the callout once.
+      const swapCalls = (sim.events as Array<{ type: string; call?: string }>).filter(
+        (e) => e.type === 'nythraxisCallout' && e.call === 'dreadCurseSwap',
+      );
+      expect(swapCalls.length, difficulty).toBeGreaterThan(0);
 
-    boss.aggroTargetId = dps[0].id;
-    st.dreadCurseTimer = 0.01;
-    nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
-    const swapped = dps[0].auras.find((a) => a.id === 'nythraxis_dread_curse');
-    expect(swapped?.stacks).toBe(1);
-    expect(swapped?.value).toBeCloseTo(0.1);
+      // The swap: the new tank starts at zero while the old tank KEEPS his
+      // stacks (they expire on their own), which is what forces the rotation.
+      boss.aggroTargetId = dps[0].id;
+      teleport(sim, dps[0], boss.pos.x, boss.pos.z - 4, boss.pos.y);
+      st.dreadCurseTimer = 0.01;
+      nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
+      const swapped = dps[0].auras.find((a) => a.id === 'nythraxis_dread_curse');
+      expect(swapped?.stacks, difficulty).toBe(1);
+      expect(tank.auras.find((a) => a.id === 'nythraxis_dread_curse')?.stacks, difficulty).toBe(2);
+    }
   });
 
-  it('heroic wardstone interrupt leads to a three second add summon channel', () => {
+  it('Dread Curse holds while the aggro holder is out of melee reach', () => {
+    const { sim, ctx, boss, tank } = setup();
+    const st = nythraxis.initNythraxisEncounter(boss);
+    st.phase = 1;
+    teleport(sim, tank, boss.pos.x, boss.pos.z - 30, boss.pos.y);
+    st.dreadCurseTimer = 0.01;
+    nythraxis.updateNythraxisDreadCurse(ctx, boss, st);
+    expect(tank.auras.some((a) => a.id === 'nythraxis_dread_curse')).toBe(false);
+    expect(st.dreadCurseTimer).toBe(1);
+  });
+
+  it('heroic wardstone interrupt raises no court while the redo fields no adds', () => {
     const { sim, ctx, boss, dps } = setup({ difficulty: 'heroic' });
     const st = nythraxis.initNythraxisEncounter(boss);
     st.phase = 2;
@@ -454,12 +638,20 @@ describe('Nythraxis encounter module (N1)', () => {
     nythraxis.updateNythraxisDeathlessRage(ctx, boss, st);
     expect(st.deathlessStunRemaining).toBeGreaterThan(0);
 
+    // Owner playtest call 2026-09-04 (NYTHRAXIS_ADDS_ENABLED in types.ts): the
+    // encounter loop never starts the court summon behind the interrupt stun.
     st.deathlessStunRemaining = 0.01;
+    const before = boss.summonedIds.length;
     nythraxis.updateNythraxisEncounter(ctx, boss);
+    expect(st.heroicSummonChannelRemaining ?? 0).toBe(0);
+    expect(boss.castingAbility).not.toBe('nythraxis_heroic_summon');
+    expect(boss.summonedIds).toHaveLength(before);
+
+    // The three second channel itself stays authored for the day the switch
+    // flips back: started directly, it still resolves into the three court members.
+    nythraxis.startNythraxisHeroicSummon(ctx, boss, st);
     expect(st.heroicSummonChannelRemaining).toBeGreaterThan(0);
     expect(boss.castingAbility).toBe('nythraxis_heroic_summon');
-
-    const before = boss.summonedIds.length;
     for (let i = 0; i < 20 * 3 + 1; i++) nythraxis.updateNythraxisHeroicSummon(ctx, boss, st);
     const spawned = boss.summonedIds
       .slice(before)

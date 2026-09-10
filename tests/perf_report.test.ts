@@ -10,6 +10,11 @@ vi.mock('../server/db', () => ({
 import { accountAndScopeForToken, getCharacter, insertClientPerfReport } from '../server/db';
 import { handlePerfReport, perfReportInternalsForTest } from '../server/perf_report';
 import { resetRateLimitClock, setRateLimitClock } from '../server/ratelimit';
+import {
+  PREWARM_REPORT_BUDGET_VARIANTS,
+  PREWARM_REPORT_COMPILE_UNITS,
+  PREWARM_REPORT_TRANSITIONS,
+} from '../src/game/perf_prewarm_lists_core';
 
 // PERF_REPORT_MAX_PER_MINUTE / PERF_REPORT_WINDOW_MS are un-exported constants in
 // server/perf_report; mirror them here (30 posts per 60s window per IP).
@@ -124,6 +129,12 @@ describe('perf report ingestion', () => {
         graphicsPreset: 'ultra',
         gfxTier: 'ultra',
         glRendererBucket: 'apple-m2',
+        // The renderer string used to be dropped after bucketing; it is stored
+        // as received now, beside its parsed family and form-factor verdict.
+        glRendererRaw: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M2)',
+        glModel: 'apple-m2',
+        glLaptop: null,
+        gpuHpAdapter: '',
         browserFamily: 'safari',
         osFamily: 'macos',
         viewportBucket: 'large-1440x900',
@@ -222,6 +233,27 @@ describe('perf report ingestion', () => {
     // cross-boundary pin is the drift guard.
     const { CROWD_BUCKET_LABELS } = await import('../src/game/crowd_bucket');
     expect([...perfReportInternalsForTest.CROWD_BUCKET_LABELS]).toEqual([...CROWD_BUCKET_LABELS]);
+  });
+
+  it('keeps the client and server prewarm list caps in lockstep', async () => {
+    // Same deliberate-copy pattern as the crowd labels and the schema version:
+    // server/ cannot import src/game, so the two constant sets are written
+    // twice. Nothing else notices if one side is lowered and the other is not,
+    // and the consequence is silent: the server would keep trimming a list the
+    // client already trimmed, or store more than the client's own budget
+    // reasoning assumed.
+    expect(perfReportInternalsForTest.PREWARM_COMPILE_UNITS_MAX).toBe(PREWARM_REPORT_COMPILE_UNITS);
+    expect(perfReportInternalsForTest.PREWARM_BUDGET_VARIANTS_MAX).toBe(
+      PREWARM_REPORT_BUDGET_VARIANTS,
+    );
+    expect(perfReportInternalsForTest.PREWARM_PACING_TRANSITIONS_MAX).toBe(
+      PREWARM_REPORT_TRANSITIONS,
+    );
+    // And to literals, so lowering BOTH sides in lockstep still has to be a
+    // deliberate edit here rather than a silent drift.
+    expect(perfReportInternalsForTest.PREWARM_COMPILE_UNITS_MAX).toBe(12);
+    expect(perfReportInternalsForTest.PREWARM_BUDGET_VARIANTS_MAX).toBe(8);
+    expect(perfReportInternalsForTest.PREWARM_PACING_TRANSITIONS_MAX).toBe(12);
   });
 
   it('keeps the client and server schema versions in lockstep', async () => {
@@ -411,12 +443,268 @@ describe('perf report ingestion', () => {
     );
   });
 
+  it('stores the graphics backend derived from the adapter name, beside the coarse bucket', async () => {
+    // The two fields answer different questions off the SAME string: the bucket
+    // says whose hardware, gl_backend says which API. This is the pin that the
+    // backend is read from body.glRenderer and NOT from the bucket, which has
+    // already discarded the API token for every recognised vendor.
+    vi.mocked(insertClientPerfReport).mockClear();
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'backend-d3d11',
+          glRenderer:
+            'ANGLE (NVIDIA, NVIDIA GeForce RTX 3090 (0x00002204) Direct3D11 vs_5_0 ps_5_0, D3D11)',
+          rawSummary: {},
+        },
+        { remoteAddress: '203.0.113.90' },
+      ),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({ glRendererBucket: 'nvidia', glBackend: 'd3d11' }),
+    );
+
+    vi.mocked(insertClientPerfReport).mockClear();
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'backend-gles',
+          glRenderer: 'ANGLE (Qualcomm, Adreno (TM) 730, OpenGL ES 3.2)',
+          rawSummary: {},
+        },
+        { remoteAddress: '203.0.113.91' },
+      ),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({ glBackend: 'opengl-es' }),
+    );
+
+    // A report with no adapter name stores 'unknown', never an empty string, so
+    // the grouped column never carries two spellings of the same absence.
+    vi.mocked(insertClientPerfReport).mockClear();
+    await handlePerfReport(
+      fakeReq({ sessionId: 'backend-absent', rawSummary: {} }, { remoteAddress: '203.0.113.92' }),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({ glBackend: 'unknown' }),
+    );
+  });
+
   it('keeps GPU bucketing coarse', () => {
     expect(perfReportInternalsForTest.bucketGpu('Google SwiftShader')).toBe('software');
     expect(
       perfReportInternalsForTest.bucketGpu('ANGLE (Intel, Intel(R) Iris(TM) Plus Graphics 655)'),
     ).toBe('intel-iris');
     expect(perfReportInternalsForTest.bucketGpu('ANGLE (AMD Radeon Pro)')).toBe('amd');
+  });
+
+  it('stores the raw renderer string beside a parsed model and laptop verdict', async () => {
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'gpu-model-laptop',
+          glRenderer:
+            'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x000028A0) Direct3D11 vs_5_0 ps_5_0, D3D11-32.0.15.6094)',
+          rawSummary: {},
+        },
+        { remoteAddress: '203.0.113.90' },
+      ),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // The vendor bucket stays coarse: this row and a desktop 3060 are the
+        // same 'nvidia' there, which is exactly why the model block exists.
+        glRendererBucket: 'nvidia',
+        glRendererRaw:
+          'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 Laptop GPU (0x000028A0) Direct3D11 vs_5_0 ps_5_0, D3D11-32.0.15.6094)',
+        glModel: 'nvidia-rtx-4070',
+        glLaptop: true,
+      }),
+    );
+  });
+
+  it('clamps the stored renderer string to the wire bound and never stores a client bucket', async () => {
+    const oversized = `ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 ${'x'.repeat(400)})`;
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'gpu-model-clamp',
+          glRenderer: oversized,
+          // A hostile client cannot hand the server a family key: gl_model is
+          // parsed server-side from the renderer string, never accepted.
+          glModel: 'nvidia-rtx-4090',
+          glLaptop: true,
+          glRendererRaw: 'attacker supplied',
+          rawSummary: {},
+        },
+        { remoteAddress: '203.0.113.91' },
+      ),
+      fakeRes(),
+    );
+    const row = vi.mocked(insertClientPerfReport).mock.calls.at(-1)?.[0];
+    expect(row?.glRendererRaw).toBe(oversized.slice(0, 160));
+    expect(row?.glRendererRaw.length).toBe(160);
+    expect(row?.glModel).toBe('nvidia-rtx-3060');
+    expect(row?.glLaptop).toBe(false);
+  });
+
+  it('buckets the WebGPU high-performance adapter with the same parser, and stores nothing without one', async () => {
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'gpu-hp-adapter',
+          glRenderer: 'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x000046A6) Direct3D11)',
+          // The mismatch this column exists to find: the page renders on the
+          // iGPU while the high-performance adapter names a discrete part.
+          // This is the adapter text a browser that fills description hands
+          // over (Chrome behind WebGPUDeveloperFeatures, and the shape the
+          // spec allows); the default-Chrome shape is the next test.
+          gpuHpAdapter: 'NVIDIA NVIDIA GeForce RTX 4070 Laptop GPU',
+          rawSummary: {},
+        },
+        { remoteAddress: '203.0.113.92' },
+      ),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({ glModel: 'intel-iris-xe', gpuHpAdapter: 'nvidia-rtx-4070' }),
+    );
+
+    // A client with no WebGPU (or one older than the probe) stores '', not the
+    // 'other' key: the summary reads '' as "no evidence" and skips the row.
+    await handlePerfReport(
+      fakeReq(
+        { sessionId: 'gpu-hp-adapter-absent', glRenderer: 'Mali-G78 MP20', rawSummary: {} },
+        { remoteAddress: '203.0.113.93' },
+      ),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({ glModel: 'arm-mali-g78', glLaptop: null, gpuHpAdapter: '' }),
+    );
+  });
+
+  it('stores the vendor-only key a DEFAULT Chrome adapter yields, beside a model-level renderer', async () => {
+    // What a normal page actually reads. Chrome populates GPUAdapterInfo.device
+    // and .description only behind its WebGPUDeveloperFeatures runtime flag, so
+    // describeGpuAdapterInfo joins vendor and architecture and nothing else:
+    // "apple metal-3" beside a WebGL string that parses to 'apple-m4-pro'. The
+    // two keys are DIFFERENT on a machine with ONE GPU, which is why the
+    // summary compares their leading vendor segment and not the whole key
+    // (server/admin_db.ts, pinned in tests/server/client_perf_summary_sql.test.ts).
+    const singleGpuMachines: [string, string, string, string][] = [
+      [
+        'chrome-adapter-apple',
+        'ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Pro, Unspecified Version)',
+        'apple metal-3',
+        'apple',
+      ],
+      [
+        'chrome-adapter-nvidia',
+        'ANGLE (NVIDIA, NVIDIA GeForce RTX 4070 (0x00002786) Direct3D11 vs_5_0 ps_5_0, D3D11)',
+        'nvidia ampere',
+        'nvidia',
+      ],
+      [
+        'chrome-adapter-intel',
+        'ANGLE (Intel, Intel(R) Iris(R) Xe Graphics (0x000046A6) Direct3D11)',
+        'intel gen-12lp',
+        'intel',
+      ],
+      [
+        'chrome-adapter-amd',
+        'ANGLE (AMD, AMD Radeon RX 6700 XT (0x000073DF) Direct3D11 vs_5_0 ps_5_0, D3D11)',
+        'amd rdna-2',
+        'amd',
+      ],
+    ];
+    for (const [sessionId, glRenderer, gpuHpAdapter, vendor] of singleGpuMachines) {
+      await handlePerfReport(
+        fakeReq(
+          { sessionId, glRenderer, gpuHpAdapter, rawSummary: {} },
+          { remoteAddress: '203.0.113.96' },
+        ),
+        fakeRes(),
+      );
+      const row = vi.mocked(insertClientPerfReport).mock.calls.at(-1)?.[0];
+      // Vendor-only on the adapter side, model-level on the renderer side.
+      expect(row?.gpuHpAdapter).toBe(vendor);
+      expect(row?.glModel).not.toBe(vendor);
+      expect(row?.glModel.split('-')[0]).toBe(vendor);
+    }
+  });
+
+  it('strips control characters so a NUL-bearing beacon still inserts', async () => {
+    // Postgres REJECTS U+0000 in a text parameter, so one NUL anywhere in a
+    // renderer or vendor string used to fail the whole INSERT and lose the
+    // entire report, not just the offending field. The sanitizer strips C0 and
+    // DEL from every text field rather than rejecting the beacon, on the same
+    // principle as every other clamp here.
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'gpu-model-control-chars',
+          glRenderer: 'ANGLE (NVIDIA,' + '\u0000' + ' NVIDIA GeForce RTX 3060 (0x00002504))',
+          glVendor: 'NVIDIA' + '\u007f' + 'Corporation',
+          gpuHpAdapter: 'NVIDIA' + '\u0007' + ' GeForce RTX 3060',
+          // raw_summary is jsonb, and jsonb rejects the NUL escape exactly as a
+          // text parameter rejects the character: a beacon controls both the
+          // KEYS and the values here, and no field clamp above sees either.
+          rawSummary: {
+            'zone\u0000name': 'eastbrook\u0000town',
+            nested: ['a\u0000b', { deep: 'c\u0000d' }],
+          },
+        },
+        { remoteAddress: '203.0.113.95' },
+      ),
+      fakeRes(),
+    );
+    const row = vi.mocked(insertClientPerfReport).mock.calls.at(-1)?.[0];
+    const hasControl = (text: string | undefined): boolean =>
+      [...(text ?? '')].some((ch) => {
+        const code = ch.charCodeAt(0);
+        return code < 0x20 || code === 0x7f;
+      });
+    // Nothing a text column cannot hold reaches the insert...
+    for (const field of [row?.glRendererRaw, row?.glVendor, row?.glModel, row?.gpuHpAdapter]) {
+      expect(hasControl(field)).toBe(false);
+    }
+    // The helper is decisive on its own, including the NUL Postgres rejects.
+    expect(perfReportInternalsForTest.stripControlChars('a\u0000b\u001fc\u007fd')).toBe('abcd');
+    expect(perfReportInternalsForTest.stripControlChars('clean text')).toBe('clean text');
+    // ...and stripping costs nothing downstream: the model still resolves off
+    // the cleaned string rather than falling back to the vendor-only key.
+    expect(row?.glRendererRaw).toBe('ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 (0x00002504))');
+    expect(row?.glVendor).toBe('NVIDIACorporation');
+    expect(row?.glModel).toBe('nvidia-rtx-3060');
+    expect(row?.gpuHpAdapter).toBe('nvidia-rtx-3060');
+    // The jsonb blob too, keys included, at every depth.
+    expect(JSON.stringify(row?.rawSummary)).not.toContain('\\u0000');
+    expect(row?.rawSummary).toEqual({
+      zonename: 'eastbrooktown',
+      nested: ['ab', { deep: 'cd' }],
+    });
+  });
+
+  it('stores empty model dimensions when the client sends no renderer string at all', async () => {
+    await handlePerfReport(
+      fakeReq({ sessionId: 'gpu-model-absent', rawSummary: {} }, { remoteAddress: '203.0.113.94' }),
+      fakeRes(),
+    );
+    expect(insertClientPerfReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // '' rather than the 'other' key, so a grouped read tells a report with
+        // no renderer apart from one whose GPU could not be recognised.
+        glRendererRaw: '',
+        glModel: '',
+        glLaptop: null,
+        gpuHpAdapter: '',
+      }),
+    );
   });
 
   it('drops duplicate inserts from the same session inside the server throttle window', async () => {
@@ -623,6 +911,503 @@ describe('perf report ingestion', () => {
     );
   });
 
+  it('bounds the streamed-prewarm diagnostic lists on the verbatim raw path', async () => {
+    // compileUnits, per-entry budgetVariants and the adaptive pacing
+    // transitions are client-supplied lists riding the same verbatim path the
+    // resume block does. The client caps them, but any token holder can post a
+    // hand-rolled report, so the bound has to be here.
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'public-hostile-prewarm-lists',
+        rawSummary: {
+          seconds: 30,
+          rendererPrewarmSummary: {
+            compileUnits: Array.from({ length: 200 }, (_, i) => ({ id: `unit-${i}` })),
+            manifestEntries: [
+              {
+                id: 'programs.budget-variants',
+                budgetVariants: Array.from({ length: 100 }, (_, i) => ({ index: i })),
+              },
+              // A non-array rides through untouched rather than throwing.
+              { id: 'sky.current-zone', budgetVariants: 'not-an-array' },
+            ],
+            prewarmPacing: {
+              adaptive: {
+                transitions: Array.from({ length: 200 }, (_, i) => ({ atMs: i })),
+              },
+            },
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    expect(raw.truncated).toBeUndefined();
+    const prewarm = raw.rendererPrewarmSummary as Record<string, unknown>;
+    expect((prewarm.compileUnits as unknown[]).length).toBe(12);
+    const entries = prewarm.manifestEntries as Record<string, unknown>[];
+    expect((entries[0].budgetVariants as unknown[]).length).toBe(8);
+    expect(entries[1].budgetVariants).toBe('not-an-array');
+    const adaptive = (prewarm.prewarmPacing as Record<string, unknown>).adaptive as Record<
+      string,
+      unknown
+    >;
+    expect((adaptive.transitions as unknown[]).length).toBe(12);
+    // Membership, not just length: the tail, so the pacer's end state survives.
+    expect((adaptive.transitions as Record<string, unknown>[]).map((t) => t.atMs)).toEqual([
+      188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+    ]);
+    // compileUnits are kept by RANK, not position: the hostile fixture gives
+    // them no timings, so the stable tie-break keeps the first twelve here.
+    expect((prewarm.compileUnits as { id: string }[])[0].id).toBe('unit-0');
+  });
+
+  it('bounds the same lists under the legacy rendererPrewarm key', async () => {
+    // The sanitizer walks BOTH prewarm keys because a client older than the
+    // summary-only change still sends the twin, and any token holder can post
+    // either. Without this case the loop could lose its second key in a
+    // refactor and the suite would stay green. The current client also emits
+    // its manifest entries as `entries`, not `manifestEntries`, so that arm of
+    // the per-entry clamp is exercised here too.
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'public-hostile-legacy-prewarm-key',
+        rawSummary: {
+          seconds: 30,
+          rendererPrewarm: {
+            compileUnits: Array.from({ length: 200 }, (_, i) => ({ id: `unit-${i}` })),
+            entries: [
+              {
+                id: 'programs.budget-variants',
+                budgetVariants: Array.from({ length: 100 }, (_, i) => ({ index: i })),
+              },
+            ],
+            prewarmPacing: {
+              adaptive: { transitions: Array.from({ length: 200 }, (_, i) => ({ atMs: i })) },
+            },
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const prewarm = (stored.rawSummary as Record<string, unknown>).rendererPrewarm as Record<
+      string,
+      unknown
+    >;
+    expect((prewarm.compileUnits as unknown[]).length).toBe(12);
+    expect(
+      ((prewarm.entries as Record<string, unknown>[])[0].budgetVariants as unknown[]).length,
+    ).toBe(8);
+    const adaptive = (prewarm.prewarmPacing as Record<string, unknown>).adaptive as Record<
+      string,
+      unknown
+    >;
+    expect((adaptive.transitions as unknown[]).length).toBe(12);
+  });
+
+  it('keeps a full client-capped prewarm snapshot under the raw summary byte cap', async () => {
+    // The three new lists are large enough that a LEGITIMATE report can cross
+    // RAW_SUMMARY_MAX_BYTES and get routed into compactRawSummary, whose
+    // compactPrewarmSummary carries none of them: the diagnostic that motivated
+    // the fields would be the first thing dropped. This pins that a snapshot at
+    // exactly the client caps still rides the verbatim path.
+    const res = fakeRes();
+    const compileUnit = (i: number) => ({
+      id: `weapon-skins:compile:skin_${i}`,
+      lane: 'programs.compile-submit',
+      submittedAtMs: 1000 + i,
+      syncEndAtMs: 1010 + i,
+      settledAtMs: 1200 + i,
+      failedAtMs: null,
+      programsBefore: i,
+      programsAfter: i + 2,
+      programDelta: 2,
+      chargedLinks: 2,
+      syncMs: 10.5,
+      settledDurationMs: 190.25,
+      statusAtReveal: 'settled',
+    });
+    const budgetVariant = (i: number) => ({
+      index: i,
+      levels: { grass: 1, foliage: 1, vfx: 1, lighting: 1, resolution: 1 },
+      elapsedMs: 12.5,
+      syncMs: 11.25,
+      programsBefore: i,
+      programsAfter: i + 3,
+      programDelta: 3,
+      passes: 1,
+    });
+    const transition = (i: number) => ({
+      atMs: 500 + i,
+      from: 'steady',
+      to: 'backoff',
+      reason: 'no-progress',
+      windowLinks: 8,
+      inFlightLinks: 4,
+    });
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'full-prewarm-snapshot',
+        rawSummary: {
+          seconds: 60,
+          rendererPrewarmSummary: {
+            elapsedMs: 14_000,
+            manifestPlanned: 40,
+            manifestCompleted: 38,
+            compileUnits: Array.from({ length: PREWARM_REPORT_COMPILE_UNITS }, (_, i) =>
+              compileUnit(i),
+            ),
+            manifestEntries: [
+              {
+                id: 'programs.budget-variants',
+                category: 'world',
+                status: 'completed',
+                budgetVariants: Array.from({ length: PREWARM_REPORT_BUDGET_VARIANTS }, (_, i) =>
+                  budgetVariant(i),
+                ),
+              },
+            ],
+            prewarmPacing: {
+              available: true,
+              mode: 'adaptive',
+              adaptive: {
+                state: 'steady',
+                transitions: Array.from({ length: PREWARM_REPORT_TRANSITIONS }, (_, i) =>
+                  transition(i),
+                ),
+              },
+            },
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    // Not truncated: the whole point. A red here means the caps and the byte
+    // budget have drifted apart and the compact path is now silently eating
+    // the streamed-prewarm diagnostic.
+    expect(raw.truncated).toBeUndefined();
+    const prewarm = raw.rendererPrewarmSummary as Record<string, unknown>;
+    expect((prewarm.compileUnits as unknown[]).length).toBe(12);
+    expect(
+      ((prewarm.manifestEntries as Record<string, unknown>[])[0].budgetVariants as unknown[])
+        .length,
+    ).toBe(8);
+    // The real constraint, stated as a budget rather than a pass/fail on this
+    // one fixture: the three streamed lists together must stay a minority of
+    // the 16 KB raw-summary cap, because a real report also carries the 32
+    // pre-existing manifest entries, the resume block, and every non-prewarm
+    // section beside them. Measured against a real capture, a compile unit
+    // costs about 280 bytes, so 32 of them (the caps this PR first shipped)
+    // was ~9 KB and pushed every compiled session's report into the compact
+    // path.
+    const listBytes = Buffer.byteLength(
+      JSON.stringify([
+        prewarm.compileUnits,
+        (prewarm.manifestEntries as Record<string, unknown>[])[0].budgetVariants,
+        ((prewarm.prewarmPacing as Record<string, unknown>).adaptive as Record<string, unknown>)
+          .transitions,
+      ]),
+    );
+    // Sized from the exported caps, so RAISING a cap grows the fixture and
+    // trips this budget instead of silently decoupling the claim above from
+    // the constants it is about.
+    expect(listBytes).toBeLessThan(7 * 1024);
+  });
+
+  it('keeps a REALISTIC full report under the raw summary cap, prewarm block included', async () => {
+    // The byte test above measures the three lists in isolation, which is the
+    // arithmetic and not the failure. The failure the first cap of 32 actually
+    // had was a whole report crossing 16 KB: a real rawSummary also carries 32
+    // manifest entries, the resume block, browser, gpuQueue, assets, input,
+    // hud, netPipeline and the window rollups. This fixture approximates one.
+    const res = fakeRes();
+    const entry = (i: number) => ({
+      id: `programs.entry-${i}`,
+      category: 'world',
+      required: i % 2 === 0,
+      status: 'completed',
+      elapsedMs: 120.5 + i,
+      remainingMsAfter: 9000 - i * 10,
+      programDelta: i,
+      textureDelta: i * 2,
+      workDone: i,
+      workPlanned: i + 1,
+      detail: `mode=async;timedOut=false;compileRoots=${i}`,
+    });
+    const window = () => ({
+      frameMs: { p50: 8.4, p95: 21.7, p99: 44.2, max: 180.5 },
+      fps: { avg: 58.2, min: 22.1 },
+      longFrames: 4,
+    });
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'realistic-full-report',
+        rawSummary: {
+          graphicsConfigVersion: 16,
+          seconds: 300,
+          frames: 17_400,
+          hiddenPresentSkips: 12,
+          windows: { worst10s: window(), last60s: window(), session: window() },
+          mainMs: { p50: 6.2, p95: 18.4, p99: 39.1 },
+          rendererPhaseMs: { cull: 1.2, entities: 3.4, nameplates: 0.8, post: 2.1, present: 4.4 },
+          rendererFoliage: { grass: 0.6, buckets: 18, drawn: 12_400 },
+          rendererBudget: { level: 0.85, drops: 3, raises: 1 },
+          rendererQualityBuckets: { levels: { grass: 1, foliage: 1, vfx: 1, weapons: 1 } },
+          rendererDiagnostics: { prewarmGroups: 6, categories: 9 },
+          rendererGpuQueue: { units: 40, stalls: 2, slowestMs: 118.4, waits: 6 },
+          assets: { preload: { count: 220, ms: 4100 }, byType: { glb: 130, ktx2: 90 } },
+          input: { latencyMs: { p50: 12.1, p95: 28.9 } },
+          hud: { paints: 900, skipped: 120 },
+          netPipeline: { snapshots: 6000, events: 1400, bytes: 2_400_000 },
+          heapSawtooth: { collections: 115, medianMb: 620, peakMb: 1480 },
+          browser: { longTasks: { totalMs: 2600, avg: 86.7, max: 430, lastAge: 4200 } },
+          rendererPrewarmSummary: {
+            elapsedMs: 14_000,
+            maxMs: 15_000,
+            remainingMs: 1000,
+            budgetUsedRatio: 0.93,
+            timedOut: false,
+            createdViews: 57,
+            candidateViews: 60,
+            renderPasses: 42,
+            programsDelta: 480,
+            texturesDelta: 220,
+            compileMode: 'async',
+            compileMs: 5400,
+            compileTimedOut: false,
+            manifestPlanned: 40,
+            manifestCompleted: 38,
+            manifestPartial: 1,
+            manifestSkipped: 0,
+            manifestTimedOut: 1,
+            manifestFailed: 0,
+            partialEntryIds: ['vfx.weapon-skins'],
+            timedOutEntryIds: ['sky.current-zone'],
+            failedEntryIds: [],
+            resume: {
+              status: 'done',
+              plannedEntries: 3,
+              plannedUnits: 47,
+              startedUnits: 47,
+              failedUnits: 0,
+              failedUnitIds: [],
+              entries: [{ id: 'vfx.weapon-skins', lane: 'cosmetic', planned: 47, started: 47 }],
+            },
+            entries: Array.from({ length: 32 }, (_, i) => entry(i)),
+            compileUnits: Array.from({ length: PREWARM_REPORT_COMPILE_UNITS }, (_, i) => ({
+              id: `weapon-skins:compile:skin_${i}`,
+              lane: 'programs.compile-submit',
+              submittedAtMs: 1000 + i,
+              syncEndAtMs: 1010 + i,
+              settledAtMs: 1200 + i,
+              failedAtMs: null,
+              programsBefore: i,
+              programsAfter: i + 2,
+              programDelta: 2,
+              chargedLinks: 2,
+              syncMs: 10.5,
+              settledDurationMs: 190.25,
+              statusAtReveal: 'settled',
+            })),
+            prewarmPacing: {
+              available: true,
+              source: 'knobs',
+              mode: 'adaptive',
+              linksPerSecond: 40,
+              burst: 8,
+              compileBatchRoots: 32,
+              hardMaxMs: 15_000,
+              chargedLinks: 480,
+              scope: 'world',
+              submitStop: null,
+              adaptive: {
+                state: 'steady',
+                windowLinks: 8,
+                minWindowLinks: 2,
+                maxWindowLinks: 16,
+                maxWindowObserved: 14,
+                estimatedLinksPerUnit: 2.1,
+                inFlightLinks: 0,
+                inFlightUnits: 0,
+                peakInFlightLinks: 12,
+                submittedUnits: 47,
+                settledUnits: 47,
+                failedUnits: 0,
+                backoffCount: 2,
+                noProgressCount: 0,
+                lastSettlementMs: 13_400,
+                transitions: Array.from({ length: PREWARM_REPORT_TRANSITIONS }, (_, i) => ({
+                  atMs: 500 + i,
+                  from: 'steady',
+                  to: 'backoff',
+                  reason: 'no-progress',
+                  windowLinks: 8,
+                  inFlightLinks: 4,
+                })),
+              },
+            },
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    // The whole point: a realistic report at the shipped caps still rides the
+    // verbatim path. A red here means the caps and the byte budget drifted
+    // apart and the streamed-prewarm diagnostic is being silently compacted
+    // away again, which is the failure the cap of 32 had.
+    expect(raw.truncated).toBeUndefined();
+    const prewarm = raw.rendererPrewarmSummary as Record<string, unknown>;
+    expect((prewarm.compileUnits as unknown[]).length).toBe(PREWARM_REPORT_COMPILE_UNITS);
+    expect((prewarm.entries as unknown[]).length).toBe(32);
+    // Recorded so the margin is visible rather than implied: this fixture
+    // lands here against the 16 KB cap, and the three streamed lists are the
+    // part this branch added.
+    const totalBytes = Buffer.byteLength(JSON.stringify(raw));
+    const listBytes = Buffer.byteLength(
+      JSON.stringify([
+        prewarm.compileUnits,
+        (prewarm.prewarmPacing as Record<string, unknown>).adaptive,
+      ]),
+    );
+    // A BAND, not a ceiling alone. The lower bound catches a change that
+    // silently guts the block (a dropped field reads as "still green" against a
+    // ceiling alone). The upper bound is an EARLY WARNING deliberately set below
+    // the real 16 KB cliff: this fixture measures 15286 bytes, so a first report
+    // has only about 1.1 KB of margin, and a test that only asserted "under the
+    // cap" would go red for the first time on the change that already broke it.
+    // Later reports in a session are far smaller: the client's emit-on-change
+    // gate drops the ~6.6 KB of streamed-prewarm lists once they stop changing,
+    // which is what buys that margin back for the rest of the session.
+    expect(listBytes).toBeGreaterThan(2 * 1024);
+    expect(totalBytes).toBeLessThan(15_500);
+  });
+
+  it('carries the streamed-prewarm diagnostic across truncation into the compact path', async () => {
+    // The other half of the byte story: when a report DOES overflow, the
+    // compact rebuild must still say which unit stalled and whether the pacer
+    // backed off. Before this, compactPrewarmSummary knew none of these fields,
+    // so the diagnostic was dropped exactly on the heavy sessions it was added
+    // to explain.
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'compact-prewarm-diagnostic',
+        rawSummary: {
+          seconds: 30,
+          rendererPrewarmSummary: {
+            manifestPlanned: 40,
+            compileUnits: [
+              // One FAILED unit, deliberately the cheapest by sync time: it
+              // must survive compaction on the failure rule alone.
+              {
+                id: 'weapon-skins:compile:skin_failed',
+                lane: 'programs.compile',
+                syncMs: 0,
+                settledDurationMs: 0,
+                failedAtMs: 1234,
+                programDelta: 0,
+                statusAtReveal: 'failed',
+              },
+              ...Array.from({ length: 40 }, (_, i) => ({
+                id: `weapon-skins:compile:skin_${i}`,
+                lane: 'programs.compile',
+                syncMs: i,
+                settledDurationMs: i * 2,
+                failedAtMs: null,
+                programDelta: 3,
+                statusAtReveal: 'settled',
+              })),
+            ],
+            prewarmPacing: {
+              mode: 'adaptive',
+              source: 'knobs',
+              adaptive: {
+                state: 'backoff',
+                backoffCount: 4,
+                noProgressCount: 1,
+                transitions: Array.from({ length: 40 }, (_, i) => ({
+                  atMs: i,
+                  from: 'steady',
+                  to: 'backoff',
+                  reason: 'no-progress',
+                })),
+              },
+            },
+          },
+          // Forces the compact path.
+          oversized: 'x'.repeat(40_000),
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    expect(raw.truncated).toBe(true);
+    const prewarm = raw.rendererPrewarmSummary as Record<string, unknown>;
+    // Present, and on the compact path's own tighter sample.
+    const units = prewarm.compileUnits as Record<string, unknown>[];
+    expect(units).toHaveLength(6);
+    // The SLOWEST five plus the failure, not the first six. Taking the first
+    // would keep the cheapest units, and this block exists to answer "which
+    // unit stalled" on exactly the heavy reports that reach it. Emitted in
+    // ORIGINAL order, so a reader still sees a timeline rather than a ranking;
+    // the failure leads here because it was posted first, not because it won.
+    expect(units.map((unit) => unit.id)).toEqual([
+      'weapon-skins:compile:skin_failed',
+      'weapon-skins:compile:skin_35',
+      'weapon-skins:compile:skin_36',
+      'weapon-skins:compile:skin_37',
+      'weapon-skins:compile:skin_38',
+      'weapon-skins:compile:skin_39',
+    ]);
+    // Every retained member is field-shaped by the compact path, never copied
+    // verbatim.
+    expect(units[0]).toEqual({
+      id: 'weapon-skins:compile:skin_failed',
+      lane: 'programs.compile',
+      // The field the ranking selects on rides along, or a reader cannot tell
+      // WHICH of the six was the failure it was chosen for.
+      failedAtMs: 1234,
+      syncMs: 0,
+      settledDurationMs: 0,
+      programDelta: 0,
+      statusAtReveal: 'failed',
+    });
+    expect(units[1].failedAtMs).toBeNull();
+    const adaptive = (prewarm.prewarmPacing as Record<string, unknown>).adaptive as Record<
+      string,
+      unknown
+    >;
+    expect(adaptive.state).toBe('backoff');
+    expect(adaptive.backoffCount).toBe(4);
+    expect(adaptive.transitions as unknown[]).toHaveLength(6);
+    // And the whole compacted report still fits, which is the point of the path.
+    expect(Buffer.byteLength(JSON.stringify(raw))).toBeLessThan(16 * 1024);
+  });
+
   it('stores the four browser longtask fields inside raw summary, bounded (#2479)', async () => {
     const res = fakeRes();
 
@@ -757,6 +1542,88 @@ describe('perf report ingestion', () => {
     );
     const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
     expect((stored.rawSummary as Record<string, unknown>).oversized).toBeUndefined();
+  });
+
+  it('keeps the drawing buffer block, verbatim and across truncation', async () => {
+    const drawingBuffer = {
+      width: 1728,
+      height: 1080,
+      cssWidth: 1440,
+      cssHeight: 900,
+      dynamicResolution: true,
+    };
+
+    const kept = fakeRes();
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'drawing-buffer-kept',
+        rawSummary: { seconds: 30, rendererDrawingBuffer: drawingBuffer },
+      }),
+      kept,
+    );
+    expect(kept.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    expect((stored.rawSummary as Record<string, unknown>).rendererDrawingBuffer).toEqual(
+      drawingBuffer,
+    );
+    expect((stored.rawSummary as Record<string, unknown>).truncated).toBeUndefined();
+
+    // The block is what says at what resolution a fleet actually plays, and an
+    // oversized report is exactly the session whose resolution is worth reading,
+    // so the compact path names it too.
+    const truncated = fakeRes();
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'drawing-buffer-truncated',
+        rawSummary: {
+          seconds: 30,
+          rendererDrawingBuffer: drawingBuffer,
+          oversized: 'x'.repeat(40_000),
+        },
+      }),
+      truncated,
+    );
+    expect(truncated.statusCode).toBe(200);
+    const compacted = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0].rawSummary as Record<
+      string,
+      unknown
+    >;
+    expect(compacted.truncated).toBe(true);
+    expect(compacted.rendererDrawingBuffer).toEqual(drawingBuffer);
+    expect(compacted.oversized).toBeUndefined();
+  });
+
+  it('field-shapes the drawing buffer rather than storing what was posted', () => {
+    const { rawSummary, DRAWING_BUFFER_RAW_PIXELS_MAX } = perfReportInternalsForTest;
+
+    // Every retained key of the compact path is copied verbatim, so "four
+    // scalars" has to be enforced at the ingest, not trusted. A hostile block
+    // keeps exactly four clamped integers and loses its extra members.
+    const hostile = rawSummary({
+      rendererDrawingBuffer: {
+        width: 1e308,
+        height: -5,
+        cssWidth: '1440.7',
+        cssHeight: { nested: 'x'.repeat(4000) },
+        extra: 'x'.repeat(4000),
+        list: new Array(500).fill('x'),
+      },
+    });
+    expect(hostile.rendererDrawingBuffer).toEqual({
+      width: DRAWING_BUFFER_RAW_PIXELS_MAX,
+      height: 0,
+      cssWidth: 1440,
+      cssHeight: 0,
+      dynamicResolution: false,
+    });
+
+    // A non-record block is dropped, never stored as whatever was sent.
+    expect(rawSummary({ rendererDrawingBuffer: 'x'.repeat(4000) })).not.toHaveProperty(
+      'rendererDrawingBuffer',
+    );
+    expect(rawSummary({ rendererDrawingBuffer: [1, 2, 3] })).not.toHaveProperty(
+      'rendererDrawingBuffer',
+    );
   });
 
   it('stores the GPU queue block bounded, and keeps it when raw summaries are truncated (#3167)', async () => {
@@ -1326,5 +2193,302 @@ describe('perf report ingestion', () => {
       if (previous === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = previous;
     }
+  });
+});
+
+describe('world-entry raw summary blocks', () => {
+  it('bounds postRevealLinks and bootPhases on the verbatim raw path', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'public-entry-blocks',
+        rawSummary: {
+          seconds: 30,
+          postRevealLinks: {
+            reveals: 1,
+            revealsInWindow: 1,
+            windowMs: 20_000,
+            programsAtReveal: 1187,
+            programsGained: 1e9,
+            samples: 1180.9,
+            unsampledMs: 250,
+            closed: true,
+            baselineLost: 'yes',
+            planted: 'x'.repeat(100),
+          },
+          bootPhases: {
+            entryMs: 6120,
+            rendererCtorMs: 813,
+            prepareZoneMs: null,
+            prepareNeighborsMs: -5,
+            prewarmInitialMs: 'later',
+          },
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    expect(raw.truncated).toBeUndefined();
+    expect(raw.postRevealLinks).toEqual({
+      reveals: 1,
+      revealsInWindow: 1,
+      windowMs: 20_000,
+      programsAtReveal: 1187,
+      programsGained: 100_000,
+      samples: 1180,
+      unsampledMs: 250,
+      closed: true,
+      baselineLost: false,
+    });
+    expect(raw.bootPhases).toEqual({
+      entryMs: 6120,
+      rendererCtorMs: 813,
+      prepareZoneMs: null,
+      prepareNeighborsMs: 0,
+      prewarmInitialMs: null,
+    });
+  });
+
+  it('drops a malformed or empty block instead of storing it, and tolerates the client null', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq({
+        sessionId: 'public-entry-blocks-malformed',
+        rawSummary: {
+          seconds: 30,
+          postRevealLinks: {},
+          bootPhases: null,
+        },
+      }),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    expect('postRevealLinks' in raw).toBe(false);
+    expect('bootPhases' in raw).toBe(false);
+  });
+
+  it('carries both blocks across truncation into the compact path', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'public-entry-blocks-large',
+          rawSummary: {
+            seconds: 30,
+            postRevealLinks: {
+              reveals: 1,
+              revealsInWindow: 1,
+              windowMs: 20_000,
+              programsAtReveal: 900,
+              programsGained: 41,
+              samples: 1100,
+              unsampledMs: 0,
+              closed: true,
+              baselineLost: false,
+            },
+            bootPhases: {
+              entryMs: 9000,
+              rendererCtorMs: 1000,
+              prepareZoneMs: 2000,
+              prepareNeighborsMs: 500,
+              prewarmInitialMs: 4000,
+            },
+            oversized: 'x'.repeat(40_000),
+          },
+        },
+        { remoteAddress: '203.0.113.109' },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    const raw = stored.rawSummary as Record<string, unknown>;
+    expect(raw.truncated).toBe(true);
+    expect(raw.postRevealLinks).toMatchObject({ programsGained: 41, closed: true });
+    expect(raw.bootPhases).toMatchObject({ entryMs: 9000, prewarmInitialMs: 4000 });
+  });
+});
+
+describe('shader warm-up report fields', () => {
+  it('stores the worker state as a coerced boolean and a bounded refusal token', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'shader-warm-refused',
+          shaderWarmWorkerActive: 0,
+          shaderWarmRefusal: 'HOLD-TIMEOUTS:expired-share',
+        },
+        { remoteAddress: '203.0.113.90' },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    expect(stored.shaderWarmWorkerActive).toBe(false);
+    expect(stored.shaderWarmRefusal).toBe('hold-timeouts:expired-share');
+  });
+
+  it('defaults to inactive with no refusal when the client sends neither', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq({ sessionId: 'shader-warm-absent' }, { remoteAddress: '203.0.113.91' }),
+      res,
+    );
+
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    expect(stored.shaderWarmWorkerActive).toBe(false);
+    expect(stored.shaderWarmRefusal).toBe('');
+  });
+
+  it('rejects a refusal outside the token charset or over its bound', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'shader-warm-hostile',
+          shaderWarmWorkerActive: 'truthy',
+          shaderWarmRefusal: "'; DROP TABLE client_perf_reports; --",
+        },
+        { remoteAddress: '203.0.113.92' },
+      ),
+      res,
+    );
+
+    const stored = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0];
+    // A truthy non-boolean coerces like autoGovernor does; a refusal that is
+    // not one token is dropped whole rather than stored half-sanitized.
+    expect(stored.shaderWarmWorkerActive).toBe(true);
+    expect(stored.shaderWarmRefusal).toBe('');
+
+    await handlePerfReport(
+      fakeReq(
+        { sessionId: 'shader-warm-long', shaderWarmRefusal: 'a'.repeat(200) },
+        { remoteAddress: '203.0.113.93' },
+      ),
+      res,
+    );
+    expect(vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0].shaderWarmRefusal).toHaveLength(
+      64,
+    );
+
+    // The bound exists for the one refusal that carries a name, and it fits
+    // the longest of them whole: the fleet column has to say WHICH extension
+    // drifted, not the first 40 characters of its name.
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'shader-warm-drift',
+          shaderWarmRefusal: 'extension-drift:webgl_compressed_texture_s3tc_srgb',
+        },
+        { remoteAddress: '203.0.113.94' },
+      ),
+      res,
+    );
+    expect(vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0].shaderWarmRefusal).toBe(
+      'extension-drift:webgl_compressed_texture_s3tc_srgb',
+    );
+  });
+
+  it('bounds the raw-summary shaderWarm block and drops a malformed one', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'shader-warm-block',
+          rawSummary: {
+            seconds: 30,
+            shaderWarm: {
+              active: true,
+              worker: 'ready',
+              refusal: '',
+              mode: 'all',
+              setting: 'auto',
+              backend: 'd3d11',
+              warmed: 1e9,
+              held: 42.7,
+              heldTimedOut: -1,
+              planted: 'x'.repeat(200),
+            },
+          },
+        },
+        { remoteAddress: '203.0.113.94' },
+      ),
+      res,
+    );
+
+    expect(res.statusCode).toBe(200);
+    const raw = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0].rawSummary as Record<
+      string,
+      unknown
+    >;
+    expect(raw.shaderWarm).toEqual({
+      active: true,
+      worker: 'ready',
+      refusal: '',
+      mode: 'all',
+      setting: 'auto',
+      backend: 'd3d11',
+      warmed: 100_000,
+      held: 42,
+      heldTimedOut: 0,
+    });
+
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'shader-warm-block-malformed',
+          rawSummary: { seconds: 30, shaderWarm: { active: true, warmed: 12 } },
+        },
+        { remoteAddress: '203.0.113.95' },
+      ),
+      res,
+    );
+    const malformed = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0].rawSummary as Record<
+      string,
+      unknown
+    >;
+    expect('shaderWarm' in malformed).toBe(false);
+  });
+
+  it('carries the block across truncation into the compact path', async () => {
+    const res = fakeRes();
+
+    await handlePerfReport(
+      fakeReq(
+        {
+          sessionId: 'shader-warm-block-large',
+          rawSummary: {
+            seconds: 30,
+            shaderWarm: { active: false, mode: 'off', refusal: 'ready-timeout', held: 7 },
+            oversized: 'x'.repeat(40_000),
+          },
+        },
+        { remoteAddress: '203.0.113.96' },
+      ),
+      res,
+    );
+
+    const raw = vi.mocked(insertClientPerfReport).mock.calls.at(-1)![0].rawSummary as Record<
+      string,
+      unknown
+    >;
+    expect(raw.truncated).toBe(true);
+    expect(raw.shaderWarm).toMatchObject({ mode: 'off', refusal: 'ready-timeout', held: 7 });
   });
 });

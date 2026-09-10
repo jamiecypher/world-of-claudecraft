@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import { ITEMS } from '../src/sim/data';
 import { guildBankPipeRefusal } from '../src/sim/guild_bank';
+import { vaultMaterialIds } from '../src/sim/materials_vault';
 import type { InvSlot } from '../src/sim/types';
 import { type BagMode, bagItemAction } from '../src/ui/bags_view';
 import { BagsWindow, type BagsWindowDeps } from '../src/ui/bags_window';
@@ -46,7 +47,9 @@ const LOG_VIEW_MODE: BagMode = {
   vendorOpen: false,
   bankOpen: true,
   bankDeposit: false,
+  bankSocketable: false,
   guildBankDeposit: false,
+  vaultDeposit: false,
   petFeed: false,
 };
 
@@ -60,6 +63,11 @@ function harness(
   guildTab: boolean,
   personalTab = !guildTab,
   bankOpen = true,
+  vaultTab = false,
+  /** The world's bankInfo mirror: the socket arm (phase 07) reads it through
+   *  hasOpenBankSocket, which tolerates the null every pre-socket scenario
+   *  passes (reading it as "no open socket", the away state). */
+  bankInfoMirror: import('../src/world_api').BankInfo | null = null,
 ): Harness {
   document.body.innerHTML = '<div id="prompt-stack"></div>';
   const calls: string[] = [];
@@ -94,8 +102,11 @@ function harness(
     bags: [null, null, null, null],
     bagCapacity: 16,
     copper: 0,
+    bankInfo: bankInfoMirror,
     bankDeposit: sink('bankDeposit'),
+    bankSocketBag: sink('bankSocketBag'),
     guildBankDeposit: sink('guildBankDeposit'),
+    vaultDeposit: sink('vaultDeposit'),
     useItem: sink('useItem'),
     equipBag: sink('equipBag'),
     unequipBag: sink('unequipBag'),
@@ -131,6 +142,7 @@ function harness(
     isBankOpen: () => bankOpen, // open in every scenario but the closed control
     isPersonalBankTab: () => personalTab,
     isGuildBankTab: () => guildTab,
+    isVaultBankTab: () => vaultTab,
     pendingPetFeed: () => false,
     closeVendor: noop,
     closeBank: noop,
@@ -148,6 +160,7 @@ function harness(
     clearActionDropTargets: noop,
     dragState: new ItemDragState(),
     isTouchHud: () => false,
+    confirmVendorSell: () => true,
     markEquipDropTargets: noop,
     dropOnEquipSlot: noop,
     dropOnActionSlot: noop,
@@ -158,10 +171,13 @@ function harness(
   return { root, calls, errors };
 }
 
-function clickCellFor(root: HTMLElement, itemId: string, shift = false): void {
+/** `nth` picks among several cells of the SAME id (a fixture holding two copies),
+ *  in grid order; 0, every caller but the copy-anchor arm, is the first one. */
+function clickCellFor(root: HTMLElement, itemId: string, shift = false, nth = 0): void {
   const cells = Array.from(root.querySelectorAll<HTMLElement>('button.bag-item'));
-  const cell = cells.find((c) => c.getAttribute('aria-label')?.includes(ITEMS[itemId].name));
-  expect(cell, `no bag cell for ${itemId}`).toBeTruthy();
+  const matches = cells.filter((c) => c.getAttribute('aria-label')?.includes(ITEMS[itemId].name));
+  const cell = matches[nth];
+  expect(cell, `no bag cell ${nth} for ${itemId}`).toBeTruthy();
   cell?.dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: shift }));
 }
 
@@ -231,12 +247,15 @@ describe('guild-tab bag click routing (behavioral, real BagsWindow)', () => {
     // click must still reach the use ladder, and each armed pane must deposit.
     const closed = harness([{ itemId: plainId, count: 1 }], false, false, false);
     clickCellFor(closed.root, plainId);
-    // useItem now also carries WHICH bag copy was clicked, so the sink records a
-    // second argument. Asserted as a prefix plus the selection rather than as one
-    // exact string: this test is about the click REACHING the use ladder, and
-    // pinning the stringified argument object here would make it fail on any
-    // future field the selection gains.
-    expect(closed.calls).toEqual([`useItem:${plainId},{"slotIndex":0}`]);
+    // useItem carries WHICH bag copy was clicked, so the sink records a second
+    // argument: the cell's inventory index plus the copy anchor beside it
+    // (src/sim/item_copy_anchor.ts), the ordinal among same-id cells and how many
+    // the sender saw. Pinned whole, because "reaches the use ladder" and "names
+    // the clicked copy" are one claim here: a rung that reached useItem with the
+    // selection dropped would be a different bug wearing this arm's green.
+    expect(closed.calls).toEqual([
+      `useItem:${plainId},{"slotIndex":0,"anchor":{"ordinal":0,"count":1}}`,
+    ]);
     expect(closed.errors).toEqual([]);
   });
 
@@ -292,5 +311,133 @@ describe('guild-tab bag click routing (behavioral, real BagsWindow)', () => {
     expect(tSim('error.guildBankNoTransfer')).toBe(
       guildBankPipeRefusal({ itemId: plainId, count: 1, instance: { boundTo: 7 } }),
     );
+  });
+});
+
+// Real ids for the VAULT arms, derived from the honest material set itself so
+// a taxonomy move cannot silently rot these into the wrong ladder rung.
+const materialId = [...vaultMaterialIds()].find((id) => ITEMS[id] !== undefined) as string;
+const nonMaterialId = Object.keys(ITEMS).find(
+  (id) => !vaultMaterialIds().has(id) && ITEMS[id].kind !== 'quest' && ITEMS[id].kind !== 'bag',
+) as string;
+
+describe('vault-tab bag click routing (behavioral, real BagsWindow)', () => {
+  const vaultHarness = (inventory: InvSlot[]): Harness =>
+    harness(inventory, false, false, true, true);
+
+  it('routes a material click to vaultDeposit with the reference-resolved index, never bankDeposit', () => {
+    const h = vaultHarness([
+      { itemId: nonMaterialId, count: 1 },
+      { itemId: materialId, count: 1 },
+    ]);
+    clickCellFor(h.root, materialId);
+    expect(h.calls).toEqual(['vaultDeposit:1']);
+  });
+
+  it('shift-click on a multi-count material opens the split prompt and sends the counted deposit', () => {
+    const h = vaultHarness([{ itemId: materialId, count: 5 }]);
+    clickCellFor(h.root, materialId, true);
+    const prompt = document.querySelector('#prompt-stack .bank-deposit-prompt') as HTMLElement;
+    expect(prompt).not.toBeNull();
+    (prompt.querySelector('input') as HTMLInputElement).value = '3';
+    const confirm = Array.from(prompt.querySelectorAll('button')).find(
+      (b) => b.textContent === t('hudChrome.bank.depositQuantityConfirm'),
+    ) as HTMLElement;
+    confirm.click();
+    expect(h.calls).toEqual(['vaultDeposit:0,3']);
+  });
+
+  it('a non-material click denies with the sim only-materials line and dispatches nothing', () => {
+    const h = vaultHarness([{ itemId: nonMaterialId, count: 1 }]);
+    clickCellFor(h.root, nonMaterialId);
+    expect(h.calls).toEqual([]);
+    expect(h.errors).toEqual([tSim('error.vaultOnlyMaterials')]);
+  });
+
+  it('an instance-payload material dispatches to identity-preserving vault storage', () => {
+    const h = vaultHarness([{ itemId: materialId, count: 1, instance: { signer: 'Ana' } }]);
+    clickCellFor(h.root, materialId);
+    expect(h.calls).toEqual(['vaultDeposit:0']);
+    expect(h.errors).toEqual([]);
+  });
+
+  it('a crafted-provenance material dispatches without flattening its marker', () => {
+    const h = vaultHarness([{ itemId: materialId, count: 1, craftedRecipeId: 'recipe_x' }]);
+    clickCellFor(h.root, materialId);
+    expect(h.calls).toEqual(['vaultDeposit:0']);
+    expect(h.errors).toEqual([]);
+  });
+});
+
+describe('personal-tab BAG click routing (the phase 07 socket arm, real BagsWindow)', () => {
+  // A payload-free bag id from the real catalog, and a socketable bankInfo
+  // mirror (one unlocked, empty socket).
+  const bagId = 'linen_pouch';
+  const socketable = {
+    slots: [],
+    capacity: 24,
+    purchasedSlots: 0,
+    bonusSlots: 0,
+    nextExpansionCost: 500,
+    bonusSources: [],
+    socketsUnlocked: 1,
+    socketBags: [null, null, null, null] as (string | null)[],
+    nextSocketCost: 2000000,
+    generalCapacity: 24,
+    materialsCapacity: 0,
+    generalUsed: 0,
+    materialsUsed: 0,
+  };
+
+  it('sockets a clicked payload-free bag into the bank, naming the exact carried copy', () => {
+    // TWO copies, and the SECOND is the one clicked. With a single copy the
+    // anchor below reads {ordinal:0,count:1} whatever the sender computed, so a
+    // one-copy fixture cannot decide "the exact carried copy" at all: only a
+    // sibling pair makes both halves of the selection (the index AND the
+    // ordinal) name something a wrong answer would get wrong.
+    const h = harness(
+      [
+        { itemId: bagId, count: 1 },
+        { itemId: bagId, count: 1 },
+      ],
+      false,
+      true,
+      true,
+      false,
+      socketable,
+    );
+    clickCellFor(h.root, bagId, false, 1);
+    // The equipBag call shape aimed at the bank: id, no socket named (the sim
+    // scans first-empty), and the reference-resolved copy selector: the clicked
+    // cell's index plus the copy anchor naming which same-id sibling it was.
+    expect(h.calls).toEqual([
+      `bankSocketBag:${bagId},{"slotIndex":1,"anchor":{"ordinal":1,"count":2}}`,
+    ]);
+  });
+
+  it('falls back to the plain deposit when no unlocked socket is empty', () => {
+    const full = { ...socketable, socketBags: ['travelers_knapsack', null, null, null] };
+    const h = harness([{ itemId: bagId, count: 1 }], false, true, true, false, full);
+    clickCellFor(h.root, bagId);
+    expect(h.calls).toEqual(['bankDeposit:0']);
+  });
+
+  it('falls back to the plain deposit for a payload-bearing copy (bare-id sockets)', () => {
+    const h = harness(
+      [{ itemId: bagId, count: 1, craftedRecipeId: 'tailoring_linen_pouch' }],
+      false,
+      true,
+      true,
+      false,
+      socketable,
+    );
+    clickCellFor(h.root, bagId);
+    expect(h.calls).toEqual(['bankDeposit:0']);
+  });
+
+  it('a null bankInfo mirror (every pre-socket rig) keeps the plain deposit', () => {
+    const h = harness([{ itemId: bagId, count: 1 }], false, true, true, false, null);
+    clickCellFor(h.root, bagId);
+    expect(h.calls).toEqual(['bankDeposit:0']);
   });
 });

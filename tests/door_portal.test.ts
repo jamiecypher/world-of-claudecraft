@@ -3,8 +3,9 @@
 // special case. Three.js runs headless in Node (no WebGL needed for geometry).
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { buildDoorBody } from '../src/render/door_portal';
+import { buildDoorBody, doorArchAuthoredElsewhere } from '../src/render/door_portal';
 import { isSharedGeometry, isSharedMaterial } from '../src/render/shared_resource';
+import { DUNGEONS } from '../src/sim/data';
 
 const meshes = (body: THREE.Group): THREE.Mesh[] =>
   body.children.filter((c): c is THREE.Mesh => (c as THREE.Mesh).isMesh);
@@ -49,6 +50,45 @@ describe('buildDoorBody: Nythraxis crypt click-box', () => {
     const { body, portal } = buildDoorBody(false, 'nythraxis_crypt', false);
     expect(meshes(body).length).toBe(5);
     expect(portal).toBeDefined();
+  });
+
+  it('the rebuilt Last Keep yields its arch only to a castle_door standing AT the keep door', () => {
+    const door = DUNGEONS.the_last_keep.doorPos;
+    // no facade: the generic arch keeps the keep door visible
+    expect(doorArchAuthoredElsewhere('the_last_keep', [{ key: 'stone_floor' }])).toBe(false);
+    // the placed facade a row in front of doorPos IS the door
+    expect(
+      doorArchAuthoredElsewhere('the_last_keep', [
+        { key: 'castle_door', x: door.x + 1.3, z: door.z },
+      ]),
+    ).toBe(true);
+    // a castle_door placed at another site (a town gate) never claims the keep's arch,
+    // and a row without coordinates cannot be located, so it never does either
+    expect(
+      doorArchAuthoredElsewhere('the_last_keep', [{ key: 'castle_door', x: 400, z: 1900 }]),
+    ).toBe(false);
+    expect(doorArchAuthoredElsewhere('the_last_keep', [{ key: 'castle_door' }])).toBe(false);
+    // the shipped table carries the keep facade on the temple court
+    expect(doorArchAuthoredElsewhere('the_last_keep')).toBe(true);
+  });
+
+  it('the Forgefather raid door yields to the facade only once one is baked', () => {
+    // no facade in the table: the generic arch keeps the door visible
+    expect(doorArchAuthoredElsewhere('ignivar_forge_lift', [{ key: 'stone_floor' }])).toBe(false);
+    // a baked dungeon_entrance facade takes over as the visible door,
+    // keyed to the chain HEAD (the Forge-Lift owns the overworld door now)
+    expect(doorArchAuthoredElsewhere('ignivar_forge_lift', [{ key: 'dungeon_entrance' }])).toBe(
+      true,
+    );
+    expect(doorArchAuthoredElsewhere('ignivar_forge_approach', [{ key: 'dungeon_entrance' }])).toBe(
+      true,
+    );
+    // the crypt stays a click-box regardless, other doors keep their arch
+    expect(doorArchAuthoredElsewhere('nythraxis_crypt', [])).toBe(true);
+    expect(doorArchAuthoredElsewhere('wildheart_basin', [{ key: 'dungeon_entrance' }])).toBe(false);
+    // the lift back out of the approach keeps the normal leaving portal
+    const exit = buildDoorBody(false, 'ignivar_forge_approach', false);
+    expect(exit.portal).toBeDefined();
   });
 });
 

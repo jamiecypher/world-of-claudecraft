@@ -30,6 +30,7 @@ import { tickTemporalHourglassGround } from './combat/temporal_hourglass';
 import { DELVES, DUNGEON_X_THRESHOLD, dungeonAt, zoneAt } from './data';
 import { clearDrownedLitanyBellsAndMarks } from './delves/drowned_litany_boss';
 import { recalcPlayerStats } from './entity';
+import { cancelCorpseHarvestForCorpse } from './professions/corpse_harvest_session';
 import { aurasSurvivingDeath } from './resurrection';
 import type { SimContext } from './sim_context';
 import type { Entity, SimEvent, Vec3 } from './types';
@@ -83,7 +84,7 @@ export type GroundAoE = {
   // Meteor: Ignite each struck enemy for this fraction of the resolved pulse
   // damage (fire_mage.applyIgnite copies the number; no re-roll).
   igniteFrac?: number;
-  // Blizzard riders: the per-pulse snare and the Frozen Orb cooldown shave.
+  // Blizzard riders: the per-pulse snare and the Frostglobe cooldown shave.
   slowMult?: number;
   slowDuration?: number;
   orbCdr?: boolean;
@@ -161,6 +162,10 @@ export function dropEntityFromRoster(ctx: SimContext, id: number): void {
   ctx.clearEntityMarker(id); // a despawned entity keeps no raid marker
   const e = ctx.entities.get(id);
   if (!e) return;
+  // A corpse about to disappear for good must not leave a live harvester
+  // reserving a body that no longer exists (Intentional Gathering, PR3); a
+  // no-op for every entity that never carried a reservation.
+  cancelCorpseHarvestForCorpse(ctx, e);
   // Paladin-sourced cleanup only when the despawner could have sourced any of
   // it (review 3050): each of these walks the full roster, two with a nested
   // per-aura loop, and a mass-despawn tick paid all three in a world with no
@@ -217,6 +222,10 @@ export function runDespawnDecay(ctx: SimContext): void {
     if (e.despawnTimer !== undefined) {
       e.despawnTimer -= DT;
       if (e.despawnTimer <= 0) despawnIds.push(e.id);
+    }
+    if (e.hardDespawnTimer !== undefined) {
+      e.hardDespawnTimer -= DT;
+      if (e.hardDespawnTimer <= 0 && despawnIds.at(-1) !== e.id) despawnIds.push(e.id);
     }
     if (
       e.kind === 'mob' &&
@@ -318,17 +327,19 @@ export function tickGroundAoEs(ctx: SimContext): void {
 // The outdoor/dungeon release-spirit flow MOVED to src/sim/spirit.ts (the WoW-style
 // ghost loop). The in-delve respawn stays here (delves keep their own bounded
 // death rules) and spirit.ts calls into it for delve positions.
-export function releaseSpiritInDelve(ctx: SimContext, pid: number): void {
+// Returns false when no run owns this corpse, so the caller can fall back to the
+// graveyard release instead of leaving the player dead with no way out.
+export function releaseSpiritInDelve(ctx: SimContext, pid: number): boolean {
   const r = ctx.resolve(pid);
-  if (!r?.e.dead) return;
+  if (!r?.e.dead) return false;
   const run = ctx.delveRunForPlayer(pid);
-  if (!run) return;
+  if (!run) return false;
   const deaths = (run.deathsThisRun[pid] ?? 0) + 1;
   run.deathsThisRun[pid] = deaths;
   if (deaths >= 2) {
     r.e.dead = false;
     ctx.failDelveRun(run);
-    return;
+    return true;
   }
   const p = r.e;
   p.dead = false;
@@ -349,8 +360,10 @@ export function releaseSpiritInDelve(ctx: SimContext, pid: number): void {
   // body, or it walks off on its own with no input held (same fix as the graveyard
   // release/revive flow in spirit.ts).
   Object.assign(r.meta.moveInput, emptyMoveInput());
-  // The Keeper's Toll persists through a delve death too (see resurrection.ts); every
-  // other aura clears on respawn.
+  // The Keeper's Toll persists through a delve death too, and so does a FLASK
+  // aura (Masterwrought phase 10: a flask is bought to survive a wipe, so it
+  // survives death wherever death is handled). See resurrection.ts
+  // aurasSurvivingDeath for the full list; every other aura clears on respawn.
   p.auras = aurasSurvivingDeath(p.auras);
   p.ccDr.clear();
   recalcPlayerStats(p, r.meta.cls, r.meta.equipment, r.meta.talentMods, r.meta.equipmentInstance);
@@ -378,6 +391,7 @@ export function releaseSpiritInDelve(ctx: SimContext, pid: number): void {
     ctx.spawnDelveCompanion(run, pid, delve.autoCompanionId);
   }
   ctx.emit({ type: 'respawn', pid });
+  return true;
 }
 
 // Readout for "/graveyard": names the graveyard this position falls back to. Pure

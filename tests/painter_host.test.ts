@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   makeWriterFacet,
   type PainterHostWriters,
-  type SingleSlotCache,
+  type SingleSlotEntry,
 } from '../src/ui/painter_host';
 
 // A DOM-free element that records every write the facet performs: textContent, the
@@ -24,6 +24,7 @@ function fakeEl() {
   const props: Record<string, string> = {};
   const classes: Record<string, boolean> = {};
   const attrs: Record<string, string> = {};
+  const attrRemovals: string[] = [];
   const node = {
     textContent: '',
     style: {
@@ -42,12 +43,18 @@ function fakeEl() {
     setAttribute(name: string, value: string): void {
       attrs[name] = value;
     },
+    removeAttribute(name: string): void {
+      delete attrs[name];
+      attrRemovals.push(name);
+    },
   };
-  return { node, props, classes, attrs, el: node as unknown as HTMLElement };
+  return { node, props, classes, attrs, attrRemovals, el: node as unknown as HTMLElement };
 }
 
 function fakeFacet() {
-  const cache: SingleSlotCache = new Map();
+  // A real Map (assignable to the WeakMap-typed SingleSlotCache) so the test
+  // can spy on set() and assert entry counts, which WeakMap cannot expose.
+  const cache = new Map<HTMLElement, SingleSlotEntry>();
   const stylePropCache = new Map<HTMLElement, Map<string, string>>();
   const classCache = new Map<HTMLElement, Map<string, string>>();
   const attrCache = new Map<HTMLElement, Map<string, string>>();
@@ -103,6 +110,72 @@ describe('makeWriterFacet: single-slot writers (setText/setDisplay/setTransform/
     expect(counts).toEqual({ writes: 2, skips: 0 });
     expect(node.style.display).toBe('block');
     expect(node.style.width).toBe('block');
+  });
+
+  // THE COLLISION. The arm above is the same mechanism seen from the safe side: two
+  // single-slot kinds on one element MUST NOT false-elide, and they do not. The
+  // cost of that correctness is what nothing pinned until now, and what shipped as
+  // a live per-frame defect in five painters: the cache holds ONE (kind, value)
+  // entry per element, so an element written through two different single-slot
+  // writers has its entry flipped by each call and BOTH bypass elision forever.
+  // Nothing renders wrong; the writes simply never elide, and they count as real
+  // writes in hotDomWrites.
+  it('DEFEAT: two different single-slot writers on one element never elide, at any cadence', () => {
+    const { facet, counts } = fakeFacet();
+    const { el } = fakeEl();
+    // The establishing paint, which is allowed to write both facets.
+    facet.setText(el, '2');
+    facet.setDisplay(el, '');
+    counts.writes = 0;
+    counts.skips = 0;
+    // Two more STEADY polls: nothing about the model moved, so a correctly elided
+    // painter does nothing at all here.
+    for (let poll = 0; poll < 2; poll++) {
+      facet.setText(el, '2');
+      facet.setDisplay(el, '');
+    }
+    expect(counts).toEqual({ writes: 4, skips: 0 });
+  });
+
+  it('FIX: the same two facets elide completely once each has its own cache slot', () => {
+    // The element needs TWO INDEPENDENT FACETS (its text and its visibility) and
+    // the single-slot cache can only hold one. Giving visibility a slot of its own
+    // is what fixes it; TWO SEPARATE ELEMENTS would have worked equally well, and a
+    // second cache slot is simply cheaper than a second element. `setStyleProp` is
+    // the multi-slot writer for a CSS property (its own contract covers "a custom
+    // --var or a standard property"), so the visibility write keeps writing the
+    // very same inline `display` it always did, now keyed per (element, 'display').
+    const { facet, counts } = fakeFacet();
+    const { el } = fakeEl();
+    facet.setText(el, '2');
+    facet.setStyleProp(el, 'display', '');
+    counts.writes = 0;
+    counts.skips = 0;
+    for (let poll = 0; poll < 2; poll++) {
+      facet.setText(el, '2');
+      facet.setStyleProp(el, 'display', '');
+    }
+    // Asserting SKIPS, not just writes: a test that only counted writes would pass
+    // on a painter that stopped writing because it stopped painting.
+    expect(counts).toEqual({ writes: 0, skips: 4 });
+  });
+
+  it('FIX, the class form: visibility keyed per (element, class) elides the same way', () => {
+    // toggleClass is the other multi-slot writer and fixes the collision identically
+    // when the hidden state belongs in the stylesheet. Pinned beside setStyleProp so
+    // the contract reads as "give the second facet its own slot", never as "use this
+    // one writer".
+    const { facet, counts } = fakeFacet();
+    const { el } = fakeEl();
+    facet.setText(el, '2');
+    facet.toggleClass(el, 'is-hidden', false);
+    counts.writes = 0;
+    counts.skips = 0;
+    for (let poll = 0; poll < 2; poll++) {
+      facet.setText(el, '2');
+      facet.toggleClass(el, 'is-hidden', false);
+    }
+    expect(counts).toEqual({ writes: 0, skips: 4 });
   });
 });
 
@@ -207,6 +280,37 @@ describe('makeWriterFacet: setAttr (multi-slot, keyed per (element, attr))', () 
     facet.setAttr(el, 'title', 'x');
     expect(counts).toEqual({ writes: 2, skips: 2 });
   });
+
+  it('removes an attribute once for repeated null, then writes a later value', () => {
+    const { facet, counts } = fakeFacet();
+    const { el, attrs, attrRemovals } = fakeEl();
+
+    facet.setAttr(el, 'aria-pressed', null);
+    expect(attrRemovals).toEqual(['aria-pressed']);
+    expect(counts).toEqual({ writes: 1, skips: 0 });
+
+    facet.setAttr(el, 'aria-pressed', null);
+    expect(attrRemovals).toEqual(['aria-pressed']);
+    expect(counts).toEqual({ writes: 1, skips: 1 });
+
+    facet.setAttr(el, 'aria-pressed', 'true');
+    expect(attrs['aria-pressed']).toBe('true');
+    expect(counts).toEqual({ writes: 2, skips: 1 });
+  });
+
+  it('keeps writing while alternating null and string values', () => {
+    const { facet, counts } = fakeFacet();
+    const { el, attrs, attrRemovals } = fakeEl();
+
+    facet.setAttr(el, 'aria-pressed', null);
+    facet.setAttr(el, 'aria-pressed', 'true');
+    facet.setAttr(el, 'aria-pressed', null);
+    facet.setAttr(el, 'aria-pressed', 'false');
+
+    expect(attrs['aria-pressed']).toBe('false');
+    expect(attrRemovals).toEqual(['aria-pressed', 'aria-pressed']);
+    expect(counts).toEqual({ writes: 4, skips: 0 });
+  });
 });
 
 // --- Shared-cache coherence + single/multi-slot independence --------------------
@@ -216,7 +320,9 @@ describe('makeWriterFacet: shared caches keep one skip-rate (HUD + painter coher
     // Hud keeps its own writers AND hands painters a facet built from the SAME
     // caches; the second writer must see the first writer's cache entry so a repeat
     // is elided whichever path wrote it last (one skip-rate across HUD + painters).
-    const cache: SingleSlotCache = new Map();
+    // A real Map (assignable to the WeakMap-typed SingleSlotCache) so the test
+    // can spy on set() and assert entry counts, which WeakMap cannot expose.
+    const cache = new Map<HTMLElement, SingleSlotEntry>();
     const stylePropCache = new Map<HTMLElement, Map<string, string>>();
     const classCache = new Map<HTMLElement, Map<string, string>>();
     const attrCache = new Map<HTMLElement, Map<string, string>>();
@@ -399,5 +505,51 @@ describe('elision key composition stays banished (hud.ts + painter_host.ts sourc
     const hud = read('../src/ui/hud.ts');
     expect(hud).toContain("shouldWriteSingleSlot(this.hotWriteCache, el, 'text', text)");
     expect(hud).toContain("shouldWriteSingleSlot(this.hotWriteCache, el, 'display', display)");
+  });
+
+  it('every Hud itemIcon adapter forwards the quality the PainterHost dep declares', () => {
+    // The phase 13 QA fresh-reader regression: the cell authority
+    // (worn_item_cell_view.ts) hands each painter the copy's EFFECTIVE quality
+    // and the painter asks its `itemIcon` dep for the rim with it, but the
+    // Hud's adapter arrows were written 1-ary (`(item) => this.itemIcon(item)`)
+    // and silently swallowed the argument, so every promoted copy's icon rim
+    // fell back to the def's tier on every surface while the pure-core suites
+    // stayed green (the seam under test lives in the Hud, which no rig
+    // constructs). Comment-stripped so a commented-out arrow cannot count.
+    const strip = (source: string): string =>
+      source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+    const hud = strip(read('../src/ui/hud.ts'));
+    const forwarding = hud.match(
+      /itemIcon: \(item, quality\) => this\.itemIcon\(item, quality\),/g,
+    );
+    // Every itemIcon KEY in the Hud is one of the forwarding arrows: the total
+    // bounds the set, so an adapter spelled with other parameter names cannot
+    // sit beside the six and escape both the count and the negative below.
+    expect(hud.match(/\bitemIcon:/g), 'every itemIcon key is an adapter').toHaveLength(
+      forwarding?.length ?? 0,
+    );
+    expect(forwarding, 'the six adapter arrows all forward the quality').toHaveLength(6);
+    expect(hud).not.toMatch(/itemIcon: \(item\) =>/);
+    // The adapters outside the Hud (the bank window wiring its two panes).
+    // The guild tab forwards the quality the same way; it is the same
+    // 1-ary-swallow class one file over. The vault pane (release/v0.41.0,
+    // Bank Storage) is DIFFERENT by design: its dep declares NO quality
+    // parameter (vault rows are materials; the icon is quality-independent
+    // there), so its adapter is 1-ary against a 1-ary dep, not a swallow.
+    // Both shapes are pinned exactly, plus the vault dep's own declaration,
+    // so a quality-carrying dep can never silently gain a swallowing adapter.
+    const bank = strip(read('../src/ui/bank_window.ts'));
+    expect(bank).toContain('itemIcon: (item, quality) => this.deps.itemIcon(item, quality),');
+    expect(bank).toContain('itemIcon: (item) => this.deps.itemIcon(item),');
+    expect(bank.match(/\bitemIcon:/g), 'two adapter keys in the bank window').toHaveLength(2);
+    expect(
+      strip(read('../src/ui/vault_window.ts')),
+      'the vault dep really declares no quality parameter',
+    ).toContain('itemIcon(item: ItemDef): string;');
+    // The dep the adapters satisfy really declares the second parameter (over
+    // comment-stripped source, like the arrows).
+    expect(strip(read('../src/ui/painter_host.ts'))).toContain(
+      "itemIcon(item: ItemDef, quality?: ItemDef['quality']): string;",
+    );
   });
 });

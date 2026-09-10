@@ -70,9 +70,26 @@
 // together exercise all seven elided writers. The keyed-pool painters (auras, party,
 // fct) build + reconcile real DOM nodes; their steady-state *_painter.test.ts
 // tests prove no per-frame node CHURN plus targeted expensive-write gates (icon-url, crest
-// class), while facet-level DOM write-elision is guaranteed by makeWriterFacet and proven
-// with write/skip counters in tests/painter_host.test.ts; their bypass count rides ARM 3.
+// class), while facet-level DOM write-elision is proven with write/skip counters in
+// tests/painter_host.test.ts; their bypass count rides ARM 3.
 // ARM 1 still scans all eight painters (incl. the pooled ones) for raw writes + forced reflow.
+//
+// STATE THE GUARANTEE EXACTLY, because this note used to overstate it and the
+// overstatement cost real frames. makeWriterFacet guarantees elision PER (element,
+// KIND), not per element: the four single-slot writers share ONE (kind, value) entry
+// per element (painter_host.ts shouldWriteSingleSlot), so an element written through
+// TWO DIFFERENT single-slot writers has that entry flipped by every call and BOTH
+// writes bypass elision forever. This exemption waved exactly that case through:
+// auras_painter wrote the stacks badge with setDisplay AND setText, so every stacking
+// aura paid two un-elided writes per frame, for the life of the aura, and nothing here
+// could see it (ARM 2 does not drive auras; ARM 1 scans only for raw writes and
+// reflows; the *_painter.test.ts suites drive a RECORDING stub, which has no cache to
+// collide in). Seven such sites shipped across five modules. What covers the case now
+// is tests/painter_single_slot_collision_guard.test.ts, an AST scan of src/ui, plus
+// tests/painter_slot_collision.test.ts, which drives the real painters over the REAL
+// facet across steady polls and asserts SKIPS. Extending ARM 2 to the pooled painters
+// would NOT have caught it either: this defect is invisible to a per-file scan and to
+// any driver that does not compare counts across two identical frames.
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -98,6 +115,9 @@ import {
   type ActionBarWorldInput,
   createActionBarView,
 } from '../src/ui/hud/action_bar/action_bar_view';
+import { AURA_TRACKS } from '../src/ui/hud/aura_tracks/aura_track_descriptors';
+import { createAuraTrackView } from '../src/ui/hud/aura_tracks/aura_track_view';
+import { createTargetDotsView } from '../src/ui/hud/target_dots';
 import { makeWriterFacet, type PainterHostWriters } from '../src/ui/painter_host';
 import type { SwingTimerState } from '../src/ui/swing_timer';
 import { SwingTimerPainter } from '../src/ui/swing_timer_painter';
@@ -554,8 +574,50 @@ const HOT_PAINTERS: ReadonlyArray<ScannedPainter> = [
   { file: 'paladin_devotion_painter.ts', allow: {}, reflowAllow: {} },
   { file: 'hud/action_bar/action_bar_painter.ts', allow: {}, reflowAllow: {} },
   { file: 'hud/action_bar/mobile_action_ring_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/action_bar/radial_petal_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/action_bar/consumable_strip_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/menu/menu_strip_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/strip_caption_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/stance/stance_radial_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/quest/quest_strip_painter.ts', allow: {}, reflowAllow: {} },
+  { file: 'hud/cross_hotbar/cross_hotbar_painter.ts', allow: {}, reflowAllow: {} },
   { file: 'hud/warlock/doom_meter_painter.ts', allow: {}, reflowAllow: {} },
+  // target_dots is the tracker-painter contract on the same budget as the deed
+  // and reliquary strips: ONE constructor innerHTML write for the whole row pool,
+  // the frame's role + aria-label set once in that same constructor, and every
+  // per-frame write (fill width, school attr, label, countdown, stacks, the
+  // on-target and expiring classes) facet-routed.
+  {
+    file: 'hud/target_dots/target_dots_painter.ts',
+    allow: { '.innerHTML': 1, '.setAttribute': 2 },
+    reflowAllow: {},
+  },
+  // The one painter behind all six aura tracks. Its skeleton (a fixed pool of
+  // AURA_TRACK_ROW_CAP rows plus the overflow line) is built in ONE constructor
+  // innerHTML write and never touched again: every refresh, including the two
+  // accessible-name attributes, routes through the elided facet, which is what
+  // lets six instances share the per-frame band the aura strips run on.
+  { file: 'hud/aura_tracks/aura_track_painter.ts', allow: { '.innerHTML': 1 }, reflowAllow: {} },
   { file: 'party_frames_painter.ts', allow: {}, reflowAllow: {} },
+  // The portrait rest badge. Cold by cadence (the caller gates it on the
+  // resting flag changing, and the language fan-out clears that memo so a
+  // locale switch repaints once), but facet-routed and raw-write-free anyway,
+  // so it belongs here rather than in an allowance list.
+  { file: 'rest_indicator_painter.ts', allow: {}, reflowAllow: {} },
+  // The compass strip. Its PER-FRAME path (paintCompassMarks, driven from
+  // Hud.updateCompass on the fast band) routes every write through the facet:
+  // two setStyleProp calls and setDisplay, zero raw writes. The three allowed
+  // raw writes are both OFF that path, and both are the reason the module
+  // exists as its own file: buildCompassMarks stamps a class and a label onto
+  // each pooled span ONCE when the pool is created, and relabelCompassMarks
+  // rewrites those labels exactly once per runtime language change (the labels
+  // are written at build time and nothing else ever touches them, which is the
+  // i18n defect masterwrought D129 found and fixed).
+  {
+    file: 'compass_strip_painter.ts',
+    allow: { '.className': 1, '.textContent': 2 },
+    reflowAllow: {},
+  },
   // party_below_target measures the target frame, its #tf-debuffs strip, the
   // party container, and (on mobile) the rows wrapper + move zone (five rect
   // reads) ONLY when its cheap invalidation key changes (target/buff-count/
@@ -575,6 +637,38 @@ const HOT_PAINTERS: ReadonlyArray<ScannedPainter> = [
   // (one in the click handler, one in the roving-key branch, one in the Enter/Space
   // branch), never a per-frame write.
   { file: 'tab_strip_painter.ts', allow: { '.dataset': 3 }, reflowAllow: {} },
+  // The trade window's $WOC arm: cold (repainted only with the trade window,
+  // no driver of its own) but held to the full write contract like tab_strip
+  // above. Its in-place derived-line refresh (refreshWocTradeArm) reads and
+  // writes textContent through one elided setter (2), toggles the equiv line's
+  // over-balance class after a contains() read (2), and reads the mode
+  // toggle's dataset once in the click wiring (1). A third textContent or a
+  // new classList site here is a new write path, the shape this count exists
+  // to make a conscious act.
+  {
+    file: 'trade_woc_arm_painter.ts',
+    allow: { '.textContent': 2, '.classList': 2, '.dataset': 1 },
+    reflowAllow: {},
+  },
+  // The options window's restart strip: cold (built with the panel that hosts a
+  // next-launch row, no driver of its own) and held to the full write contract
+  // like tab_strip above. buildRestartStrip mints the row once: 3 class
+  // assignments, the [data-restart-game] hook, the button label, and the two
+  // focus keys (status and button), setAttributes through the shared
+  // FOCUS_KEY_ATTR constant rather than dataset writes. paintRestartStrip moves a BUILT row to a new
+  // state in place, which is the other half of each count: the state stamp on
+  // [data-restart-strip], the status text, and the status/alert role swap (the
+  // second setAttribute), at most one pass per player-caused transition
+  // (ready -> restarting -> failed). Those repaint writes are raw and unelided
+  // by design: the painter is cold (no driver, no per-frame call), every
+  // transition is a value change, and a read-compare would guard nothing. A
+  // write this list does not name is a new write path, the shape these counts
+  // exist to make a conscious act.
+  {
+    file: 'restart_strip_painter.ts',
+    allow: { '.className': 3, '.dataset': 2, '.textContent': 2, '.setAttribute': 3 },
+    reflowAllow: {},
+  },
   // yumi builds its whole strip + respawn overlay once in ensureEls (14 class
   // assignments + the two role attributes + the toggle's type); every
   // per-frame write is facet-routed.
@@ -583,7 +677,9 @@ const HOT_PAINTERS: ReadonlyArray<ScannedPainter> = [
     allow: { '.className': 14, '.setAttribute': 3 },
     reflowAllow: {},
   },
-  { file: 'auras_painter.ts', allow: { '.className': 3 }, reflowAllow: {} },
+  // 3 one-time pooled-node builds (createNode's .buff/.dur/.stacks) + the overflow
+  // badge span built once in the constructor.
+  { file: 'auras_painter.ts', allow: { '.className': 4 }, reflowAllow: {} },
   {
     file: 'fct_painter.ts',
     allow: { '.className': 1, '.setAttribute': 1 },
@@ -629,6 +725,33 @@ const HOT_PAINTERS: ReadonlyArray<ScannedPainter> = [
     allow: { '.innerHTML': 1, '.setAttribute': 1 },
     reflowAllow: {},
   },
+  // The persistent gathering goal tracker (Intentional Gathering PR4): a
+  // cold full-rebuild, not a per-frame path. GatheringGoalController owns
+  // the invalidation signature (an unchanged goal never calls this at all),
+  // so the whole panel body rebuilds in ONE innerHTML write plus the ONE
+  // display-flip write that shows/hides the panel; every dynamic value and
+  // every focus key rides that same template string via esc()/focusKeyAttr(),
+  // so no other raw write exists anywhere in the file. PR5 added a per-row
+  // Sources <details> disclosure painted via renderGatheringSourceDetail
+  // (gathering_source_painter.ts): every DOM write that call performs is
+  // counted in THAT file's own budget, never this one's, so the allowance
+  // below is unchanged. The extra querySelector/querySelectorAll/getAttribute
+  // calls that capture and restore each disclosure's open state are outside
+  // this bucket's scan entirely (ELEMENT_QUERIES is only checked inside a
+  // registered driver callback, and this render path is not one).
+  {
+    file: 'hud/professions/gathering_goal_painter.ts',
+    allow: { '.style': 1, '.innerHTML': 1 },
+    reflowAllow: {},
+  },
+  // Source details rebuild only on a picker draft change or the goal
+  // controller's invalidation. These writes create that bounded subtree;
+  // the painter owns no clock or layout reads.
+  {
+    file: 'hud/professions/gathering_source_painter.ts',
+    allow: { '.textContent': 7, '.className': 7 },
+    reflowAllow: {},
+  },
 ];
 
 // BUCKET 2 of 3: the src/ui painters that are NOT facet-routed because they draw to a 2D
@@ -672,6 +795,7 @@ const CANVAS_PAINTERS: ReadonlyArray<ScannedPainter> = [
     allow: {},
     reflowAllow: { getComputedStyle: 1 },
   },
+  { file: 'dungeon_map_painter.ts', allow: {}, reflowAllow: { getComputedStyle: 1 } },
   { file: 'lastkeep_map_painter.ts', allow: {}, reflowAllow: { getComputedStyle: 1 } },
   { file: 'map_window_painter.ts', allow: {}, reflowAllow: { getComputedStyle: 1 } },
   { file: 'minimap_painter.ts', allow: {}, reflowAllow: { getComputedStyle: 1 } },
@@ -747,6 +871,45 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
     reflowAllow: { '.getBoundingClientRect': 1, '.scrollTop': 4 },
     driverAllow: {},
   },
+  // The two touch gesture layers of the mobile action ring, one entry each because they
+  // are twins: ONE button/seat rect plus ONE computed-style read, taken when a press
+  // OPENS the overlay (the radial's reveal, the strip's pointerdown measure) and never
+  // again while the finger travels. Both numbers are per gesture, not per frame or per
+  // move: the painters that follow read only the cached placement.
+  {
+    file: 'hud/action_bar/radial_gesture_controller.ts',
+    reflowAllow: { '.getBoundingClientRect': 1, getComputedStyle: 1 },
+    driverAllow: {},
+  },
+  // The strip menus' SHARED gesture layer, which the consumables row and the menu
+  // control are both thin instantiations of (neither wrapper reads layout at all
+  // any more, which is why neither carries an allowance): ONE anchor rect plus
+  // ONE computed-style read taken at pointerdown, never again while the finger
+  // travels the row, and the painters that follow read only the cached placement
+  // (the menu caption included, which is why it clamps against a nominal
+  // half-width rather than measuring itself).
+  {
+    file: 'hud/strip_gesture_controller.ts',
+    reflowAllow: { '.getBoundingClientRect': 1, getComputedStyle: 1 },
+    driverAllow: {},
+  },
+  // The quest strip's width bound. Its ONE rect helper is shared by all three
+  // measures (the app-viewport container, the strip's own CSS-seated anchor,
+  // and the band's occupants). It is ENTERED on every repaint and gated inside
+  // by a cheap key built from non-layout reads: the rendered content, the
+  // viewport, the tier/scale attributes, and each band occupant's classes plus
+  // child count. On top of that key it re-measures unconditionally every
+  // SEAT_REMEASURE_TICKS tracker ticks (about once a second on the medium
+  // band), because an occupant can change WIDTH with no attribute and no child
+  // count moving (a buff's stack text, a longer zone name) and no cheap signal
+  // exists for it. So a steady HUD is bounded at roughly one measure per
+  // second, never per frame. The target frame is deliberately NOT in that key
+  // and is never measured: the anchor comes from hud.mobile.css.
+  {
+    file: 'hud/quest/quest_strip_controller.ts',
+    reflowAllow: { '.getBoundingClientRect': 1 },
+    driverAllow: {},
+  },
   // The gather-node hover tip (the phase 14 QA's countdown clock): pointer
   // -driven repaints plus ONE 1 Hz interval armed only while a COOLDOWN tip
   // is shown, disposed on hide and by the ready flip. Its tick re-enters
@@ -776,14 +939,29 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
       },
     ],
   },
-  { file: 'bank_window.ts', reflowAllow: { '.scrollTop': 4 }, driverAllow: {} },
+  // SIX, and the count is the shape of the fix rather than growth. WHICH element
+  // scrolls the personal pane depends on the viewport (Bank Storage phase 18: the
+  // .bank-scroll region normally, the window itself in the short-phone pinned-footer
+  // regime), so the pair became a pair of pairs: captureScroll reads both, and both
+  // restoreScroll and refreshGrid write both back. The window deliberately does not
+  // ask which regime is live, because asking would mean a second copy of the media
+  // query in TS; carrying both is a generalization of "a new pane starts at the
+  // top" rather than a free no-op (src/ui/bank_chrome_layout_core.ts states why).
+  // COST, and this is why it is a re-point rather than a regression: on each path
+  // the reads are ADJACENT inside captureScroll and the writes all follow them,
+  // so each added occurrence rides a flush its neighbour already paid for and the
+  // per-path flush count is exactly what it was before. (refreshGrid costs two:
+  // the read pair, then a DOM mutation, then the write pair, which is what it
+  // cost with one of each too. Interleaving a read BETWEEN the writes is what
+  // would make this thrash, and nothing here does.)
+  { file: 'bank_window.ts', reflowAllow: { '.scrollTop': 6 }, driverAllow: {} },
   // The scroll pair and the rAF both belonged to the mount picker's
   // scroll-the-selected-card-into-view path, which went away when reins became
   // usable items and the picker was deleted. The sheet now reads nothing and
   // arms nothing.
   { file: 'char_window.ts', reflowAllow: {}, driverAllow: {} },
   {
-    file: 'crafting_window.ts',
+    file: 'hud/professions/crafting_window.ts',
     // Three scroll regions carried across the rebuild, capture + write-back
     // each: .crafting-body, the identity card's capped .profession-skill-list
     // (desktop), and the card itself (the MOBILE scroller; hud.mobile.css
@@ -795,12 +973,34 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
   // Same scroll pair as the vendor family's cold windows above: read the
   // position before the rebuild, write it back after, so the order list
   // does not jump under the player on their own action's repaint.
-  { file: 'commission_order_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  {
+    file: 'hud/professions/commission_order_window.ts',
+    reflowAllow: { '.scrollTop': 2 },
+    driverAllow: {},
+  },
   // Two polls that repaint an OPEN window only: a 15s refresh of the reward state and a 30s
   // countdown tick. Page cadence rather than frame cadence, and both no-op while closed.
+  // A THIRD cadence reaches this same body and does NOT show up in the `drivers`
+  // list below, because the sweep scans in-file setInterval/setTimeout/rAF and
+  // this one is external: hud.update()'s 500 ms slowHud divider calls
+  // refreshIfChanged (Bank Storage phase 15, ruling 21). It is named here so a
+  // reader of this row still knows every cadence that can repaint the body. It
+  // is gated twice before it reaches the scroll pair: the HUD only calls it while
+  // the window is open, and the window returns unless the ladder count actually
+  // moved, so in steady state it costs a querySelector and a scalar compare and
+  // paints nothing. tests/daily_rewards_store_behavior.test.ts pins both arms
+  // against a real paint counter.
   {
     file: 'daily_rewards_window.ts',
-    reflowAllow: {},
+    // The same scroll pair the vendor family and commission_order_window hold:
+    // read the position before the body rebuild, write it back after. Granted
+    // here because the store's charter grid is the LAST section, below the whole
+    // armory, and EVERY purchase outcome forces a rebuild, so without the pair a
+    // buyer is thrown to the top of a long scroller on their own action. It runs
+    // on that rebuild only (replaceStoreBody, which elides whole on unchanged
+    // markup), never on a frame and never on either interval below. The count is
+    // what makes a THIRD read a conscious act.
+    reflowAllow: { '.scrollTop': 2 },
     driverAllow: { setInterval: 2 },
     drivers: [
       {
@@ -837,7 +1037,79 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
     ],
   },
   { file: 'deeds_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  // The Harvest Journal's countdown clock: ONE 1 Hz interval armed on open and
+  // cleared on close, the finest resolution any line in that window renders. It
+  // is also the window's only refresh path (nothing else drives it but a
+  // language switch), which is deliberate: the plot model is re-read from the
+  // world every tick, so the journal stays consistent with the server's
+  // events-before-snapshots order without an event-forced cache.
+  {
+    file: 'hud/professions/harvest_journal_window.ts',
+    reflowAllow: {},
+    driverAllow: { setInterval: 1 },
+    drivers: [
+      {
+        driver: 'setInterval',
+        everyMs: 1000,
+        why: "the crop countdown: once a second, rebuild the pure view from a fresh myFarmPlots read and compare its VALUE signature with the painted one. A moved model (a plot planted or harvested, a growing plot flipping to ready or withered, a countdown crossing its deadline) repaints whole through the SAME paint an open takes; an unmoved one rewrites only the time cells' text. Armed on open, cleared on close, and never armed at rest.",
+        stopsAt: {
+          paint:
+            "the window's ordinary full re-render, shared with open() and the language-switch render(). Counting a render path per driver would re-run the argument the cold bucket settled (a count over a render churns on every edit and never moves when the real hazard lands); what this entry holds is that the tick does nothing EXTRA on its way there, and that it only gets there when the model actually moved.",
+        },
+        // `.style` is the `isOpen` getter reading root().style.display, the
+        // daily_rewards shape (this matcher counts ACCESSES, not writes).
+        // `.textContent` is ONE, the elided write alone: the tick compares
+        // against the CACHED rendered string (collected with the cell refs at
+        // the paint that minted them, the lockpick #2498 discipline), so an
+        // unchanged cell costs no DOM access at all and a journal of day-long
+        // crops touches nothing between minute boundaries. The former
+        // `.dataset` read per tick moved to the paint-time collection with
+        // the refs (phase 14).
+        writeAllow: { '.style': 1, '.textContent': 1 },
+        // ZERO: the countdown cell refs are collected once per paint, at the
+        // one innerHTML site that replaces the nodes, never re-queried from
+        // the tick (the same fix #2498 made to the lockpick clock).
+        queryAllow: {},
+        idlAllow: {},
+        // Zero: the tick writes text but never reads a layout box back.
+        reflowAllow: {},
+      },
+    ],
+  },
+  // The Perfecting window's convergence clock (Masterwrought phase 14): ONE
+  // 1 Hz interval armed on open and cleared on close, the harvest journal's
+  // shape. It exists because the attempt path emits NO event (feedback is the
+  // sim's lines plus the inv/einst mirrors re-diffing), so the window compares
+  // a VALUE signature once a second and repaints only when the model moved.
+  // The `.scrollTop` pair is the paint path's scroll carry (read before the
+  // innerHTML rebuild, write after), the reliquary shape.
+  {
+    file: 'hud/professions/perfecting_window.ts',
+    reflowAllow: { '.scrollTop': 2 },
+    driverAllow: { setInterval: 1 },
+    drivers: [
+      {
+        driver: 'setInterval',
+        everyMs: 1000,
+        why: 'the convergence poll: once a second while open, rebuild the pure view from fresh world reads and compare its VALUE signature with the painted one. A moved model (a material count, a rank landing, the Perfected or promoted stamp, the identity mirror syncing) repaints whole through the SAME paintFrom an open takes; an unmoved one does nothing at all.',
+        stopsAt: {
+          close:
+            'the normal window teardown, reached once only when the IWorld changes. It dismisses prompts and clears this interval; perfecting_window.test.ts pins that no prompt, command, or timer survives the world change.',
+
+          paintFrom:
+            "the window's ordinary full re-render, shared with open(), the selection click, and the language-switch relocalize(). The tick does nothing extra on its way there and only gets there when the model actually moved (the harvest journal's argument).",
+        },
+        // `.style` is the `isOpen` getter reading rootEl.style.display (the
+        // daily_rewards shape: the matcher counts ACCESSES, not writes).
+        writeAllow: { '.style': 1 },
+        queryAllow: {},
+        idlAllow: {},
+        reflowAllow: {},
+      },
+    ],
+  },
   { file: 'reliquary_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  { file: 'hud/cosmetics/cosmetics_window.ts', reflowAllow: {}, driverAllow: {} },
   { file: 'dungeon_finder_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
   // The lockpick clock: a 100ms tick that repaints the remaining-time bar for the duration
   // of one attempt, generation-guarded and cleared on stop. The fastest module-owned driver
@@ -873,6 +1145,10 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
   // clamp a drag or resize; chat_window fits the input and keeps the log pinned to the
   // bottom; fiesta forces one reflow to restart a CSS animation, the same documented trick
   // fct_painter uses.
+  // The arrange-mode border hit test (edgeAt) reads a CACHED wrap box derived
+  // from the applied placement (refilled by apply()/ensureGeometry, nulled on
+  // viewport resize), so hovering the unlocked chat box costs no layout read
+  // per pointermove; the five reads are the drag/resize measures.
   {
     file: 'hud/chat/chat_geometry_controller.ts',
     reflowAllow: { '.getBoundingClientRect': 5 },
@@ -900,9 +1176,23 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
   },
   { file: 'hud/fiesta/fiesta_controller.ts', reflowAllow: { '.offsetWidth': 1 }, driverAllow: {} },
   { file: 'hud/vendor/heroic_vendor_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  {
+    file: 'hud/vendor/crucible_vendor_window.ts',
+    reflowAllow: { '.scrollTop': 2 },
+    driverAllow: {},
+  },
   { file: 'hud/vendor/train_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
   { file: 'hud/vendor/unbind_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
   { file: 'hud/vendor/vendor_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  // The Loot Explorer body preserves scroll across an explicit body rebuild,
+  // the same read-before/write-after shape as the vendor and spellbook
+  // windows. It runs only when tab/search/filter state changes the panel
+  // contents, so the long source list stays anchored under the player.
+  {
+    file: 'hud/loot_explorer/loot_explorer_window.ts',
+    reflowAllow: { '.scrollTop': 2 },
+    driverAllow: {},
+  },
   {
     file: 'hud/vendor/warfare_vendor_window.ts',
     reflowAllow: { '.scrollTop': 2 },
@@ -921,7 +1211,11 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
   // path. ONE call, guarded by a feature check with a setTimeout fallback; the
   // count is 3 because the optional-API type declaration names it twice more.
   { file: 'options_window.ts', reflowAllow: {}, driverAllow: { requestIdleCallback: 3 } },
-  { file: 'professions_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  {
+    file: 'hud/professions/professions_window.ts',
+    reflowAllow: { '.scrollTop': 2 },
+    driverAllow: {},
+  },
   { file: 'spellbook_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
   // The root, trigger, and popover rects position the target-aura configurator inside the
   // viewport. They run only when the player opens or changes that configurator, or when an
@@ -946,6 +1240,29 @@ const COLD_PAINTER_ALLOWANCES: ReadonlyArray<ColdPainter> = [
     driverAllow: {},
   },
   { file: 'town_focus_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  // The scroll pair again, and TWO containers behind it (the panel body and the
+  // detail pane) rather than one, which is why the count is still 2: the painter
+  // walks a SCROLL_KEEPERS table, so both share a single read site and a single
+  // write site. A third occurrence here means someone added a second read path,
+  // which is the shape this count exists to make a conscious act. It carries more
+  // weight in this window than in most: the slow-band poll rebuilds on every
+  // countdown bucket change, once a second inside the anti-snipe window, so
+  // without the pair the browse list yanks itself to the top while it is read.
+  { file: 'woc_market_window.ts', reflowAllow: { '.scrollTop': 2 }, driverAllow: {} },
+  // The hub practice coach's mobile-control visibility probe: on a step that must
+  // glow a mobile-only control (the Meters entry under Actions > More, or the
+  // Spellbook fallback when the taught ability is not on the bar), it walks up to
+  // three fixed candidate ids (the control, then its More tray, then the menu
+  // anchor) and reads ONE rect per candidate to find the first one actually
+  // rendered. Entered at most once per `update()` call, itself throttled to a
+  // 250ms cadence (CHECK_INTERVAL_MS) and short-circuited to nothing while the
+  // player is outside the hub practice yard, so this never runs on the render or
+  // sim frame budget.
+  {
+    file: 'hud/practice/hub_lesson_controller.ts',
+    reflowAllow: { '.getClientRects': 1 },
+    driverAllow: {},
+  },
 ];
 
 function stripComments(src: string): string {
@@ -1327,6 +1644,14 @@ describe('hud_perf_budget ARM 1: every src/ui painter holds its bucket contract 
     expect(controllers).toContain('hud/chat/chat_geometry_controller.ts');
     expect(COLD_PAINTERS).toContain('hud/map/map_marker_interaction_controller.ts');
     expect(COLD_PAINTERS).toContain('hud/fiesta/fiesta_controller.ts');
+    // Bank Storage phase 17's extraction, named here because its FILENAME is the
+    // whole reason it holds the cold contract. The spin overlay's code held it
+    // inside src/ui/daily_rewards_window.ts; the extraction would have shed it
+    // under a name outside this sweep, which is what the header above calls the
+    // point of the widening. Renaming the file back sheds the contract silently
+    // (the only other red is a missing-path row a contributor would simply edit),
+    // so the membership is pinned rather than the regex.
+    expect(COLD_PAINTERS).toContain('daily_rewards_spin_controller.ts');
   });
 
   // The cold contract. Swept as ONE test per matcher family over the whole bucket rather
@@ -1487,6 +1812,8 @@ describe('hud_perf_budget ARM 1: every src/ui painter holds its bucket contract 
       'gather_node_tooltip_controller.ts#0',
       'daily_rewards_window.ts#0',
       'daily_rewards_window.ts#1',
+      'hud/professions/harvest_journal_window.ts#0',
+      'hud/professions/perfecting_window.ts#0',
       'hud/delve/lockpick_window.ts#0',
     ]);
     // THIRD, the matchers must have seen real source. The positive control is the lockpick
@@ -1514,6 +1841,19 @@ describe('hud_perf_budget ARM 1: every src/ui painter holds its bucket contract 
       // shown guard plus one pure model rebuild.
       'gather_node_tooltip_controller.ts: paintAt',
       'daily_rewards_window.ts: renderCurrent',
+      // The journal's countdown tick cuts at the SAME full paint an open takes,
+      // and only reaches it when the model's value signature actually moved
+      // (argued in the entry's why/stopsAt above): the tick body itself is the
+      // isOpen guard, one pure view rebuild, and the text-only cell rewrite.
+      'hud/professions/harvest_journal_window.ts: paint',
+      // The Perfecting window's convergence tick, the journal's exact shape:
+      // it cuts at the SAME full paint an open and a selection click take, and
+      // only reaches it when the value signature moved (argued in the entry's
+      // why/stopsAt above). The tick body itself is the isOpen guard plus one
+      // pure view rebuild and signature compare.
+      // A world change takes normal teardown once and cancels the driver.
+      'hud/professions/perfecting_window.ts: close',
+      'hud/professions/perfecting_window.ts: paintFrom',
     ]);
     expect(
       sweep.violations,
@@ -2418,6 +2758,7 @@ function fakeEl(): HTMLElement {
       toggle(): void {},
     },
     setAttribute(): void {},
+    removeAttribute(): void {},
   } as unknown as HTMLElement;
 }
 
@@ -2455,7 +2796,8 @@ interface PainterHarness {
 function buildHarnesses(shape: WorldShape, facet: PainterHostWriters): PainterHarness[] {
   const harnesses: PainterHarness[] = [];
 
-  // xp_bar: setWidth + setStyleProp (--xp-fill on bar + frame, rested geometry) + setText + toggleClass.
+  // xp_bar: setWidth + setStyleProp (--xp-fill on bar + frame, rested geometry) + setText
+  // + setAttr (the always-visible percent, on both bar and frame) + toggleClass.
   {
     const bar = fakeEl();
     const fill = fakeEl();
@@ -2463,7 +2805,13 @@ function buildHarnesses(shape: WorldShape, facet: PainterHostWriters): PainterHa
     const label = fakeEl();
     const playerFrame = fakeEl();
     const painter = new XpBarPainter(facet, bar, fill, rested, label, playerFrame);
-    const view: XpBarView = { fillFrac: 0.5, restedFrac: 0.1, label: 'XP 1 / 2', postCap: false };
+    const view: XpBarView = {
+      fillFrac: 0.5,
+      restedFrac: 0.1,
+      label: 'XP 1 / 2',
+      percentText: '50%',
+      postCap: false,
+    };
     harnesses.push({ name: 'xp_bar', drive: () => painter.paint(view) });
   }
 
@@ -2568,6 +2916,7 @@ function buildHarnesses(shape: WorldShape, facet: PainterHostWriters): PainterHa
           usable: true,
           outOfRange: false,
           queued: false,
+          aiming: false,
           procGlow: false,
           empowered: false,
           ascensionSpender: false,
@@ -2654,6 +3003,8 @@ function idleWorld(): ActionBarWorldInput {
       cooldowns: new Map(),
       gcdRemaining: 0,
       potionCdRemaining: 0,
+      resourceType: 'mana' as const,
+      savedMana: 0,
       queuedOnSwing: null,
       auras: [],
       pos: { x: 0, y: 0, z: 0 },
@@ -2662,6 +3013,7 @@ function idleWorld(): ActionBarWorldInput {
     inventory: [],
     stealthed: false,
     entities: [],
+    activeAimSlot: null,
   };
 }
 
@@ -2728,6 +3080,91 @@ describe('hud_perf_budget ARM 2: per-frame allocation budget (Node, npm test)', 
       expect(() => {
         assertAllocationStable(() => view.tick({ auras }), 64, `auras_view (${shape}) container`);
         assertAllocationStable(() => view.tick({ auras }).slots, 64, `auras_view (${shape}) slots`);
+      }).not.toThrow();
+    });
+  }
+
+  // target_dots_view sits in the same band as auras_view above and makes the
+  // same reuse claim, so it is held to the same probe rather than to a
+  // hand-rolled identity assertion in its own suite.
+  it('target_dots_view reuses its state container and row array every tick', () => {
+    const view = createTargetDotsView({
+      isOwn: () => true,
+      auraName: (a) => a.id,
+      targetName: (e) => e.name,
+      iconKey: (a) => a.id,
+    });
+    const entities = [
+      {
+        id: 1,
+        kind: 'mob',
+        name: 'Dummy',
+        dead: false,
+        auras: [
+          {
+            id: 'corruption',
+            name: 'Blackrot',
+            kind: 'dot' as const,
+            value: 6,
+            remaining: 12,
+            duration: 18,
+            sourceId: 4,
+            school: 'shadow',
+          },
+        ],
+      },
+    ];
+    const tick = () => view.tick({ entities, targetId: 1, enabled: true });
+    expect(() => {
+      assertAllocationStable(tick, 64, 'target_dots_view container');
+      assertAllocationStable(() => tick().rows, 64, 'target_dots_view rows');
+    }).not.toThrow();
+  });
+  // The aura tracks ride the same per-frame band as the strips above, and SIX of
+  // them tick every frame, so a container minted per tick is six allocations per
+  // frame rather than one. The core claims its state, its row array and every row
+  // record are reused; this is what makes that claim load-bearing instead of
+  // hand-checked. Both the self scan and the ally scan run (the steady ally
+  // carries a row on both tracks), and the points track is driven too, because
+  // its peak map and the live-key set it prunes with are the per-row state that
+  // could grow.
+  for (const trackId of ['friendly', 'shields'] as const) {
+    it(`aura_track_view reuses its state container every tick (${trackId})`, () => {
+      const descriptor = AURA_TRACKS.find((t) => t.id === trackId);
+      if (!descriptor) throw new Error(`no such track: ${trackId}`);
+      const view = createAuraTrackView(descriptor, {
+        isOwn: () => true,
+        isMode: () => false,
+        auraName: (a) => a.id,
+        unitName: (e) => e.name,
+        iconKey: (a) => a.id,
+      });
+      const auras = [
+        {
+          id: trackId === 'shields' ? 'power_word_shield' : 'rejuvenation',
+          name: 'A',
+          kind: trackId === 'shields' ? 'absorb' : 'hot',
+          remaining: 8,
+          duration: 12,
+          sourceId: 1,
+          value: 600,
+        },
+      ];
+      const player = { id: 1, name: 'P', dead: false, auras };
+      const ally = { id: 2, name: 'B', dead: false, auras };
+      const allies = [ally];
+      const input = { player, allies, enabled: true, includeModes: true };
+      expect(() => {
+        assertAllocationStable(
+          () => view.tick(input),
+          64,
+          `aura_track_view (${trackId}) container`,
+        );
+        assertAllocationStable(
+          () => view.tick(input).rows,
+          64,
+          `aura_track_view (${trackId}) rows`,
+        );
       }).not.toThrow();
     });
   }

@@ -3,7 +3,8 @@
 // sim entity count, achieved sim Hz, per-phase loop timing) plus the
 // throughput counters (ws frames handled, inbound frames dropped by cause,
 // flood kicks, input frames proven missed, chat messages, characters
-// created, guild-bank incidents by kind), all registered on the SAME prom-client
+// created, guild-bank incidents by kind, vault-ledger incidents by kind), all
+// registered on the SAME prom-client
 // registry the RED exporter builds
 // (server/http/metrics.ts). Prometheus attaches env / service=game / server_name at
 // scrape time, so nothing here emits those.
@@ -14,12 +15,22 @@
 // never has to push a sample. COUNTERS are pushed from their emission sites through
 // the process-wide slot in server/http/game_signals.ts (installed by main.ts at
 // boot with the sink this function returns), exactly like the attack-signal counters.
+// Three lifetime totals whose truth already lives in their emitting modules (the
+// bank-ledger FIFO's dropped rows, the two backend-cancel counts) are instead
+// SYNCED from the GameStateSource at scrape time; see their registration below.
+// The offline-writer fence refusals sync the same way but read their emitting
+// module DIRECTLY (server/offline_fence_refusals.ts), like the bank-ledger
+// growth budget and the auth-guard cache stats already do: the counters are
+// process-local and monotonic there, and routing them through
+// GameStateSource would only add a hop GameServer has no part in.
 //
 // CARDINALITY IS BOUNDED BY DESIGN, same contract as server/http/metrics.ts: the
 // only label values are the fixed tick-phase names, the two per-phase stats
 // (p95, max), the two ws directions (in, out), the fixed inbound drop
 // causes (WS_DROP_CAUSES), the fixed guild-bank incident kinds
-// (GUILD_BANK_INCIDENTS), and the content-derived economy and fishing
+// (GUILD_BANK_INCIDENTS), the fixed vault-ledger incident kinds
+// (VAULT_LEDGER_INCIDENTS), the fixed offline-writer families
+// (OFFLINE_FENCE_WRITERS), and the content-derived economy and fishing
 // vocabularies (COPPER_FLOW_SOURCES, HARVEST_BANDS, NODE_TIERS, FISHING_BANDS,
 // ROD_FEE_RECIPE_IDS). Nothing per-player and nothing per-guild (account id,
 // character id, guild id, name, ip) is ever a label. The tick-phase series count is fixed at
@@ -31,13 +42,17 @@
 // THE `band` LABEL MEANS TWO DIFFERENT THINGS, and deliberately so: on
 // woc_gather_harvests_total it is the node's ZONE (the R3 re-key), while on
 // the woc_fishing_* family the zone rides its own `zone` label and `band` is
-// the EFFECTIVE fishing rung 0/1/2 (proficiency capped by the rod,
-// effectiveFishingBand in src/sim/professions/fishing.ts). Both vocabularies
+// the EFFECTIVE fishing rung, 0 to 5 (proficiency capped by the rod,
+// effectiveFishingBand in src/sim/professions/fishing.ts; the ladder itself is
+// FISHING_CATCH_BAND_THRESHOLDS in src/sim/professions/fishing_bands.ts, and it
+// read 0/1/2 until masterwrought Phase 11i grew it). Both vocabularies
 // ship together in this metric family's first release, so nothing live
 // depends on either yet; they still must not be renamed apart later, and the
 // label reads against its metric, never across families.
 
 import { Counter, Gauge, Histogram, type Registry } from 'prom-client';
+import { bankLedgerGrowthBudgetReadout } from '../bank_ledger_growth_budget';
+import { bankLedgerGrowthWarningActive } from '../bank_ledger_growth_monitor';
 import {
   BG_COMPOSITIONS,
   BG_END_CAUSES,
@@ -62,6 +77,8 @@ import {
   ROD_FEE_RECIPE_IDS,
   rodFeeForRecipe,
 } from '../fishing_telemetry';
+import { OFFLINE_FENCE_WRITERS, offlineFenceRefusals } from '../offline_fence_refusals';
+import { wocAuthGuardCacheStats } from '../woc_auth_guard_cache';
 import {
   type GameMetricsCounters,
   GENERAL_CHAT_QUOTA_DB_OUTCOMES,
@@ -70,6 +87,10 @@ import {
   type GeneralChatQuotaOutcome,
   GUILD_BANK_INCIDENTS,
   type GuildBankIncident,
+  VAULT_LEDGER_INCIDENTS,
+  type VaultLedgerIncident,
+  WOC_ESCROW_QUEUE_OUTCOMES,
+  type WocEscrowQueueOutcome,
   WS_DROP_CAUSES,
   type WsDropCause,
   type WsMessageDirection,
@@ -77,6 +98,17 @@ import {
 
 /** Live characters online (joined sessions). */
 export const WOC_PLAYERS_ONLINE = 'woc_players_online';
+export const WOC_USERNAME_BANLIST_FILE_LOADED = 'woc_username_banlist_file_loaded';
+export const WOC_CHARACTER_STATE_BYTES_MAX = 'woc_character_state_bytes_max';
+/** The p99 serialized character blob over the most recent saves: the fleet-creep
+ *  read the monotonic max cannot give (server/character_blob_size.ts). */
+export const WOC_CHARACTER_STATE_BYTES_P99 = 'woc_character_state_bytes_p99';
+
+/** Lease-fence refusals by offline character-blob writer family
+ *  (server/offline_fence_refusals.ts). A refusal means a durable effect
+ *  silently did NOT land and nothing in the tree re-triggers it, which is why
+ *  this is a scraped series and not only a log line. */
+export const WOC_OFFLINE_FENCE_REFUSALS_TOTAL = 'woc_offline_fence_refusals_total';
 
 /** Distinct accounts online (a single account may hold several sessions). */
 export const WOC_ACCOUNTS_ONLINE = 'woc_accounts_online';
@@ -94,6 +126,60 @@ export const WOC_SIM_TICK_HZ = 'woc_sim_tick_hz';
  *  every db-backed path, and the counter-signal for any fire-and-forget read
  *  family (a regression in its rate shows up here first in production). */
 export const WOC_DB_POOL_CLIENTS = 'woc_db_pool_clients';
+
+/** Total deadline-expiry backend cancels REQUESTED through the dedicated side
+ *  pool. A rising rate means transactions are hitting their wall deadlines
+ *  (the saturation precursor). A Counter, so rate()/increase() read correctly
+ *  across realm restarts. */
+export const WOC_DB_BACKEND_CANCEL_REQUESTS_TOTAL = 'woc_db_backend_cancel_requests_total';
+
+/** The subset of requested cancels that FAILED: even the sub-second cancel
+ *  path could not reach PostgreSQL. Its own counter beside the requests, not
+ *  a measure label on one family (the koi/catches rule below: a subset series
+ *  under a shared name would make the family's sum double-count). */
+export const WOC_DB_BACKEND_CANCEL_FAILURES_TOTAL = 'woc_db_backend_cancel_failures_total';
+
+/** Character-save FIFO keys with a queued or running write (the per-character
+ *  serial writer's live map size). The escrow write-path rider's gauge. The
+ *  alert threshold is SUSTAINED values above the autosave wave's own
+ *  SAVE_CONCURRENCY (4): the wave bounds how many wave-driven saves run at
+ *  once, so a persistently higher reading means out-of-band writers are
+ *  queueing, the precursor the wocEscrowQueue refusal counters alert on. */
+export const WOC_SAVE_PENDING_KEYS = 'woc_character_save_pending_keys';
+
+/** The realm escrow gate's live occupancy (the write-path rider's
+ *  realm-global bound): the instantaneous truth the wocEscrowQueue counter
+ *  kinds approximate, exported to Prometheus so an alert rule can watch
+ *  sustained inFlight at the cap instead of scraping the secret-gated ops
+ *  readout. */
+export const WOC_ESCROW_GATE_IN_FLIGHT = 'woc_escrow_gate_in_flight';
+
+/** Realm-wide cap across the named dominant background DB producers. */
+export const WOC_BACKGROUND_DB_GATE = 'woc_background_db_gate';
+
+/** The character-delete sub-gate (the delete-local concurrency bound UNDER
+ *  the realm background gate) by the same fixed measures. Its own family
+ *  beside woc_background_db_gate: the sub-cap parks a delete stampede BEFORE
+ *  the realm gate, so the realm family's waiting gauge structurally cannot
+ *  see it (a stampede would read there as waiting at most the sub-cap while
+ *  players get 503s), and a leaked sub slot shows as in_flight pinned high. */
+export const WOC_CHARACTER_DELETE_GATE = 'woc_character_delete_gate';
+
+/** Total character-delete saturation refusals (the delete_busy 503s): the
+ *  bounded permit wait elapsed with no slot. Client-gone abandonments never
+ *  count. A Counter, so rate()/increase() read correctly across restarts. */
+export const WOC_CHARACTER_DELETE_BUSY_TOTAL = 'woc_character_delete_busy_total';
+
+/** Total commit-ambiguity verify outcomes on the character-delete path, by
+ *  result (landed / not_landed / failed). The orphan bug this resolver fixes
+ *  (a landed delete reported unlanded, its world purge skipped) was
+ *  production-invisible because nothing counted here; any nonzero movement
+ *  deserves a look, and `failed` climbing means ambiguity is being
+ *  propagated unresolved. A Counter for honest increase() across restarts. */
+export const WOC_CHARACTER_DELETE_VERIFY_TOTAL = 'woc_character_delete_verify_total';
+
+/** Bounded storage-recovery scheduler occupancy, age, and lifetime events. */
+export const WOC_STORAGE_RECOVERY = 'woc_storage_recovery';
 
 /** Per-phase authoritative-loop timing in SECONDS, labeled by phase and stat (p95/max). */
 export const WOC_SIM_TICK_PHASE_SECONDS = 'woc_sim_tick_phase_seconds';
@@ -128,16 +214,68 @@ export const WOC_GENERAL_CHAT_QUOTA_CACHE_ACCOUNTS = 'woc_general_chat_quota_cac
 /** Total characters successfully created. */
 export const WOC_CHARACTERS_CREATED_TOTAL = 'woc_characters_created_total';
 
+/** Last database-observed AGGREGATE audit-storage budget (bank_ledger plus the
+ *  material source journal), by fixed measure. The series keeps its historical
+ *  bank-ledger name: renaming it would break every deployed dashboard and alert
+ *  for no operational gain. */
+export const WOC_BANK_LEDGER_GROWTH_BUDGET = 'woc_bank_ledger_growth_budget';
+
+/** Database-wide audit hard-ceiling refusals in this process. */
+export const WOC_BANK_LEDGER_GROWTH_LIMIT_REFUSALS_TOTAL =
+  'woc_bank_ledger_growth_limit_refusals_total';
+
 /** Total guild-bank incidents on the dupe-sensitive paths, by kind. */
 export const WOC_GUILD_BANK_INCIDENTS_TOTAL = 'woc_guild_bank_incidents_total';
 
 /** Rift forge wire commands refused while the gate is closed (server/rift_forge_gate.ts). */
 export const WOC_RIFT_FORGE_REFUSED_TOTAL = 'woc_rift_forge_refused_total';
 
+/** Total Materials Vault ledger incidents, by kind. Its own metric rather than
+ *  a kind on the guild series: the vault is a personal per-character store, so
+ *  a guild-bank alert rule must never fire on it. */
+export const WOC_VAULT_LEDGER_INCIDENTS_TOTAL = 'woc_vault_ledger_incidents_total';
+export const WOC_BANK_VAULT_REALM_ROW_BREACHES_TOTAL = 'woc_bank_vault_realm_row_breaches_total';
+
+/** The per-process bank-ledger insert FIFO's INSTANTANEOUS occupancy, by
+ *  measure: depth is queued insert ops against BANK_LEDGER_TAIL_MAX_DEPTH,
+ *  rows is the ledger rows those ops carry against BANK_LEDGER_TAIL_MAX_ROWS
+ *  (a batched op is one depth unit but up to 112 rows, so each cap needs its
+ *  own arm). Instantaneous only; the lifetime drop total is the counter
+ *  below, never an arm here. */
+export const WOC_BANK_LEDGER_TAIL = 'woc_bank_ledger_tail';
+
+/** Total audit rows dropped at either bank-ledger FIFO cap (each dropped row
+ *  is a counted audit hole, the same hole a rejected insert leaves). Alert on
+ *  any increase. A Counter, so rate()/increase() read correctly across realm
+ *  restarts, which the old dropped_rows gauge arm did not. */
+export const WOC_BANK_LEDGER_TAIL_DROPPED_ROWS_TOTAL = 'woc_bank_ledger_tail_dropped_rows_total';
+
+/** Market sold-volume write FIFO occupancy (measure=depth queued entries,
+ *  measure=coalesced lifetime sales folded into an already-queued entry).
+ *  Instantaneous only; the lifetime drop total is the counter below. */
+export const WOC_MARKET_SOLD_VOLUME_TAIL = 'woc_market_sold_volume_tail';
+
+/** Total market sales dropped at the sold-volume write FIFO admission cap (each
+ *  is a lost observation, never a lost sale; the sale itself completed). Alert on
+ *  any increase. A Counter, so rate()/increase() read correctly across restarts. */
+export const WOC_MARKET_SOLD_VOLUME_TAIL_DROPPED_SALES_TOTAL =
+  'woc_market_sold_volume_tail_dropped_sales_total';
+
+/** Marketplace escrow-queue outcomes (the listing entry on the per-character
+ *  save FIFO), by kind. */
+export const WOC_ESCROW_QUEUE_TOTAL = 'woc_escrow_queue_total';
+
 /** Guild bank activity log cache readout, labeled by counter name. ONE metric
  *  with a `kind` label rather than six names: the vocabulary is closed and
  *  fixed, and an operator reads them together or not at all. */
 export const WOC_GUILD_BANK_LOG_CACHE = 'woc_guild_bank_log_cache';
+
+/** Marketplace auth-guard read cache readout (token and moderation arms),
+ *  labeled by arm and counter name. This is the one cache whose degradation
+ *  is a CLIFF (an over-cap working set evicts every entry before its next
+ *  poll), so the alertable series exists precisely to see the cliff form:
+ *  watch refreshes approaching reads, and evictions climbing. */
+export const WOC_AUTH_GUARD_CACHE = 'woc_auth_guard_cache';
 
 /** Total copper credited to acting players, labeled by economic surface. */
 export const WOC_COPPER_CREDITED_TOTAL = 'woc_copper_credited_total';
@@ -210,6 +348,26 @@ export const WOC_TICK_PHASES = [
   'bcastGrid',
   'bcastSelf',
   'social',
+  // Main-thread cost of the shared-blob persistence writes: the whole market book,
+  // the whole mail book, and the rift blob, each measured INSIDE its queued write
+  // thunk (server/serial_writer.ts) rather than where it is enqueued. That
+  // distinction is the whole value of the series: the writers defer the thunk to a
+  // microtask, so a timer at the enqueue site reads the bookkeeping and nothing
+  // else (0.02 ms measured around an enqueue whose write then blocked 250 ms).
+  //
+  // SCOPE, so a flat reading is not over-read: per-character blobs ride their own
+  // queue and are NOT counted here, and neither is any DB round trip. A stall this
+  // series does not explain still shows in `lateness`.
+  'saves',
+  // How late each callback fired, in seconds. Not a body phase: it is the gap
+  // BETWEEN callbacks, and it is the only series that can see the loop blocked by
+  // something the profiler never entered (a deferred write thunk, an off-loop
+  // timer, a GC pause, the host descheduling the process).
+  //
+  // Read `max`, not `p95`. The ring holds 1200 samples (about 60 s of callbacks),
+  // so a stall on a 30 s cadence is two samples per window and sits far below the
+  // 95th percentile: p95 stays flat through exactly the incident this exists for.
+  'lateness',
 ] as const;
 
 /** The two per-phase stats exposed for each phase. */
@@ -230,6 +388,33 @@ export interface TickPhaseMillis {
  * fixed values. Every method is a cheap live read: it must not block or throw.
  */
 export interface GameStateSource {
+  /**
+   * Whether the configured USERNAME_BANLIST_FILE built the name-screen list
+   * now being served (true with no file configured). A mount that fails
+   * hours after boot leaves the moderation screen serving stale terms with
+   * only a one-shot warn line to say so; this is the scrape-visible twin
+   * (server/auth.ts usernameBanlistStatus, the phase 13 QA hot-path review).
+   * A pure readout as of the LAST name screen or the boot warm: a scrape
+   * never stats or reads the file, so a break on a quiet realm shows at the
+   * next screen, not at the next scrape.
+   */
+  usernameBanlistLoaded(): boolean;
+  /**
+   * Largest serialized character blob (bytes) this process has measured at the
+   * save chokepoint (server/character_blob_size.ts high-water mark). The warn
+   * line only fires 3.2x above the modelled worst case; this gauge makes the
+   * band below it scrape-visible, so a per-player field growing without a
+   * bound shows as a climbing max long before the log says anything.
+   */
+  characterBlobBytesHighWater(): number;
+  /**
+   * The p99 serialized character blob (bytes) over the most recent saves at the
+   * same chokepoint (server/character_blob_size.ts, a count-windowed ring). The
+   * max above flags one outlier; this moves only when the bulk of the realm's
+   * blobs move, which is the shape a per-player field growing without a bound
+   * takes across a fleet. 0 before the first save.
+   */
+  characterBlobBytesP99(): number;
   /** Live characters online. */
   playersOnline(): number;
   /** Distinct accounts online. */
@@ -240,10 +425,63 @@ export interface GameStateSource {
   simEntities(): number;
   /** Achieved sim Hz, or null while the rate meter is still warming up. */
   simTickHz(): number | null;
+  /** Character-save FIFO keys with a queued or running write. */
+  savePendingKeys(): number;
+  /** The realm escrow gate's live in-flight count. */
+  escrowGateInFlight(): number;
+  backgroundDbGate(): {
+    inFlight: number;
+    waiting: number;
+    max: number;
+    configuredHeadroom: number;
+    acquired: number;
+    refused: number;
+    cancelled: number;
+  };
+  /** The character-delete sub-gate readout plus its lifetime saturation
+   *  refusals (server/character_delete_db.ts characterDeleteGateStats). */
+  characterDeleteGate(): {
+    inFlight: number;
+    waiting: number;
+    max: number;
+    configuredHeadroom: number;
+    acquired: number;
+    refused: number;
+    cancelled: number;
+    busyRefusals: number;
+    verifyLanded: number;
+    verifyNotLanded: number;
+    verifyFailed: number;
+  };
+  storageRecovery(): {
+    tracked: number;
+    scanActive: number;
+    scanQueued: number;
+    driveActive: number;
+    driveQueued: number;
+    retryTimers: number;
+    oldestTrackedAgeMs: number;
+    oldestQueuedAgeMs: number;
+    oldestActiveAgeMs: number;
+    activePastSlotTarget: number;
+    horizonBreached: boolean;
+    capacityRefusals: number;
+    retriesScheduled: number;
+    horizonBreaches: number;
+  };
   /** Per-phase p95/max in MILLISECONDS, keyed by phase name; missing phases are skipped. */
   tickPhaseMillis(): Record<string, TickPhaseMillis>;
   /** pg pool saturation snapshot (pg Pool totalCount/idleCount/waitingCount). */
   dbPool(): { total: number; idle: number; waiting: number };
+  /** Lifetime detached-backend cancel attempts/failures (the side-pool hook). */
+  dbBackendCancels(): { requested: number; failed: number };
+  /** Bank-ledger insert FIFO: live queued ops (depth), the ledger rows those
+   *  ops carry, and lifetime rows dropped at either cap. */
+  bankLedgerTail(): { depth: number; rows: number; droppedRows: number };
+  /** Market sold-volume write FIFO: live queued entries (depth), lifetime sales
+   *  coalesced into an already-queued entry, and lifetime sales dropped at the
+   *  admission cap (the sale completed; only the observation was lost). */
+  soldVolumeTail(): { depth: number; coalescedSales: number; droppedSales: number };
   generalChatQuotaDbPool(): { total: number; idle: number; waiting: number };
   generalChatQuotaInFlight(): number;
   generalChatQuotaCachedAccounts(): number;
@@ -306,6 +544,59 @@ export function registerGameStateMetrics(
   });
 
   new Gauge({
+    name: WOC_USERNAME_BANLIST_FILE_LOADED,
+    help: '1 when the configured USERNAME_BANLIST_FILE built the served name-screen term list (or no file is configured); 0 while a stale or empty list is served in its place. Reflects the state as of the last name screen or the boot warm (a scrape never stats or reads the file).',
+    registers: [registry],
+    collect() {
+      this.set(source.usernameBanlistLoaded() ? 1 : 0);
+    },
+  });
+
+  new Gauge({
+    name: WOC_CHARACTER_STATE_BYTES_MAX,
+    help: 'Largest serialized character blob in bytes measured at the save chokepoint since process start (monotonic high-water mark; the dampened warn line only fires far above the modelled worst case, this gauge watches the band below it).',
+    registers: [registry],
+    collect() {
+      this.set(source.characterBlobBytesHighWater());
+    },
+  });
+
+  new Gauge({
+    name: WOC_CHARACTER_STATE_BYTES_P99,
+    help: 'p99 serialized character blob in bytes over the most recent saves at the save chokepoint (a count-windowed ring, 0 before the first save). The max flags one outlier; this climbs only when the bulk of the realm blobs grow, the fleet-wide creep shape.',
+    registers: [registry],
+    collect() {
+      this.set(source.characterBlobBytesP99());
+    },
+  });
+
+  // The offline-writer lease-fence refusals (the Phase 18 U-SRV-HOT hand-off,
+  // landed in the QA fix round now that server/offline_fence_refusals.ts is in
+  // the tree). Same scrape-time-synced shape as the backend-cancel counters
+  // below: the truth lives in the emitting module and is monotonic per
+  // process, so collect() replays the absolute total via reset() + inc().
+  // NO separate zero-backfill loop, unlike the pushed counters further down:
+  // collect() walks the WHOLE family vocabulary every scrape, so all three
+  // series exist from the first scrape and an operator can tell "no refusals"
+  // from "the series never existed". (Measured, not assumed: an explicit
+  // backfill was written first and removed once the pin proved it changed
+  // nothing.) A refusal is not an error the caller retries: a durable effect
+  // (a rename or reclaim signer sweep, a boosted character's level column)
+  // silently did NOT land and nothing re-triggers it, which is why this is the
+  // series worth alerting on rather than a logged line.
+  new Counter({
+    name: WOC_OFFLINE_FENCE_REFUSALS_TOTAL,
+    help: 'Total offline character-blob writes refused by the load-lease fence, by writer family (rename_sweep, reclaim_sweep, pbe_roster). Each refusal is a durable effect that did not land and that nothing re-triggers; alert on any sustained increase. Counts the FENCE refusal only (the 0-row answer), never a thrown write, which is a different failure with a different operator response.',
+    labelNames: ['writer'],
+    registers: [registry],
+    collect() {
+      this.reset();
+      const refusals = offlineFenceRefusals();
+      for (const writer of OFFLINE_FENCE_WRITERS) this.inc({ writer }, refusals[writer]);
+    },
+  });
+
+  new Gauge({
     name: WOC_ACCOUNTS_ONLINE,
     help: 'Distinct accounts online.',
     registers: [registry],
@@ -320,6 +611,108 @@ export function registerGameStateMetrics(
     registers: [registry],
     collect() {
       this.set(source.wsConnections());
+    },
+  });
+
+  new Gauge({
+    name: WOC_SAVE_PENDING_KEYS,
+    help: 'Character-save FIFO keys with a queued or running write.',
+    registers: [registry],
+    collect() {
+      this.set(source.savePendingKeys());
+    },
+  });
+
+  new Gauge({
+    name: WOC_ESCROW_GATE_IN_FLIGHT,
+    help: 'Realm escrow gate occupancy (listing sequences holding a slot).',
+    registers: [registry],
+    collect() {
+      this.set(source.escrowGateInFlight());
+    },
+  });
+
+  new Gauge({
+    name: WOC_BACKGROUND_DB_GATE,
+    help: 'Named major-background-producer gate by fixed measure. Configured headroom is not a reserved pool partition because other background jobs may bypass this gate.',
+    labelNames: ['measure'],
+    registers: [registry],
+    collect() {
+      const state = source.backgroundDbGate();
+      this.set({ measure: 'in_flight' }, state.inFlight);
+      this.set({ measure: 'waiting' }, state.waiting);
+      this.set({ measure: 'max' }, state.max);
+      this.set({ measure: 'configured_headroom' }, state.configuredHeadroom);
+      this.set({ measure: 'acquired' }, state.acquired);
+      this.set({ measure: 'refused' }, state.refused);
+      this.set({ measure: 'cancelled' }, state.cancelled);
+    },
+  });
+
+  new Gauge({
+    name: WOC_CHARACTER_DELETE_GATE,
+    help: 'Character-delete sub-gate by fixed measure (the delete-local bound under the realm background gate). A stampede parks here BEFORE the realm gate, so woc_background_db_gate waiting cannot see it.',
+    labelNames: ['measure'],
+    registers: [registry],
+    collect() {
+      const state = source.characterDeleteGate();
+      this.set({ measure: 'in_flight' }, state.inFlight);
+      this.set({ measure: 'waiting' }, state.waiting);
+      this.set({ measure: 'max' }, state.max);
+      this.set({ measure: 'configured_headroom' }, state.configuredHeadroom);
+      this.set({ measure: 'acquired' }, state.acquired);
+      this.set({ measure: 'refused' }, state.refused);
+      this.set({ measure: 'cancelled' }, state.cancelled);
+    },
+  });
+
+  // Same scrape-time sync shape as the backend-cancel counters below: the
+  // truth lives in character_delete_db.ts and is monotonic per process.
+  new Counter({
+    name: WOC_CHARACTER_DELETE_BUSY_TOTAL,
+    help: 'Total character-delete saturation refusals (the delete_busy 503s). Client-gone abandonments never count. Alert on sustained increase(): players cannot delete characters.',
+    registers: [registry],
+    collect() {
+      this.reset();
+      this.inc(source.characterDeleteGate().busyRefusals);
+    },
+  });
+
+  new Counter({
+    name: WOC_CHARACTER_DELETE_VERIFY_TOTAL,
+    help: 'Commit-ambiguity verify outcomes on character deletes by result: landed (the delete committed and its world purge ran), not_landed (the row survived, refusal stood), failed (the verify itself failed, ambiguity propagated unresolved). Any movement deserves a look; failed dominating points first at the 2s idle-in-transaction bound under an event-loop stall, not the lock mode.',
+    labelNames: ['result'],
+    registers: [registry],
+    collect() {
+      this.reset();
+      const state = source.characterDeleteGate();
+      this.inc({ result: 'landed' }, state.verifyLanded);
+      this.inc({ result: 'not_landed' }, state.verifyNotLanded);
+      this.inc({ result: 'failed' }, state.verifyFailed);
+    },
+  });
+
+  new Gauge({
+    name: WOC_STORAGE_RECOVERY,
+    help: 'Bounded storage-purchase recovery state by fixed measure; ages are seconds and horizon_breached is 0/1.',
+    labelNames: ['measure'],
+    registers: [registry],
+    collect() {
+      const state = source.storageRecovery();
+      this.set({ measure: 'tracked' }, state.tracked);
+      this.set({ measure: 'scan_active' }, state.scanActive);
+      this.set({ measure: 'scan_queued' }, state.scanQueued);
+      this.set({ measure: 'drive_active' }, state.driveActive);
+      this.set({ measure: 'drive_queued' }, state.driveQueued);
+      this.set({ measure: 'retry_timers' }, state.retryTimers);
+      this.set({ measure: 'oldest_tracked_seconds' }, state.oldestTrackedAgeMs / 1000);
+      this.set({ measure: 'oldest_queued_seconds' }, state.oldestQueuedAgeMs / 1000);
+      this.set({ measure: 'oldest_active_seconds' }, state.oldestActiveAgeMs / 1000);
+      this.set({ measure: 'active_past_slot_target' }, state.activePastSlotTarget);
+      this.set({ measure: 'horizon_breached' }, state.horizonBreached ? 1 : 0);
+      this.set({ measure: 'capacity_refusals' }, state.capacityRefusals);
+      this.set({ measure: 'retries_scheduled' }, state.retriesScheduled);
+      this.set({ measure: 'horizon_breaches' }, state.horizonBreaches);
     },
   });
 
@@ -353,6 +746,79 @@ export function registerGameStateMetrics(
       this.set({ state: 'total' }, p.total);
       this.set({ state: 'idle' }, p.idle);
       this.set({ state: 'waiting' }, p.waiting);
+    },
+  });
+
+  new Gauge({
+    name: WOC_BANK_LEDGER_TAIL,
+    help: 'Per-process bank-ledger insert FIFO occupancy by measure: depth is queued insert ops against the depth cap, rows is the ledger rows those ops carry against the rows cap (a batched op is one depth unit but many rows). Instantaneous only; alert on drops via woc_bank_ledger_tail_dropped_rows_total.',
+    labelNames: ['measure'],
+    registers: [registry],
+    collect() {
+      const tail = source.bankLedgerTail();
+      this.set({ measure: 'depth' }, tail.depth);
+      this.set({ measure: 'rows' }, tail.rows);
+    },
+  });
+
+  // The three lifetime totals below are COUNTERS, not gauge arms: operators
+  // alert on rate()/increase(), which treat a counter's restart reset
+  // correctly but misread a restarting gauge as a negative spike. Their truth
+  // lives in the emitting modules (the FIFO's drop count, the cancel side
+  // pool's counts) and reaches the exporter through the same scrape-time
+  // source read as the gauges; a prom Counter has no set(), so collect()
+  // replays the absolute total via reset() + inc(). Each source value is
+  // monotonic for the process's life, so the rendered series is monotonic
+  // between restarts, exactly what the counter type promises.
+  new Counter({
+    name: WOC_BANK_LEDGER_TAIL_DROPPED_ROWS_TOTAL,
+    help: 'Total audit rows dropped at the bank-ledger insert FIFO caps (alert on any increase; each dropped row is an audit hole, the same hole a rejected insert leaves).',
+    registers: [registry],
+    collect() {
+      this.reset();
+      this.inc(source.bankLedgerTail().droppedRows);
+    },
+  });
+
+  new Gauge({
+    name: WOC_MARKET_SOLD_VOLUME_TAIL,
+    help: 'Per-process market sold-volume write FIFO occupancy by measure: depth is queued write entries against the admission cap, coalesced is the lifetime count of sales folded into an already-queued entry. Instantaneous only; alert on drops via woc_market_sold_volume_tail_dropped_sales_total.',
+    labelNames: ['measure'],
+    registers: [registry],
+    collect() {
+      const tail = source.soldVolumeTail();
+      this.set({ measure: 'depth' }, tail.depth);
+      this.set({ measure: 'coalesced' }, tail.coalescedSales);
+    },
+  });
+
+  new Counter({
+    name: WOC_MARKET_SOLD_VOLUME_TAIL_DROPPED_SALES_TOTAL,
+    help: 'Total market sales dropped at the sold-volume write FIFO admission cap (alert on any increase; each is a lost observation, the sale itself completed).',
+    registers: [registry],
+    collect() {
+      this.reset();
+      this.inc(source.soldVolumeTail().droppedSales);
+    },
+  });
+
+  new Counter({
+    name: WOC_DB_BACKEND_CANCEL_REQUESTS_TOTAL,
+    help: 'Total deadline-expiry backend cancels requested through the dedicated side pool. A rising rate means transactions are hitting their wall deadlines (the saturation precursor).',
+    registers: [registry],
+    collect() {
+      this.reset();
+      this.inc(source.dbBackendCancels().requested);
+    },
+  });
+
+  new Counter({
+    name: WOC_DB_BACKEND_CANCEL_FAILURES_TOTAL,
+    help: 'Total requested backend cancels that failed: even the sub-second cancel path could not reach PostgreSQL. A subset of woc_db_backend_cancel_requests_total.',
+    registers: [registry],
+    collect() {
+      this.reset();
+      this.inc(source.dbBackendCancels().failed);
     },
   });
 
@@ -488,6 +954,37 @@ export function registerGameStateMetrics(
     registers: [registry],
   });
 
+  new Gauge({
+    name: WOC_BANK_LEDGER_GROWTH_BUDGET,
+    help: 'Database-wide AGGREGATE audit-storage budget by fixed measure, covering bank_ledger plus the material source journal against one ceiling. accounted_rows is the audit rows the durable singleton currently accounts for: it RISES on inserts and FALLS when an owner cascade reaps audit rows, so it is not a lifetime tally. lifetime_inserted_rows is a DEPRECATED alias carrying the same value for existing dashboards and alerts; it stopped being a lifetime count when the budget became aggregate and net, and it is scheduled for removal once those panels move to accounted_rows. total_bytes is the aggregate stored size of the audit tables (0 when no byte reading has landed; bytes_known says which). All are refreshed at boot, once per minute, and on a hard-limit refusal; observation_age_seconds exposes a stalled refresh, and limit_warning flips to 1 when the observation crosses the warn fraction of the hard limit.',
+    labelNames: ['measure'],
+    registers: [registry],
+    collect() {
+      const readout = bankLedgerGrowthBudgetReadout();
+      this.set({ measure: 'hard_limit_rows' }, readout.hardLimitRows);
+      this.set({ measure: 'initialized' }, readout.committedRows === null ? 0 : 1);
+      this.set({ measure: 'accounted_rows' }, readout.committedRows ?? 0);
+      // Compatibility alias, same value: see the help text.
+      this.set({ measure: 'lifetime_inserted_rows' }, readout.committedRows ?? 0);
+      this.set({ measure: 'total_bytes' }, readout.observedBytes ?? 0);
+      this.set({ measure: 'bytes_known' }, readout.observedBytes === null ? 0 : 1);
+      this.set(
+        { measure: 'limit_warning' },
+        bankLedgerGrowthWarningActive(readout.committedRows, readout.hardLimitRows) ? 1 : 0,
+      );
+      this.set(
+        { measure: 'observation_age_seconds' },
+        readout.observedAtMs === null ? 0 : Math.max(0, (Date.now() - readout.observedAtMs) / 1000),
+      );
+    },
+  });
+
+  const bankLedgerGrowthLimitRefusals = new Counter({
+    name: WOC_BANK_LEDGER_GROWTH_LIMIT_REFUSALS_TOTAL,
+    help: 'Total database-wide bank-ledger hard-ceiling refusals observed by this process.',
+    registers: [registry],
+  });
+
   const guildBankIncidents = new Counter({
     name: WOC_GUILD_BANK_INCIDENTS_TOTAL,
     help: 'Total guild-bank incidents on the dupe-sensitive paths (escrow save, fence-out, escrow quarantine, reconcile, unloaded book, ledger write), by kind.',
@@ -498,6 +995,33 @@ export function registerGameStateMetrics(
   // operator alerts on, and an alert rule cannot fire on a series that does
   // not exist until its first incident.
   for (const kind of GUILD_BANK_INCIDENTS) guildBankIncidents.inc({ kind }, 0);
+
+  const vaultLedgerIncidents = new Counter({
+    name: WOC_VAULT_LEDGER_INCIDENTS_TOTAL,
+    help: 'Total Materials Vault ledger incidents (a rejected bank_ledger insert leaves a hole the audit replay cannot see), by kind.',
+    labelNames: ['kind'],
+    registers: [registry],
+  });
+  // Same zero-backfill reasoning as the guild kinds above.
+  for (const kind of VAULT_LEDGER_INCIDENTS) vaultLedgerIncidents.inc({ kind }, 0);
+
+  // The realm row bucket is telemetry-only (bank_vault_ledger_guard.ts): a
+  // breach is an admission the old refusing guard would have dropped. Monotone
+  // per process; alert on rate, never on the absolute value.
+  const bankVaultRealmRowBreaches = new Counter({
+    name: WOC_BANK_VAULT_REALM_ROW_BREACHES_TOTAL,
+    help: 'Total bank/vault realm row-bucket breaches (admissions past the telemetry bucket).',
+    registers: [registry],
+  });
+  bankVaultRealmRowBreaches.inc(0);
+
+  const wocEscrowQueue = new Counter({
+    name: WOC_ESCROW_QUEUE_TOTAL,
+    help: 'Marketplace escrow-queue outcomes on the per-character save FIFO custody entries (started, deadline_refused, depth_refused, books_dirty_refused, flush_failed, realm_refused, settled, grant_busy, permit_refused), by kind.',
+    labelNames: ['kind'],
+    registers: [registry],
+  });
+  for (const kind of WOC_ESCROW_QUEUE_OUTCOMES) wocEscrowQueue.inc({ kind }, 0);
   new Gauge({
     name: WOC_GUILD_BANK_LOG_CACHE,
     help: 'Guild bank activity log read cache: reads, refreshes (the query rate), evictions, busts, live entries, and guilds inside the coalescing floor.',
@@ -511,6 +1035,30 @@ export function registerGameStateMetrics(
       this.set({ kind: 'busts' }, stats.busts);
       this.set({ kind: 'entries' }, stats.entries);
       this.set({ kind: 'dirty_guilds' }, stats.dirtyGuilds);
+    },
+  });
+  new Gauge({
+    name: WOC_AUTH_GUARD_CACHE,
+    help: 'Marketplace auth-guard read cache: reads, refreshes (the residual query rate), evictions, busts, and live entries, per arm (tokens, accounts), plus the two soft-bounded internal collections (arm=index and arm=recent_busts, kind=entries): their bounds are soft BY DESIGN, so an excursion must be a series, not a claim. Zero until the boot wiring arms the cache.',
+    labelNames: ['arm', 'kind'],
+    registers: [registry],
+    collect() {
+      // The process singleton's stats accessor, null before the boot wiring
+      // arms the cache: the zero fallback keeps every series alive so an
+      // alert rule can fire on its first real sample (the zero-backfill rule
+      // the counters above follow).
+      const stats = wocAuthGuardCacheStats();
+      for (const arm of ['tokens', 'accounts'] as const) {
+        const armStats = stats?.[arm] ?? null;
+        this.set({ arm, kind: 'reads' }, armStats?.reads ?? 0);
+        this.set({ arm, kind: 'refreshes' }, armStats?.refreshes ?? 0);
+        this.set({ arm, kind: 'evictions' }, armStats?.evictions ?? 0);
+        this.set({ arm, kind: 'busts' }, armStats?.busts ?? 0);
+        this.set({ arm, kind: 'entries' }, armStats?.entries ?? 0);
+      }
+      this.set({ arm: 'index', kind: 'entries' }, stats?.index ?? 0);
+      this.set({ arm: 'recent_busts', kind: 'entries' }, stats?.recentBusts ?? 0);
+      this.set({ arm: 'join_veto', kind: 'refetches' }, stats?.joinVetoRefetches ?? 0);
     },
   });
   const copperCredited = new Counter({
@@ -710,12 +1258,41 @@ export function registerGameStateMetrics(
         // Drop the sample rather than propagate into the create path.
       }
     },
+    bankLedgerGrowthLimitRefused(): void {
+      try {
+        bankLedgerGrowthLimitRefusals.inc();
+      } catch {
+        // Observability must never fail the save-refusal path.
+      }
+    },
+    wocEscrowQueue(outcome: WocEscrowQueueOutcome): void {
+      try {
+        wocEscrowQueue.inc({ kind: outcome });
+      } catch {
+        // Observability must never fail a listing request.
+      }
+    },
     guildBankIncident(kind: GuildBankIncident): void {
       try {
         guildBankIncidents.inc({ kind });
       } catch {
         // Drop the sample rather than propagate into the save / reconcile /
         // ledger path this measures (the whole point of measuring it).
+      }
+    },
+    vaultLedgerIncident(kind: VaultLedgerIncident): void {
+      try {
+        vaultLedgerIncidents.inc({ kind });
+      } catch {
+        // Drop the sample rather than propagate into the vault dispatch path
+        // this measures.
+      }
+    },
+    bankVaultRealmRowBreach(): void {
+      try {
+        bankVaultRealmRowBreaches.inc();
+      } catch {
+        // Drop the sample rather than propagate into the reservation path.
       }
     },
     copperCredited(source: CopperFlowSource, amount: number): void {

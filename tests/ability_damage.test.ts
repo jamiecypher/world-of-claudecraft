@@ -21,8 +21,10 @@ import {
   abilityBuffValue,
   abilityDamageBonus,
   abilityTemporalHourglassValues,
+  auraBuffDisplayValue,
 } from '../src/ui/ability_damage';
-import { abilityEffectText } from '../src/ui/hud';
+import { abilityEffectAuraInput, abilityEffectText } from '../src/ui/ability_description';
+import { auraEffectDescriptor } from '../src/ui/aura_effect';
 
 function known(cls: Parameters<typeof abilitiesKnownAt>[0], id: string, mods?: TalentModifiers) {
   const ability = abilitiesKnownAt(cls, MAX_LEVEL, mods).find((k) => k.def.id === id);
@@ -35,7 +37,7 @@ function required<T>(value: T | undefined): T {
   return value;
 }
 
-const SC: AbilityScaling = { spellPower: 80, rangedPower: 200, attackPower: 140 };
+const SC: AbilityScaling = { spellPower: 80, healPower: 80, rangedPower: 200, attackPower: 140 };
 const ARCANE_MODS = { ...emptyModifiers(), spec: 'arcane' as const };
 const FROST_MODS = { ...emptyModifiers(), spec: 'frost' as const };
 const SURVIVAL_MODS = computeTalentModifiers('hunter', {
@@ -50,12 +52,58 @@ const DESTRUCTION_MODS = computeTalentModifiers('warlock', {
   ...emptyAllocation(),
   spec: 'destruction',
 } as never);
+const AFFLICTION_MODS = computeTalentModifiers('warlock', {
+  ...emptyAllocation(),
+  spec: 'affliction',
+} as never);
 const PROT_MODS = computeTalentModifiers('warrior', {
   ...emptyAllocation(),
   spec: 'prot',
 } as never);
 
 describe('abilityDamageBonus (tooltip scaling mirrors combat)', () => {
+  it('shows Hexcraft-resolved Litany of Guilt damage at every rank', () => {
+    // Authored 5/9/14 through the 10% Hexcraft mastery plus the 2026-08-23
+    // viability floor's affliction spellDmgPct 0.07.
+    for (const [level, expectedDamage] of [
+      [8, 6],
+      [11, 11],
+      [20, 16],
+    ] as const) {
+      const litany = abilitiesKnownAt('warlock', level, AFFLICTION_MODS).find(
+        (ability) => ability.def.id === 'litany_of_guilt',
+      );
+      expect(litany, `missing Litany of Guilt at level ${level}`).toBeDefined();
+      if (!litany) continue;
+      const effect = litany.effects.find((candidate) => candidate.type === 'afflictionLitany');
+      if (effect?.type !== 'afflictionLitany') throw new Error('missing Litany damage effect');
+
+      expect(effect.damage).toBe(expectedDamage);
+      const damageText = abilityEffectText(litany, {
+        spellPower: 500,
+        healPower: 500,
+        rangedPower: 700,
+        attackPower: 900,
+      });
+      expect(damageText).toBe(String(expectedDamage));
+      const auraInput = abilityEffectAuraInput(effect);
+      expect(auraInput).toEqual({
+        kind: 'affliction_litany',
+        value: expectedDamage,
+        value2: effect.radius,
+        value3: effect.maxTargets,
+      });
+      expect(auraInput && auraEffectDescriptor(auraInput)).toEqual({
+        key: 'hudChrome.auraEffect.afflictionLitany',
+        nums: {
+          damage: expectedDamage,
+          targets: effect.maxTargets,
+          radius: effect.radius,
+        },
+      });
+    }
+  });
+
   it('renders Direhowl from its percentage damage reduction, not the retired AP amount', () => {
     expect(abilityBuffValue(known('warrior', 'demoralizing_shout', PROT_MODS))).toBe(20);
   });
@@ -122,11 +170,10 @@ describe('abilityDamageBonus (tooltip scaling mirrors combat)', () => {
       bloodhook.effects.find((candidate) => candidate.type === 'hunterBloodhook'),
     );
     expect(abilityDamageBonus(bloodhook, effect, { ...SC, rangedPower: 0 })).toBe(0);
-    // 2026-08-09 120s band round: the survival baseline meleeDmgPct stepped
-    // 0.06 to 0.3 (the rest of the raise rides the baseline agiPct), so the 34
-    // base and 200*0.26 rider re-derive at 1.3x.
-    expect(abilityDamageBonus(bloodhook, effect, SC)).toBe(68);
-    expect(abilityEffectText(bloodhook, SC)).toBe('44.2 (+68)');
+    // Fieldcraft: 1 + 0.30 legacy + 0.15 offensive tuning.
+    // Base 34 * 1.45 = 49.3; rider round(200 * 0.26 * 1.45) = 75.
+    expect(abilityDamageBonus(bloodhook, effect, SC)).toBe(75);
+    expect(abilityEffectText(bloodhook, SC)).toBe('49.3 (+75)');
   });
 
   it('a channelled directDamage (Arcane Missiles) uses the per-tick CHANNEL coefficient', () => {
@@ -156,9 +203,9 @@ describe('abilityDamageBonus (tooltip scaling mirrors combat)', () => {
   });
 
   it('a direct heal folds Spell Power at the cast-time coefficient (combat directHealBonus)', () => {
-    const heal = abilitiesKnownAt('priest', MAX_LEVEL).find((k) =>
-      k.effects.some((e) => e.type === 'heal'),
-    )!;
+    const heal = required(
+      abilitiesKnownAt('priest', MAX_LEVEL).find((k) => k.effects.some((e) => e.type === 'heal')),
+    );
     const eff = required(heal.effects.find((e) => e.type === 'heal'));
     expect(abilityDamageBonus(heal, eff, SC)).toBe(directHealBonus(SC.spellPower, heal.castTime));
     expect(abilityDamageBonus(heal, eff, SC)).toBeGreaterThan(0);
@@ -167,12 +214,24 @@ describe('abilityDamageBonus (tooltip scaling mirrors combat)', () => {
   it('Cascading Mend shows the same Spell Power bonus as its first combat heal', () => {
     const chain = known('shaman', 'chain_heal', SPIRITMEND_MODS);
     const effect = required(chain.effects.find((candidate) => candidate.type === 'chainHeal'));
-    expect(abilityDamageBonus(chain, effect, { ...SC, spellPower: 0 })).toBe(0);
-    expect(abilityDamageBonus(chain, effect, { ...SC, spellPower: 100 })).toBe(
+    if (effect.type !== 'chainHeal') throw new Error('expected chainHeal');
+    expect(abilityDamageBonus(chain, effect, { ...SC, spellPower: 0, healPower: 0 })).toBe(0);
+    expect(abilityDamageBonus(chain, effect, { ...SC, spellPower: 100, healPower: 100 })).toBe(
       directHealBonus(100, chain.castTime),
     );
-    expect(abilityEffectText(chain, { ...SC, spellPower: 0 })).toBe('120 to 145');
-    expect(abilityEffectText(chain, { ...SC, spellPower: 100 })).toMatch(/^120 to 145 \(\+\d+\)$/);
+    // v0.42.0 Spiritmend (docs/design/class-balance-v042.md): +10% primary
+    // healing folds onto the WHOLE completed packet once, so the tooltip
+    // shows the combined range instead of the unscaled base plus a separate
+    // "(+N)" bonus badge (a display change, not just a bigger bonus number).
+    const factor = chain.outputScaling?.primaryHealing ?? 1;
+    expect(factor).not.toBe(1);
+    expect(abilityEffectText(chain, { ...SC, spellPower: 0, healPower: 0 })).toBe(
+      `${Math.round(effect.min * factor)} to ${Math.round(effect.max * factor)}`,
+    );
+    const bonus = abilityDamageBonus(chain, effect, { ...SC, spellPower: 100, healPower: 100 });
+    expect(abilityEffectText(chain, { ...SC, spellPower: 100, healPower: 100 })).toBe(
+      `${Math.round((effect.min + bonus) * factor)} to ${Math.round((effect.max + bonus) * factor)}`,
+    );
   });
 
   it('a personal mage barrier shows the same Spell Power bonus combat applies', () => {
@@ -213,8 +272,24 @@ describe('abilityDamageBonus (tooltip scaling mirrors combat)', () => {
   it('the reworked Rain of Fire ground pulse uses the AoE-penalised direct coefficient', () => {
     const rof = known('warlock', 'rain_of_fire', DESTRUCTION_MODS);
     const eff = required(rof.effects.find((e) => e.type === 'groundAoE'));
+    // v0.42.0 Ruination (docs/design/class-balance-v042.md): the ground pulse's
+    // runtime Spell Power rider now carries the resolved talent/offense-tuning
+    // damage multiplier the same way the base magnitude already did, so this
+    // no longer matches a bare (unmultiplied) directHitBonus.
+    const dmgMult = rof.outputScaling?.damage ?? 1;
+    expect(dmgMult).not.toBe(1);
     expect(abilityDamageBonus(rof, eff, SC)).toBe(
-      directHitBonus(SC.spellPower, rof.def, rof.castTime, true),
+      directHitBonus(SC.spellPower, rof.def, rof.castTime, true, dmgMult),
     );
+  });
+});
+
+describe("auraBuffDisplayValue (an APPLIED aura, not the viewer's resolved ability)", () => {
+  it('reads a flat buff straight off the aura value', () => {
+    expect(auraBuffDisplayValue({ kind: 'buff_armor', value: 160 })).toBe(160);
+  });
+
+  it('converts a form_fireball speed multiplier to a whole percent, like abilityBuffValue', () => {
+    expect(auraBuffDisplayValue({ kind: 'form_fireball', value: 1.4 })).toBeCloseTo(40);
   });
 });

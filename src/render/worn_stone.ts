@@ -35,8 +35,10 @@ import type * as THREE from 'three';
 import { ktx2SiblingUrl } from './assets/ktx2_sibling';
 import { loadKtx2Texture } from './assets/loader';
 import { registerDeferredPreload } from './assets/preload';
-import { GFX, type GfxSettings, type SurfaceMatOpts, surfaceMat } from './gfx';
+import { GFX, type GfxSettings, type SurfaceMatOpts, sharedUniforms, surfaceMat } from './gfx';
 import { renderLayerDisabled } from './render_dev_flags';
+import { markSharedMaterial } from './shared_resource';
+import { applyTextureAnisotropy } from './texture_anisotropy';
 
 export type SurfaceFamily = 'stone' | 'rock' | 'wood' | 'plaster' | 'bark' | 'fabric' | 'metal';
 
@@ -399,7 +401,7 @@ function prepareFamilyTexture(
   const task = loadKtx2Texture(ktx2SiblingUrl(url), { repeat: true })
     .then((tex) => {
       const clone = tex.clone();
-      clone.anisotropy = 4;
+      applyTextureAnisotropy(clone, 'normal');
       clone.needsUpdate = true;
       fam.tex[channel] = clone;
     })
@@ -515,6 +517,9 @@ const KIT_FALLBACK: Record<string, WornFamilyPick | null> = {
   shroom: null, // mushroom caps read as clean color cards
   tent: { family: 'fabric', strength: 0.3 }, // colorRed/colorRedDark canvas
   pirate: { family: 'wood', strength: 0.35 }, // colormap docks/rowboats
+  // the sea half of the old shared pirate kit (hulls and buoys, which ship
+  // their own atlas); same painted-plank treatment as the dock half
+  pirateSea: { family: 'wood', strength: 0.35 },
   town: { family: 'wood', strength: 0.35 }, // colormap timber pillar
   grave: { family: 'stone', strength: 0.45 }, // colormap gravestones
   dungeon: { family: 'rock', strength: 0.45 }, // 'texture' atlas delve cave mouths
@@ -704,6 +709,7 @@ export function applySurfaceDetail(
     const parallaxAmp = fam.parallaxDepth / fam.dispSd;
     // The 3-tap tiers take a shallower clamp: depth they cannot refine would
     // otherwise swim at grazing angles (insane's 4 taps keep the full clamp).
+    // The live shed scales this baked clamp by its 0..1 share (uWornClampK).
     const parallaxClamp = PARALLAX_CLAMP_K * fam.parallaxDepth * parallaxTierClampK();
     // Distance-fade bands from the EFFECTIVE tile scale (opts override
     // included). Object-space projections have no world position to measure
@@ -720,7 +726,37 @@ export function applySurfaceDetail(
     shader.uniforms.uWornRoughMix = { value: roughMix };
     if (hasMetal) shader.uniforms.uWornMetal = { value: fam.tex.metal };
     if (hasMetal) shader.uniforms.uWornMetalMix = { value: metalMix };
-    if (parallax) shader.uniforms.uWornDisp = { value: fam.tex.disp };
+    if (parallax) {
+      shader.uniforms.uWornDisp = { value: fam.tex.disp };
+      // The live terrain-detail shed (terrain_detail_shed_core.ts) by shared
+      // reference: it gates taps and scales the clamp at draw time, never the
+      // compiled tap count, so the program key is untouched.
+      shader.uniforms.uWornTaps = sharedUniforms.uWornDetailTaps;
+      shader.uniforms.uWornClampK = sharedUniforms.uWornDetailClampK;
+    }
+    // Per-family scalars: carried as uniforms rather than baked GLSL literals so
+    // families that share a STRUCTURE collapse to one compiled program. The
+    // uniform carries the UNROUNDED value; the literal it replaced was emitted
+    // through toFixed, so the rounding was the approximation, and the shift is
+    // sub-perceptual. The cache key stays sound because every structural token
+    // still rides customProgramCacheKey.
+    shader.uniforms.uWornRoughMean = { value: fam.roughMean };
+    if (!objectSpace) {
+      shader.uniforms.uWornDetStart = { value: fade.detStart };
+      shader.uniforms.uWornDetEnd = { value: fade.detEnd };
+    }
+    if (hasAo) shader.uniforms.uWornAoMean = { value: fam.aoMean };
+    if (hasMetal) shader.uniforms.uWornMetalMean = { value: fam.metalMean ?? 0 };
+    if (parallax) {
+      shader.uniforms.uWornParStart = { value: fade.parStart };
+      shader.uniforms.uWornParEnd = { value: fade.parEnd };
+      shader.uniforms.uWornDispCenter = { value: fam.dispCenter };
+      shader.uniforms.uWornParallaxAmp = { value: parallaxAmp };
+      shader.uniforms.uWornParallaxStep = { value: parallaxAmp / taps };
+      shader.uniforms.uWornParallaxClamp = { value: parallaxClamp };
+      shader.uniforms.uWornHeightNorm = { value: 1 / fam.dispSd };
+      shader.uniforms.uWornHeightShade = { value: fam.heightShade };
+    }
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -757,9 +793,11 @@ export function applySurfaceDetail(
         uniform float uWornStrength;
         uniform float uWornTile;
         uniform float uWornRoughMix;
-        ${hasAo ? 'uniform sampler2D uWornAo; uniform float uWornAoLo; uniform float uWornAoSpan;' : ''}
-        ${hasMetal ? 'uniform sampler2D uWornMetal; uniform float uWornMetalMix;' : ''}
-        ${parallax ? 'uniform sampler2D uWornDisp;' : ''}
+        uniform float uWornRoughMean;
+        ${!objectSpace ? 'uniform float uWornDetStart; uniform float uWornDetEnd;' : ''}
+        ${hasAo ? 'uniform sampler2D uWornAo; uniform float uWornAoLo; uniform float uWornAoSpan; uniform float uWornAoMean;' : ''}
+        ${hasMetal ? 'uniform sampler2D uWornMetal; uniform float uWornMetalMix; uniform float uWornMetalMean;' : ''}
+        ${parallax ? 'uniform sampler2D uWornDisp; uniform float uWornTaps; uniform float uWornClampK; uniform float uWornParStart; uniform float uWornParEnd; uniform float uWornDispCenter; uniform float uWornParallaxAmp; uniform float uWornParallaxStep; uniform float uWornParallaxClamp; uniform float uWornHeightNorm; uniform float uWornHeightShade;' : ''}
         float wornTriR(
           sampler2D tex,
           const in vec3 p,
@@ -821,12 +859,15 @@ export function applySurfaceDetail(
           objectSpace
             ? 'float wornDetK = 1.0;'
             : `float wornCamD = distance( vWornWorldPos, cameraPosition );
-        float wornDetK = 1.0 - smoothstep( ${fade.detStart.toFixed(1)}, ${fade.detEnd.toFixed(1)}, wornCamD );`
+        float wornDetK = 1.0 - smoothstep( uWornDetStart, uWornDetEnd, wornCamD );`
         }
-        ${
-          parallax
-            ? `float wornHShade = 0.0;
-        if ( wornCamD < ${fade.parEnd.toFixed(1)} ) {
+          ${
+            parallax
+              ? `float wornHShade = 0.0;
+        // uWornTaps: the live terrain-detail shed. At 0 the walk is skipped
+        // entirely (high's own profile); the walk fades by min(taps, 1) and
+        // each refinement tap n runs only while taps >= n.
+        if ( uWornTaps > 0.0 && wornCamD < uWornParEnd ) {
           // Multi-tap parallax (3 on ultra, 4 on insane): estimate height, then
           // refine along the view ray, walking the projection by the averaged
           // offset. The amplitude is sd-normalized (one sd of height = the
@@ -835,33 +876,39 @@ export function applySurfaceDetail(
           // branch-skipped past the fade end, where a one-sd offset projects
           // under ${PARALLAX_FADE_PX} screen pixels; the fade band eases the
           // offset (and its height shade) to zero so no frontier is visible.
-          float wornParK = 1.0 - smoothstep( ${fade.parStart.toFixed(1)}, ${fade.parEnd.toFixed(1)}, wornCamD );
+          float wornParK = ( 1.0 - smoothstep( uWornParStart, uWornParEnd, wornCamD ) )
+            * min( uWornTaps, 1.0 );
           vec3 wornV = normalize( vWornWorldPos - cameraPosition );
-          float wornH = wornTriR( uWornDisp, wornP, wornW, wornAxis ) - ${fam.dispCenter.toFixed(3)};
+          float wornH = wornTriR( uWornDisp, wornP, wornW, wornAxis ) - uWornDispCenter;
           float wornHAcc = wornH;
+          float wornHN = 1.0;
+          // Each refinement tap n weighs by the fractional live count
+          // (clamp(uWornTaps - (n - 1), 0, 1)) and the average divides by the
+          // live weight sum, so a level crossing a tap boundary blends the
+          // tap in instead of stepping the offset by 1/taps in one frame.
           ${Array.from(
             { length: taps - 1 },
-            () => `wornH = wornTriR( uWornDisp,
-            wornP + wornV * ( wornH * ${parallaxAmp.toFixed(3)} ), wornW, wornAxis ) - ${fam.dispCenter.toFixed(3)};
-          wornHAcc += wornH;`,
+            (_, i) => `if ( uWornTaps > ${(i + 1).toFixed(1)} ) {
+            float wornTapW = min( uWornTaps - ${(i + 1).toFixed(1)}, 1.0 );
+            wornH = wornTriR( uWornDisp,
+            wornP + wornV * ( wornH * uWornParallaxAmp ), wornW, wornAxis ) - uWornDispCenter;
+          wornHAcc += wornH * wornTapW;
+          wornHN += wornTapW;
+          }`,
           ).join('\n          ')}
           wornP += clamp(
-            wornV * ( wornHAcc * ${(parallaxAmp / taps).toFixed(4)} ),
-            vec3( -${parallaxClamp.toFixed(3)} ), vec3( ${parallaxClamp.toFixed(3)} ) ) * wornParK;
-          wornHShade = clamp( wornH * ${(1 / fam.dispSd).toFixed(3)},
+            wornV * ( wornHAcc * uWornParallaxAmp / wornHN ),
+            vec3( -uWornParallaxClamp ) * uWornClampK, vec3( uWornParallaxClamp ) * uWornClampK ) * wornParK;
+          wornHShade = clamp( wornH * uWornHeightNorm,
             -${HEIGHT_SHADE_CLAMP_SD.toFixed(1)}, ${HEIGHT_SHADE_CLAMP_SD.toFixed(1)} ) * wornParK;
         }`
-            : ''
-        }
-        ${
-          parallax
-            ? `diffuseColor.rgb *= 1.0 + wornHShade * ${fam.heightShade.toFixed(2)} * wornCellK;`
-            : ''
-        }
+              : ''
+          }
+        ${parallax ? `diffuseColor.rgb *= 1.0 + wornHShade * uWornHeightShade * wornCellK;` : ''}
         ${
           hasAo
-            ? `float wornAoV = ${fam.aoMean.toFixed(3)};
-        if ( wornDetK > 0.0 ) wornAoV = mix( ${fam.aoMean.toFixed(3)}, wornTriR( uWornAo, wornP, wornW, wornAxis ), wornDetK );
+            ? `float wornAoV = uWornAoMean;
+        if ( wornDetK > 0.0 ) wornAoV = mix( uWornAoMean, wornTriR( uWornAo, wornP, wornW, wornAxis ), wornDetK );
         diffuseColor.rgb *= mix( 1.0, uWornAoLo + wornAoV * uWornAoSpan, wornCellK );`
             : ''
         }`,
@@ -872,8 +919,8 @@ export function applySurfaceDetail(
         // measured mean: the same constant its mips converge to, so distant
         // sheen cannot shift; the taps are branch-skipped there.
         `#include <roughnessmap_fragment>
-        float wornRoughV = ${fam.roughMean.toFixed(3)};
-        if ( wornDetK > 0.0 ) wornRoughV = mix( ${fam.roughMean.toFixed(3)}, wornTriR( uWornRough, wornP, wornW, wornAxis ), wornDetK );
+        float wornRoughV = uWornRoughMean;
+        if ( wornDetK > 0.0 ) wornRoughV = mix( uWornRoughMean, wornTriR( uWornRough, wornP, wornW, wornAxis ), wornDetK );
         roughnessFactor = mix( roughnessFactor, wornRoughV, uWornRoughMix * wornCellK );`,
       );
     if (hasMetal) {
@@ -885,8 +932,8 @@ export function applySurfaceDetail(
       shader.fragmentShader = shader.fragmentShader.replace(
         '#include <metalnessmap_fragment>',
         `#include <metalnessmap_fragment>
-        float wornMetalV = ${(fam.metalMean ?? 0).toFixed(3)};
-        if ( wornDetK > 0.0 ) wornMetalV = mix( ${(fam.metalMean ?? 0).toFixed(3)}, wornTriR( uWornMetal, wornP, wornW, wornAxis ), wornDetK );
+        float wornMetalV = uWornMetalMean;
+        if ( wornDetK > 0.0 ) wornMetalV = mix( uWornMetalMean, wornTriR( uWornMetal, wornP, wornW, wornAxis ), wornDetK );
         metalnessFactor = mix( metalnessFactor, wornMetalV, uWornMetalMix * wornCellK );`,
       );
     }
@@ -958,7 +1005,12 @@ export function applySurfaceDetail(
   // only the dye layer's own customProgramCacheKey tells them apart).
   // The family's texture-ready state keys too
   // (before the preload resolves the hook compiles to a plain pass-through),
-  // as do the projection mode and the tier's parallax tap count.
+  // as do the projection mode and the tier's parallax tap count. The family
+  // NAME is deliberately NOT a token: every per-family scalar (fade bands,
+  // dispCenter, amplitudes, aoMean/roughMean/metalMean, heightShade) now rides
+  // a uniform, so two families with the same STRUCTURE compile byte-identical
+  // source and must share one program. What still distinguishes the source is
+  // the structural flags below (and the base material via prevSrc/prevProgramKey).
   mat.customProgramCacheKey = () => {
     const ready =
       fam.tex.normal && fam.tex.rough && (fam.aoSpan === 0 || fam.tex.ao) ? 'on' : 'off';
@@ -968,11 +1020,11 @@ export function applySurfaceDetail(
         : '-';
     const mask = cellMask ? `m${cellMask.join(',')}` : '-';
     const met = metalMix > 0 && fam.tex.metal !== null ? 'met' : '-';
-    // The distance-fade bands are baked as compile-time constants and vary
-    // with the effective tile scale (and the dev ?wornfade override).
-    const fadeBands = scaledFadeBands(fam.parallaxDepth, tileScale);
-    const fadeKey = `f${fadeBands.parStart.toFixed(1)},${fadeBands.parEnd.toFixed(1)},${fadeBands.detStart.toFixed(1)},${fadeBands.detEnd.toFixed(1)}`;
-    return `surface-detail|${family}|${ready}|${par}|${mask}|${met}|${objectSpace ? 'o' : 'w'}|${fadeKey}|${prevSrc}|${prevProgramKey()}`;
+    // The grime (AO) block is emitted only for families that ship an AO map
+    // (aoSpan > 0); metal omits it. That is a structural source difference the
+    // met token does not always cover, so it gets its own discriminant.
+    const ao = fam.aoSpan > 0 && fam.tex.ao !== null ? 'ao' : '-';
+    return `surface-detail|${ready}|${par}|${mask}|${met}|${ao}|${objectSpace ? 'o' : 'w'}|${prevSrc}|${prevProgramKey()}`;
   };
 }
 
@@ -1007,7 +1059,8 @@ export function reapplySurfaceDetailToClone(clone: THREE.Material): void {
  * Every resolved family detail texture (normal/AO/rough/disp/metal clones),
  * for the renderer's boot-prewarm window. These textures are shader UNIFORMS
  * attached in onBeforeCompile, not material properties, so the scene texture
- * sweep (renderer.ts collectObjectTextures reads map/normalMap/... keys) can
+ * sweep (material_texture_slots.ts collectObjectTextures reads the named map
+ * slots) can
  * never find them: without an explicit prewarm they upload on the first live
  * draw that binds them. The Displacement fields are the heavy case: they only
  * load on the parallax tiers (ultra+), and their first-draw decode+upload was
@@ -1057,6 +1110,12 @@ export function detailedSurfaceMat(
   if (!mat) {
     mat = base.clone();
     applySurfaceDetail(mat as THREE.MeshStandardMaterial, family, detail);
+    // Shared for the same reason surfaceMat's own cache is: one instance per
+    // key, reused process-wide. three's Material.copy deep-copies userData, so
+    // the clone already inherits the base's marker; marking it explicitly keeps
+    // that from being a silent dependency on three's copy semantics across a
+    // version bump, which is the kind of thing a bump would break quietly.
+    markSharedMaterial(mat);
     detailedMats.set(key, mat);
   }
   return mat;

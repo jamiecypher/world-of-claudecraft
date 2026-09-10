@@ -173,30 +173,33 @@ describe('i18n whole-catalog completeness', () => {
       'hudChrome.keybinds.discord', // "Discord" - brand (Key Bindings action label)
       'hudChrome.claudium.title', // "Claudium" - in-game currency brand
       'hudChrome.claudium.balanceUnit', // "{amount} Claudium" - currency brand
+      'hudChrome.options.gpuBackendVulkan', // "Vulkan" - the graphics API's name
+      'hudChrome.options.gpuBackendActiveNameVulkan', // "Vulkan" - the same API name, in the status line
+      'hudChrome.options.gpuBackendActiveNameOpenGL', // "OpenGL" - the graphics API's name
       'hudChrome.claudium.storeCost', // "{amount} Claudium" - currency brand
       'guide.controls.discord', // "Discord" - brand (Guide controls-page action label)
       'guide.glossary.claudiumTerm', // "Claudium" - the same currency brand as hudChrome.claudium.*
       'desktop.crash.title', // "World of ClaudeCraft" - brand (desktop crash dialog title)
       'auth.emailPlaceholder', // "you@example.com" - RFC 2606 example address, kept verbatim
-      // Rift boss mechanic names: authored fantasy proper nouns that do not translate.
-      'abilityUi.cast.rift_frost_execution',
-      'abilityUi.cast.rift_frost_strike',
-      'abilityUi.cast.rift_ember_execution',
-      'abilityUi.cast.rift_ember_strike',
-      'abilityUi.cast.rift_venom_execution',
-      'abilityUi.cast.rift_venom_strike',
-      'abilityUi.cast.rift_necro_execution',
-      'abilityUi.cast.rift_necro_strike',
-      'abilityUi.cast.rift_brute_execution',
-      'abilityUi.cast.rift_brute_strike',
-      'abilityUi.cast.rift_arcane_execution',
-      'abilityUi.cast.rift_arcane_strike',
-      'abilityUi.cast.rift_storm_execution',
-      'abilityUi.cast.rift_storm_strike',
-      'abilityUi.cast.rift_tide_execution',
-      'abilityUi.cast.rift_tide_strike',
+      // The 16 abilityUi.cast.rift_* entries that sat here were a DEAD exemption:
+      // every one carries a real fill in all five non-Latin locales, so the guard
+      // never exercised them, and while they stayed a future fill regressing one
+      // to English would have passed silently. Removed at the Masterwrought Phase
+      // 19F review round (ruling qr-19-rift-mechanic-names-translate-or-not,
+      // option 1: rift names are translated everywhere, cast ids included).
     ]);
     const wordy = (v: string) => /[a-z]{4,}/.test(v.replace(/\{[^}]*\}/g, ''));
+    // The sixteen rift cast ids that left the allow list above are reached by
+    // this guard and are wordy, so the removal stays load-bearing: rename or
+    // restructure them and this line says so.
+    const riftCasts = Object.keys(enFlat).filter((k) => /^abilityUi\.cast\.rift_/.test(k));
+    expect(riftCasts.length, 'the rift cast ids are in the main catalog').toBe(16);
+    // Fifteen of the sixteen are wordy today ('Void Rift' is not); the floor
+    // keeps the guard's reach over them load-bearing without pinning the English.
+    expect(
+      riftCasts.filter((k) => wordy(enFlat[k])).length,
+      'wordy rift cast ids',
+    ).toBeGreaterThanOrEqual(12);
     // The command center is enabled only in Vite development builds and cannot reach
     // a player-facing production surface. Keep its contributor-owned catalog
     // English-only, like other developer tooling, while release localization remains
@@ -224,27 +227,32 @@ describe('i18n whole-catalog completeness', () => {
   });
 
   it('keeps every localized marker accessibility meaning pinned per locale', () => {
+    // The release fill translates mapMarkerLabels.farmPatch in the Latin locales.
+    // Re-derived after inspecting those labels and regenerating the resolved tables.
+    // Keep literal digests over the 101 marker rows so unintended copy changes fail.
+    // Recipe: sha256(JSON.stringify(Object.entries(flatten(TABLES[lang]))
+    //   .filter(([key]) => key.startsWith('hud.core.mapMarker')))).
     const expected = {
-      es: '94cff42334df0e523983e80cf3d73a8baa84c161d3f58ab8c5493a83af19bab1',
-      es_ES: '94cff42334df0e523983e80cf3d73a8baa84c161d3f58ab8c5493a83af19bab1',
-      fr_FR: '7a750e079a7d5091ffae2b5d150369061ae03062a51e96b0a84834430d30175d',
-      fr_CA: '7a750e079a7d5091ffae2b5d150369061ae03062a51e96b0a84834430d30175d',
-      it_IT: '62af35080c27a9bd33eecf87870af3208fbf558767cdfcb69ae9912642f4dbea',
-      de_DE: 'a0c8898a20fde7a2f3cf1fbb3f5abf877ada7e5e70fdef3544fe83742ef1ba30',
-      zh_CN: '74fdc330dffbd9214786d1940d19592ee07f353a0bb495406f8c94a8b4d31893',
-      zh_TW: 'a3fad41448b9ebe54d0034282dd11f420cbb45c8bdc5f6ff2688c3429d7c866e',
-      ko_KR: '9b43e2db038af5f3b9cb09e201784b81f5a5314cacd61bab5c49a3858df80592',
-      ja_JP: '8d5c10f97574c34657694162243d4766c2566ba455acc527a497ea17f15a4b9e',
-      pt_BR: 'a6ebd7b16e0c39af3790124b8e2ae1592bc775743016f156142c5692f5919b3e',
-      ru_RU: '6a6e917d4e2e438aefe24304dfd35cd8ee7ab9e581f38b0f53a7dfb7fb7e47be',
-      cs_CZ: 'ecb49e6fa02b879f936ea807837de4fb4afc729bf5b2337c5f025e193661ab78',
-      nl_NL: '505f571593c2b2e7ee0d571d0bbf1602e2c20ee84950485a237910530e7c4e67',
-      pl_PL: '9a52a4b0a05b0c922a8f5f9bff4bba4b001e323c00bb5aa029e9ed7b43fe3ec8',
-      id_ID: 'cc17c4300ef1aecd7878b68d2f35c1befea2f5137211e8655965d8323753f0cf',
-      tr_TR: 'a7f65ce87ac4bf1618ff493ee39cb017b74a0532558cbd4d00d348a290a1b873',
-      sv_SE: 'f822eff1fbba419e7d1f97bb372e1bca3d4ff1c5416302dd2009b7bf547f34ba',
-      vi_VN: 'd9e3daf33161da4138982bb04f1b97acfdfbcfc8089a0150fab12e59047245ed',
-      da_DK: 'aff26e915bd7f8d71cfbf4294a23a60ed1e2920d92292c9012e49fd4fc9d9ca7',
+      es: '3daf9e259a1a3b24e8f241f1667e9e1d3e9f2f8e3f7032318da82f1b4cd15c6b',
+      es_ES: '3daf9e259a1a3b24e8f241f1667e9e1d3e9f2f8e3f7032318da82f1b4cd15c6b',
+      fr_FR: 'dc36f6ed6338af304cce2e5d53c4b3491d269d47ccd0a9378c78f578e8008074',
+      fr_CA: 'dc36f6ed6338af304cce2e5d53c4b3491d269d47ccd0a9378c78f578e8008074',
+      it_IT: 'ba0466c32d4b2d7ffc155a9d9bd1d7717cb6bbc1ce03960e814960c32eace9d3',
+      de_DE: 'fd01982d829e034585f1d31ad4425b932b30b7411ecb96cc2a63d15c75255ae2',
+      zh_CN: '88655d9dcd570ef3031925e758bd28f9480d378e6e074b7c30bc4e1e4fad73bc',
+      zh_TW: 'd013561d91c7bd77ee5f7c309bd39e147e4e67a45b4982faf4f9975396ba0865',
+      ko_KR: 'd35b9d6cb07a9394455c31e2cf465c74888e2bf86463098d6ce09fbe64d63bb6',
+      ja_JP: 'aaad77f83c6acd5bd443c654cf4930f565e31deca0f1e0f8eba460c9686fe065',
+      pt_BR: '1a5c6cb8c56acddaced5044695d3ca88d66b54d371a20b8033eb6ba75b38a377',
+      ru_RU: '869bb35098d22e182aa7c693786f69148769fc6c93228a2b959a9b2b719d6794',
+      cs_CZ: 'e06f9fcb980af89709eddd34e513f023160c58cc75af676f233ae4734a3e47fc',
+      nl_NL: 'ff68554eebe066bd1a310566ae2873fc5fc5f13499492ebdd49a718f822a0a07',
+      pl_PL: 'afa206ca243447213caf64c76d39d17742a794c5652ecced7837ad55d6bace7e',
+      id_ID: 'ad6dbbc261c401a8fb526c971e89d82f5a1f452c74445d31868ea3ee6876d22c',
+      tr_TR: '37a88da6de960736d7c5f91da80485c63bfedd361435cf396791a06a29c7a85e',
+      sv_SE: 'd90fc2002bb19aa2672f223e13efa9f286d9c92c92a88e0be434a18a00d19108',
+      vi_VN: 'd2f840b0956fac7ef5da11dce02e2e22e64f306ccc2b23f2320932c681f9c964',
+      da_DK: 'b45a7a5e160ae134622460c14fbebed0c552d6b0452ea4cd4bc4cb03b05bf365',
     } as const satisfies Partial<Record<SupportedLanguage, string>>;
 
     for (const [lang, digest] of Object.entries(expected) as Array<
@@ -253,7 +261,12 @@ describe('i18n whole-catalog completeness', () => {
       const markerRows = Object.entries(flatten(TABLES[lang])).filter(([key]) =>
         key.startsWith('hud.core.mapMarker'),
       );
-      expect(markerRows).toHaveLength(98);
+      // 100 at this merge's shared base (which already carries the release's two)
+      // plus this branch's own mapMarkerLabels.farmPatch row. The release side
+      // added no marker key at v0.42.0, only VALUES for two it already had, so
+      // the count did not move; re-measured at 101 for all twenty locales over
+      // the merged tree on 2026-08-31.
+      expect(markerRows).toHaveLength(101);
       expect(createHash('sha256').update(JSON.stringify(markerRows)).digest('hex'), lang).toBe(
         digest,
       );
@@ -423,7 +436,12 @@ describe('i18n CLDR pluralization', () => {
 
   it('declares the expected plural bases with all four CLDR categories in en', () => {
     expect(bases.sort()).toEqual([
+      'buffsHidden',
       'characterCount',
+      // The commission board's crafter's-record counts (Masterwrought phase
+      // 14, the quality signal).
+      'commissionLegendaries',
+      'commissionMasterworks',
       'deedsRetroSummary',
       'finderPartySize',
       'guildMembers',
@@ -439,6 +457,8 @@ describe('i18n CLDR pluralization', () => {
       'reliquarySearchResults',
       'reliquaryToGo',
       'secondsRemaining',
+      'wocMarketSellChoose',
+      'wocTradeIneligible',
     ]);
     for (const base of bases) {
       for (const cat of ['one', 'few', 'many', 'other']) {

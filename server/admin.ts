@@ -1,5 +1,12 @@
 import type * as http from 'node:http';
 import { verifyLoginTwoFactor } from './account';
+import {
+  LARGE_GOLD_MOVEMENT_LIMIT,
+  readLargeMovementsPane,
+  readTopWealthHolders,
+  redactActiveFlagCounts,
+} from './account_wealth';
+import { accountWealthBreakdown, largeGoldMovementsForAccount } from './account_wealth_db';
 import { parseAdminAccountSort } from './admin_accounts_sort';
 import {
   ACTIVITY_WINDOW_DAYS,
@@ -11,15 +18,16 @@ import {
 import {
   accountDetail,
   associationsForIp,
+  type BucketCount,
   characterProfessionsRow,
   clientPerfRaw,
-  clientPerfSummary,
+  type DayPoint,
   dailyRewardPointEvents,
   listAccounts,
   listCharacters,
   listModerationActions,
   listSharedIps,
-  onlineHistory,
+  type SessionDayPoint,
 } from './admin_db';
 import {
   type AdminGeneralChatRateLimitDeps,
@@ -43,7 +51,18 @@ import {
 } from './admin_guilds_read';
 import { parseAdminGuildSort } from './admin_guilds_sort';
 import { cleanIpAssociationLookup } from './admin_ip_association';
+import {
+  adminKickBodySchema,
+  adminKickMessage,
+  KICK_ADMIN_TARGET_CODE,
+  KICK_REASON_REQUIRED_CODE,
+  KICK_TARGET_OFFLINE_CODE,
+  normalizeAdminKickReason,
+} from './admin_kick_api';
+import { readAdminMarketMetrics } from './admin_market_metrics';
+import { readOnlineHistoryCached } from './admin_online_history_cache';
 import { readOverviewCounts } from './admin_overview_cache';
+import { readClientPerfSummaryCached } from './admin_perf_summary_cache';
 import {
   type AdminPermission,
   ASSIGNABLE_ADMIN_ROLES,
@@ -91,6 +110,8 @@ import {
   liftCheaterMarkBodySchema,
   rethrowCheaterMarkRefusal,
 } from './cheater_mark_api';
+import { runClearItemName } from './clear_item_name';
+import { clearOfflineItemName } from './clear_item_name_db';
 import { cleanContentModerationReason } from './content_moderation_db';
 import { currentDailyRewardDay } from './daily_rewards';
 import {
@@ -137,6 +158,8 @@ import {
   moderationReportsForAccount,
   muteAccountChat,
   reactivateAccountAudited,
+  recordInGameAction,
+  recordItemNameClear,
   recordPasswordReset,
   recordProfessionsRestore,
   resetChatStrikesAudited,
@@ -147,8 +170,17 @@ import {
   setDailyRewardsIpBan,
 } from './moderation_db';
 import { readModerationQueue } from './moderation_queue_cache';
+import { createOkResponseMemo, type OkResponseMemoStats } from './ok_response_memo';
 import { providerUsageSnapshot } from './provider_usage';
-import { authThrottled, clearAuthFailures, rateLimited, recordAuthFailure } from './ratelimit';
+import {
+  adminAnalyticsReadRateLimited,
+  adminFlagWriteRateLimited,
+  adminOversightReadRateLimited,
+  authThrottled,
+  clearAuthFailures,
+  rateLimited,
+  recordAuthFailure,
+} from './ratelimit';
 import { REALM } from './realm';
 import {
   adminRolesForAccount,
@@ -156,6 +188,16 @@ import {
   roleChangeHistory,
   setAccountAdminRoles,
 } from './staff_db';
+import { flagListResponse } from './suspicion_flag_list';
+import { isSuspicionFlagStatus } from './suspicion_flag_workflow';
+import { bustSuspicionFlagCache, readSuspicionFlagDataset } from './suspicion_flags';
+import {
+  activeSuspicionFlagCounts,
+  addSuspicionFlagNote,
+  type SuspicionFlagTransitionResult,
+  suspicionFlagsForAccount,
+  transitionSuspicionFlag,
+} from './suspicion_flags_db';
 import {
   type UnstuckHotspotRow as DbUnstuckHotspotRow,
   type UnstuckReportPage as DbUnstuckReportPage,
@@ -185,6 +227,19 @@ const ADMIN_LOGIN_MAX_PER_MINUTE = 10;
 // bad-password response so it never reveals whether the account exists.
 const ADMIN_LOGIN_TOO_MANY_FAILED_ATTEMPTS =
   'too many failed attempts, wait a few minutes and try again';
+
+// Economy-oversight endpoints (player search / wealth / flagged workflow)
+// plus the analytics dashboard reads (overview / activity / market metrics),
+// which share the same 429 literal on their own bucket.
+// Error literals are reverse-mapped to i18n keys by the admin client
+// (ADMIN_ERROR_KEYS in src/admin/i18n.ts); change one and the mapping in the
+// SAME change.
+const ADMIN_TOO_MANY_REQUESTS = 'too many requests, wait a moment and try again';
+const FLAG_NOT_FOUND = 'flag not found';
+const FLAG_INVALID_STATUS = 'invalid flag status';
+const FLAG_INVALID_TRANSITION = 'that status change is not allowed';
+const FLAG_ACTIVE_EXISTS = 'this account already has an open flag of that kind';
+const FLAG_NOTE_REQUIRED = 'a note is required';
 // Second factor, mirroring server/auth_routes.ts loginHandler exactly: an account
 // with TOTP enabled (account.totp_enabled_at) must supply a live code or a recovery
 // code before a token is minted. Without one, the response is a 200 CHALLENGE (never
@@ -198,6 +253,9 @@ const UNSTUCK_DEFAULT_DAYS = 30;
 const UNSTUCK_DEFAULT_LIMIT = 50;
 
 const IP_BLOCK_KICK_MESSAGE = 'Connection to the server was lost.';
+// The admin-panel kick's line is ADMIN_KICK_MESSAGE_PREFIX + the operator's reason
+// (server/admin_kick_api.ts adminKickMessage), a wire contract with the client
+// matcher like the literal above; it lives with its contract module, not here.
 
 // Account-flair validation messages. Named constants so the two dispatch twins (the
 // legacy handleAdminApi arm and the RouteDef handler) can never drift, and so the
@@ -269,6 +327,29 @@ async function respondGeneralChatRateLimit(
   if (!outcome.ok) return fail(res, outcome.status, outcome.error);
   applyLive(input.targetAccountId, outcome.value.after);
   return ok(res, { ok: true });
+}
+
+function flagTransitionFailure(
+  res: http.ServerResponse,
+  error: Exclude<SuspicionFlagTransitionResult, { ok: true }>['error'],
+): void {
+  switch (error) {
+    case 'not_found':
+      fail(res, 404, FLAG_NOT_FOUND);
+      return;
+    case 'active_flag_exists':
+      fail(res, 409, FLAG_ACTIVE_EXISTS);
+      return;
+    case 'invalid_transition':
+      fail(res, 400, FLAG_INVALID_TRANSITION);
+      return;
+    default: {
+      // Exhaustiveness: a new refusal variant must fail HERE at compile time,
+      // not fall through with no response written and hold the socket open.
+      const unhandled: never = error;
+      throw new Error(`unhandled flag transition refusal: ${String(unhandled)}`);
+    }
+  }
 }
 
 function guildRenameFailure(error: AdminGuildRenameError): { status: number; message: string } {
@@ -561,6 +642,57 @@ function fail(res: http.ServerResponse, status: number, error: string): void {
   json(res, status, { success: false, data: null, error });
 }
 
+// Serialize-once envelope memos for the analytics dashboard reads whose
+// response is a pure function of a TTL-cached snapshot: ONE INSTANCE PER
+// ROUTE (the memo's key space has no notion of response shape, so the metrics
+// identity key and the activity four-part key never share an instance), and
+// each route's instance is shared by BOTH of its dispatch arms, so a cache
+// window costs one stringify however the request arrives. The overview read
+// stays on plain ok(): its response embeds the per-request live adminStats()
+// merge, so memoized bytes could never match what ok() would produce (see
+// overviewHandler).
+const activityOkMemo = createOkResponseMemo();
+const marketMetricsOkMemo = createOkResponseMemo();
+
+export interface AdminAnalyticsMemoStats {
+  activity: OkResponseMemoStats;
+  marketMetrics: OkResponseMemoStats;
+}
+
+/** The two memos' serve/stringify counters for the internal ops readout
+ *  (server/main.ts): stringifies climbing toward serves is a hit-rate
+ *  regression (a cache turning over per request, or a key that stopped being
+ *  stable) that nothing else would make visible. */
+export function adminAnalyticsMemoStats(): AdminAnalyticsMemoStats {
+  return { activity: activityOkMemo.stats(), marketMetrics: marketMetricsOkMemo.stats() };
+}
+
+/**
+ * Serve the activity response (both dispatch arms call this with the four
+ * cache-stable arrays off the shared admin_activity_cache bundle). The
+ * composed wrapper object is fresh per request, so the memo keys on the parts
+ * tuple: stable identities inside a TTL window hit the memoized bytes, and a
+ * torn read across a turnover re-stringifies rather than serving stale bytes.
+ * `days` is deliberately NOT a part: it is the module constant
+ * ACTIVITY_WINDOW_DAYS (every caller passes it and admin_activity_cache's
+ * assertWindow refuses any other value), so it cannot vary across requests.
+ * The memo's key contract (ok_response_memo.ts header) says exactly this; the
+ * non-part field set is pinned in tests/server/admin_analytics_reads.test.ts.
+ */
+function sendActivityOk(
+  res: http.ServerResponse,
+  registrations: DayPoint[],
+  sessions: SessionDayPoint[],
+  classes: BucketCount[],
+  levels: BucketCount[],
+): void {
+  activityOkMemo.send(
+    res,
+    { days: ACTIVITY_WINDOW_DAYS, registrations, sessions, classes, levels },
+    [registrations, sessions, classes, levels],
+  );
+}
+
 async function sendAdminGuildList(
   res: http.ServerResponse,
   request: AdminGuildListRequest,
@@ -631,6 +763,16 @@ function sortSharedIpRows<T extends { ip: string; accountCount: number; lastSeen
 function moderationHistoryTab(params: URLSearchParams): ModerationHistoryTab {
   const tab = params.get('tab');
   return tab === 'mine' || tab === 'notes' ? tab : 'all';
+}
+
+// Stamp each account row with its active suspicion-flag count. Only callers
+// holding moderation.read receive the counts at all (the flag store is
+// moderation data; accounts.read alone must not see it).
+function withActiveFlagCounts<T extends { id: number }>(
+  rows: readonly T[],
+  counts: ReadonlyMap<number, number>,
+): (T & { activeFlagCount: number })[] {
+  return rows.map((row) => ({ ...row, activeFlagCount: counts.get(row.id) ?? 0 }));
 }
 
 function getBlockedIpsForAccount(
@@ -1395,6 +1537,45 @@ export async function handleAdminApi(
       return ok(res, game.startPerfCapture(durationMs));
     }
 
+    const flagStatusMatch = /^\/admin\/api\/flags\/(\d+)\/status$/.exec(path);
+    if (req.method === 'POST' && flagStatusMatch) {
+      if (!adminFlagWriteRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      const body = await readBody(req);
+      if (!isSuspicionFlagStatus(body.status)) return fail(res, 400, FLAG_INVALID_STATUS);
+      const note = typeof body.note === 'string' ? body.note.trim() : '';
+      const result = await transitionSuspicionFlag({
+        flagId: Number(flagStatusMatch[1]),
+        adminAccountId: accountId,
+        to: body.status,
+        note,
+      });
+      if (!result.ok) {
+        flagTransitionFailure(res, result.error);
+        return;
+      }
+      bustSuspicionFlagCache();
+      return ok(res, { flag: result.flag });
+    }
+    const flagNoteMatch = /^\/admin\/api\/flags\/(\d+)\/note$/.exec(path);
+    if (req.method === 'POST' && flagNoteMatch) {
+      if (!adminFlagWriteRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      const body = await readBody(req);
+      const note = typeof body.note === 'string' ? body.note.trim() : '';
+      if (!note) return fail(res, 400, FLAG_NOTE_REQUIRED);
+      const added = await addSuspicionFlagNote({
+        flagId: Number(flagNoteMatch[1]),
+        adminAccountId: accountId,
+        note,
+      });
+      if (!added) return fail(res, 404, FLAG_NOT_FOUND);
+      bustSuspicionFlagCache();
+      return ok(res, { ok: true });
+    }
+
     if (req.method !== 'GET') return fail(res, 405, 'method not allowed');
 
     // Current capture status + the last frozen result.
@@ -1417,6 +1598,9 @@ export async function handleAdminApi(
     }
 
     if (path === '/admin/api/overview') {
+      if (!adminAnalyticsReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
       const counts = await readOverviewCounts();
       const serverStats = game.adminStats();
       return ok(res, {
@@ -1458,20 +1642,26 @@ export async function handleAdminApi(
       return ok(res, game.detectionCalibration());
     }
     if (path === '/admin/api/online-history') {
-      return ok(res, await onlineHistory(url.searchParams.get('range') ?? '30d'));
+      if (!adminAnalyticsReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      return ok(res, await readOnlineHistoryCached(url.searchParams.get('range') ?? '30d'));
     }
     if (path === '/admin/api/activity') {
+      if (!adminAnalyticsReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
       const [registrations, sessions, classes, levels] = await Promise.all([
         registrationsByDay(ACTIVITY_WINDOW_DAYS),
         sessionsByDay(ACTIVITY_WINDOW_DAYS),
         classDistribution(),
         levelDistribution(),
       ]);
-      return ok(res, { days: ACTIVITY_WINDOW_DAYS, registrations, sessions, classes, levels });
+      return sendActivityOk(res, registrations, sessions, classes, levels);
     }
     if (path === '/admin/api/perf/summary') {
       const hours = Number(url.searchParams.get('hours') ?? '24');
-      return ok(res, await clientPerfSummary(hours));
+      return ok(res, await readClientPerfSummaryCached(hours));
     }
     if (path === '/admin/api/perf/raw') {
       const hours = Number(url.searchParams.get('hours') ?? '24');
@@ -1491,7 +1681,53 @@ export async function handleAdminApi(
       const { page, limit } = parsePageParams(url.searchParams);
       const search = (url.searchParams.get('search') ?? '').slice(0, 64);
       const { sort, dir } = parseAdminAccountSort(url.searchParams);
-      return ok(res, await listAccounts(search, page, limit, sort, dir));
+      const list = await listAccounts(search, page, limit, sort, dir);
+      if (!identity.permissions.has('moderation.read')) return ok(res, list);
+      const counts = await activeSuspicionFlagCounts(list.rows.map((row) => row.id));
+      return ok(res, { ...list, rows: withActiveFlagCounts(list.rows, counts) });
+    }
+    if (path === '/admin/api/wealth/top') {
+      if (!adminOversightReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      const rows = await readTopWealthHolders();
+      // Flag counts are moderation data: the same rule as the accounts list.
+      return identity.permissions.has('moderation.read')
+        ? ok(res, { rows })
+        : ok(res, { rows: redactActiveFlagCounts(rows) });
+    }
+    const accountWealthMatch = /^\/admin\/api\/accounts\/(\d+)\/wealth$/.exec(path);
+    if (accountWealthMatch) {
+      if (!adminOversightReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      const targetAccountId = Number(accountWealthMatch[1]);
+      const breakdown = await accountWealthBreakdown(targetAccountId);
+      if (breakdown === null) return fail(res, 404, 'account not found');
+      const pane = await readLargeMovementsPane(targetAccountId, () =>
+        largeGoldMovementsForAccount(targetAccountId, LARGE_GOLD_MOVEMENT_LIMIT),
+      );
+      return ok(res, { ...breakdown, ...pane });
+    }
+    const accountFlagsMatch = /^\/admin\/api\/accounts\/(\d+)\/flags$/.exec(path);
+    if (accountFlagsMatch) {
+      if (!adminOversightReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      return ok(res, await suspicionFlagsForAccount(Number(accountFlagsMatch[1])));
+    }
+    if (path === '/admin/api/flags') {
+      if (!adminOversightReadRateLimited(req, accountId).allowed) {
+        return fail(res, 429, ADMIN_TOO_MANY_REQUESTS);
+      }
+      return ok(
+        res,
+        flagListResponse(
+          await readSuspicionFlagDataset(),
+          url.searchParams,
+          parsePageParams(url.searchParams),
+        ),
+      );
     }
     if (path === '/admin/api/guilds') {
       const { page, limit } = parsePageParams(url.searchParams);
@@ -1891,7 +2127,10 @@ function makeRealAdminDb() {
     // which bypasses the cache and keeps existing fakes exact.
     classDistribution,
     clientPerfRaw,
-    clientPerfSummary,
+    // Cache-backed (the hours-keyed perf-summary memo; both dispatch arms
+    // read it): a setAdminDbForTests override still replaces this member
+    // outright, which bypasses the cache and keeps existing fakes exact.
+    clientPerfSummary: readClientPerfSummaryCached,
     dailyRewardPointEvents,
     levelDistribution,
     listAccounts,
@@ -1903,7 +2142,10 @@ function makeRealAdminDb() {
     recordAdminGuildBankPurge,
     listModerationActions,
     listSharedIps,
-    onlineHistory,
+    // Cache-backed (the range-keyed online-history memo; both dispatch arms read
+    // it): a setAdminDbForTests override still replaces this member outright,
+    // which bypasses the cache and keeps existing fakes exact.
+    onlineHistory: readOnlineHistoryCached,
     // Cache-backed (the shared admin overview memo; both dispatch arms read it):
     // a setAdminDbForTests override still replaces this member outright, which
     // bypasses the cache and keeps existing fakes exact.
@@ -1968,6 +2210,13 @@ function makeRealAdminDb() {
     updatePasswordHash,
     revokeTokensExcept,
     recordPasswordReset,
+    // Audited, atomic offline legendary-name moderation.
+    clearOfflineItemName,
+    recordItemNameClear,
+    // The admin-panel kick's audit row: the SAME writer the in-game /kick uses
+    // (game.ts wires it into the moderation service as recordAction), so a kick
+    // reads identically in moderation history whichever surface issued it.
+    recordInGameAction,
     setDailyRewardsBan,
     setDailyRewardsIpBan,
     // Account flair: the two audited writes plus the read-back the live push sends
@@ -1991,6 +2240,25 @@ function makeRealAdminDb() {
     loadAntibotConfig,
     listAntibotConfigHistory,
     saveAntibotConfigChange,
+    // Economy oversight: the materialised wealth reads (top holders is
+    // cache-backed like overviewCounts; an override replaces it outright),
+    // the persisted suspicion-flag workflow, and the dedicated oversight
+    // rate limiters (scoped buckets, see server/ratelimit.ts).
+    topWealthHolders: readTopWealthHolders,
+    accountWealthBreakdown,
+    largeGoldMovementsForAccount,
+    suspicionFlagDataset: readSuspicionFlagDataset,
+    suspicionFlagsForAccount,
+    transitionSuspicionFlag,
+    addSuspicionFlagNote,
+    activeSuspicionFlagCounts,
+    adminOversightReadRateLimited,
+    adminFlagWriteRateLimited,
+    // Analytics dashboard read metering (overview / activity / market
+    // metrics): its own bucket, deliberately not the oversight pair, so the
+    // landing page's default poll can never starve the moderation Flagged
+    // workflow (see server/ratelimit.ts).
+    adminAnalyticsReadRateLimited,
   };
 }
 
@@ -2002,7 +2270,10 @@ let realAdminDb: AdminDb | undefined;
 let adminDbOverride: AdminDb | undefined;
 
 /** The active admin db: a setAdminDbForTests override if present, else the real bundle. */
-function adminDb(): AdminDb {
+// Exported for sibling admin-surface RouteDef modules (woc_market_routes.ts):
+// one live bundle, one test seam, so the ownership sweep's fakes reach every
+// admin route regardless of which module mounts the gate.
+export function adminDb(): AdminDb {
   if (adminDbOverride) return adminDbOverride;
   realAdminDb ??= makeRealAdminDb();
   return realAdminDb;
@@ -2092,8 +2363,17 @@ async function loginHandler(ctx: Ctx): Promise<void> {
   });
 }
 
-/** GET /admin/api/overview: headline counts merged with live server stats. */
+/** GET /admin/api/overview: headline counts merged with live server stats.
+ *  Metered on the analytics read bucket like its activity/metrics siblings,
+ *  but EXEMPT from the family's serialize-once memos (activityOkMemo and
+ *  marketMetricsOkMemo): the
+ *  response embeds the per-request live adminStats() merge (online, uptime,
+ *  memory), so memoized bytes could never stay byte-identical with what ok()
+ *  produces. Only the DB counts are cached (admin_overview_cache.ts). */
 async function overviewHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminAnalyticsReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
   const rt = useAdminRuntime();
   const counts = await adminDb().overviewCounts();
   const serverStats = rt.adminStats();
@@ -2107,6 +2387,21 @@ async function overviewHandler(ctx: Ctx): Promise<void> {
       peakOnline: Math.max(serverStats.peakOnline, counts.peakOnlineAllTime, serverStats.online),
     },
   });
+}
+
+/** GET /admin/api/market/metrics: live World Market listing aggregates over the
+ *  tracked supply buckets (server/admin_market_metrics.ts). Metered on the
+ *  analytics read bucket: the read itself is a warm in-memory cache with zero
+ *  DB cost, but metering is uniform across the admin read families so no
+ *  route is the unthrottled odd one out (the oversight bucket stays scoped to
+ *  the DB-cost economy-oversight reads). The response IS the cached snapshot,
+ *  so the envelope bytes are memoized per cache turnover on the route's own
+ *  memo (marketMetricsOkMemo, identity-keyed on the snapshot). */
+async function marketMetricsHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminAnalyticsReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  marketMetricsOkMemo.send(ctx.res, await readAdminMarketMetrics());
 }
 
 /** GET /admin/api/me: the caller's own staff identity (any staff role). */
@@ -2243,20 +2538,30 @@ async function detectionCalibrationHandler(ctx: Ctx): Promise<void> {
   ok(ctx.res, useAdminRuntime().detectionCalibration());
 }
 
-/** GET /admin/api/online-history: bucketed online + site-user history. */
+/** GET /admin/api/online-history: bucketed online + site-user history.
+ *  Metered on the analytics read bucket like its overview/activity/metrics
+ *  siblings (it is fetched from the SAME Promise.all as activity, so leaving it
+ *  off the meter left one uncapped door into the family's heaviest aggregate),
+ *  and served from the range-keyed memo bound into the bundle below. */
 async function onlineHistoryHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminAnalyticsReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
   ok(ctx.res, await adminDb().onlineHistory(ctx.url.searchParams.get('range') ?? '30d'));
 }
 
 /** GET /admin/api/activity: registrations + sessions + class/level distributions. */
 async function activityHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminAnalyticsReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
   const [registrations, sessions, classes, levels] = await Promise.all([
     adminDb().registrationsByDay(ACTIVITY_WINDOW_DAYS),
     adminDb().sessionsByDay(ACTIVITY_WINDOW_DAYS),
     adminDb().classDistribution(),
     adminDb().levelDistribution(),
   ]);
-  ok(ctx.res, { days: ACTIVITY_WINDOW_DAYS, registrations, sessions, classes, levels });
+  sendActivityOk(ctx.res, registrations, sessions, classes, levels);
 }
 
 /** GET /admin/api/perf/summary: aggregated client-perf percentiles. */
@@ -2297,12 +2602,121 @@ async function perfTickCaptureHandler(ctx: Ctx): Promise<void> {
   ok(ctx.res, useAdminRuntime().startPerfCapture(durationMs));
 }
 
-/** GET /admin/api/accounts: paged, sortable account search (search clamped to 64 chars). */
+/** GET /admin/api/accounts: paged, sortable account search (search clamped to
+ *  64 chars; an all-digits search also matches exact account/character ids,
+ *  and character names match alongside usernames). Rows carry the materialised
+ *  gold total, plus active suspicion-flag counts for moderation.read holders
+ *  only (the flag store is moderation data). */
 async function accountsHandler(ctx: Ctx): Promise<void> {
   const { page, limit } = parsePageParams(ctx.url.searchParams);
   const search = (ctx.url.searchParams.get('search') ?? '').slice(0, 64);
   const { sort, dir } = parseAdminAccountSort(ctx.url.searchParams);
-  ok(ctx.res, await adminDb().listAccounts(search, page, limit, sort, dir));
+  const list = await adminDb().listAccounts(search, page, limit, sort, dir);
+  const identity = adminIdentityOf(ctx);
+  if (!identity?.permissions.has('moderation.read')) return ok(ctx.res, list);
+  const counts = await adminDb().activeSuspicionFlagCounts(list.rows.map((row) => row.id));
+  ok(ctx.res, { ...list, rows: withActiveFlagCounts(list.rows, counts) });
+}
+
+/** GET /admin/api/wealth/top: the rich list (top holders by materialised
+ *  total), served from the TTL cache in server/account_wealth.ts. Flag counts
+ *  are stripped for callers without moderation.read, the same rule as the
+ *  accounts list. */
+async function wealthTopHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminOversightReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  const rows = await adminDb().topWealthHolders();
+  const identity = adminIdentityOf(ctx);
+  ok(
+    ctx.res,
+    identity?.permissions.has('moderation.read')
+      ? { rows }
+      : { rows: redactActiveFlagCounts(rows) },
+  );
+}
+
+/** GET /admin/api/accounts/:id/wealth: one account's gold breakdown (per
+ *  character, escrow, guild treasury context) plus its recent large
+ *  bank-ledger movements. */
+async function accountWealthHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminOversightReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  const accountId = adminTargetId(ctx);
+  const breakdown = await adminDb().accountWealthBreakdown(accountId);
+  if (breakdown === null) return fail(ctx.res, 404, 'account not found');
+  const pane = await readLargeMovementsPane(accountId, () =>
+    adminDb().largeGoldMovementsForAccount(accountId, LARGE_GOLD_MOVEMENT_LIMIT),
+  );
+  ok(ctx.res, { ...breakdown, ...pane });
+}
+
+/** GET /admin/api/accounts/:id/flags: the account's full flag history (active
+ *  and resolved; flags never silently disappear) with the workflow audit
+ *  trail. */
+async function accountFlagsHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminOversightReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  ok(ctx.res, await adminDb().suspicionFlagsForAccount(adminTargetId(ctx)));
+}
+
+/** GET /admin/api/flags: the Flagged view (cached dataset, filtered and paged
+ *  by flagListResponse). */
+async function flagsHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminOversightReadRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  ok(
+    ctx.res,
+    flagListResponse(
+      await adminDb().suspicionFlagDataset(),
+      ctx.url.searchParams,
+      parsePageParams(ctx.url.searchParams),
+    ),
+  );
+}
+
+/** POST /admin/api/flags/:id/status: one workflow move (validated against the
+ *  state machine), recorded with the acting admin in the audit trail. */
+async function flagStatusHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminFlagWriteRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  const body = await readBody(ctx.req);
+  if (!isSuspicionFlagStatus(body.status)) return fail(ctx.res, 400, FLAG_INVALID_STATUS);
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  const result = await adminDb().transitionSuspicionFlag({
+    flagId: adminTargetId(ctx),
+    adminAccountId: ctxAccountId(ctx),
+    to: body.status,
+    note,
+  });
+  if (!result.ok) {
+    flagTransitionFailure(ctx.res, result.error);
+    return;
+  }
+  bustSuspicionFlagCache();
+  ok(ctx.res, { flag: result.flag });
+}
+
+/** POST /admin/api/flags/:id/note: append a note-only audit event. */
+async function flagNoteHandler(ctx: Ctx): Promise<void> {
+  if (!adminDb().adminFlagWriteRateLimited(ctx.req, ctxAccountId(ctx)).allowed) {
+    return fail(ctx.res, 429, ADMIN_TOO_MANY_REQUESTS);
+  }
+  const body = await readBody(ctx.req);
+  const note = typeof body.note === 'string' ? body.note.trim() : '';
+  if (!note) return fail(ctx.res, 400, FLAG_NOTE_REQUIRED);
+  const added = await adminDb().addSuspicionFlagNote({
+    flagId: adminTargetId(ctx),
+    adminAccountId: ctxAccountId(ctx),
+    note,
+  });
+  if (!added) return fail(ctx.res, 404, FLAG_NOT_FOUND);
+  bustSuspicionFlagCache();
+  ok(ctx.res, { ok: true });
 }
 
 /** GET /admin/api/guilds: current-realm guild search with bounded pagination. */
@@ -2920,12 +3334,82 @@ async function restoreSlotHandler(ctx: Ctx): Promise<void> {
   }
 }
 
+/** POST /admin/api/moderation/characters/:id/clear-item-name: strip a stamped
+ *  legendary name (ItemInstancePayload.name) from an OFFLINE character's copy,
+ *  the phase 13 remediation arm. The whole decision (target validation, the
+ *  audit-first ordering, the offline requirement, the blob region walk) is
+ *  server/clear_item_name.ts runClearItemName; this binder wires the real
+ *  runtime + db seams and maps the typed outcome onto the restore family's
+ *  English admin error model. Registry-only (the cheater-mark precedent). */
+async function clearItemNameHandler(ctx: Ctx): Promise<void> {
+  const rt = useAdminRuntime();
+  const id = adminTargetId(ctx);
+  const body = await readBody(ctx.req);
+  try {
+    const outcome = await runClearItemName(
+      {
+        characterOnline: (characterId) => rt.adminCharacterOnline(characterId),
+        clearOfflineItemName: (characterId, target) =>
+          adminDb().clearOfflineItemName(characterId, target),
+        recordAudit: (input) => adminDb().recordItemNameClear(input),
+      },
+      { characterId: id, adminAccountId: ctxAccountId(ctx), body },
+    );
+    if (!outcome.ok) return fail(ctx.res, 400, outcome.error);
+    return ok(ctx.res, { ok: true, cleared: outcome.cleared });
+  } catch (err) {
+    return fail(ctx.res, 400, err instanceof Error ? err.message : 'item name clear failed');
+  }
+}
+
 /** GET /admin/api/accounts/:id/daily-rewards-events: bounded point-award ledger. */
 async function dailyRewardPointEventsHandler(ctx: Ctx): Promise<void> {
   const day = await dailyRewardEventDay(ctx.url.searchParams.get('day'));
   if (!day) return fail(ctx.res, 400, DAILY_REWARD_EVENT_DAY_REQUIRED);
   const limit = Number(ctx.url.searchParams.get('limit') ?? '100');
   ok(ctx.res, await adminDb().dailyRewardPointEvents(adminTargetId(ctx), day, limit));
+}
+
+/**
+ * POST /admin/api/moderation/accounts/:id/kick: drop a live player's sessions
+ * from the dashboard, the twin of the in-game /kick (server/moderation_service.ts).
+ *
+ * Registry-only like the Cheater mark pair above, so it follows the same
+ * new-endpoint recipe: withBody plus a typed schema, and every refusal a stable
+ * `kick.*` code through HttpError (server/admin_kick_api.ts). The order is the
+ * in-game kick's and restore-item's: decide every refusal first (a blank reason,
+ * no live session on this realm, an operator target), THEN write the
+ * moderation-history row (action 'kick', actor = the operator, reason), THEN
+ * disconnect through the runtime seam. The audit write precedes the live effect
+ * so a kick can never happen unaudited, and the online check precedes the write
+ * so a player who left between page load and click gets a 409 and no history
+ * row claiming a disconnect that did not happen. The leave-between-check-and-
+ * disconnect window that remains is restore-item's race: the row honestly
+ * records the attempt.
+ */
+async function adminKickHandler(ctx: Ctx): Promise<void> {
+  const rt = useAdminRuntime();
+  const targetAccountId = adminTargetId(ctx);
+  // Cheap-reject-first: the decode and trim are pure CPU, the roster check is
+  // an in-memory read, and the operator-target check is the one db read.
+  const decoded = adminKickBodySchema.decode(ctx.body ?? {});
+  if (!decoded.ok) throw decoded;
+  const reason = normalizeAdminKickReason(decoded.value.reason);
+  if (reason === null) throw new HttpError(400, KICK_REASON_REQUIRED_CODE);
+  if (!rt.liveAccountIds().has(targetAccountId)) {
+    throw new HttpError(409, KICK_TARGET_OFFLINE_CODE);
+  }
+  if (await adminDb().isAdminAccount(targetAccountId)) {
+    throw new HttpError(400, KICK_ADMIN_TARGET_CODE);
+  }
+  await adminDb().recordInGameAction({
+    action: 'kick',
+    accountId: targetAccountId,
+    adminAccountId: ctxAccountId(ctx),
+    reason,
+  });
+  rt.disconnectAccount(targetAccountId, adminKickMessage(reason));
+  ok(ctx.res, { ok: true });
 }
 
 /**
@@ -3262,6 +3746,15 @@ export const routes: RouteDef[] = [
     meta: ADMIN_META,
     handler: activityHandler,
   },
+  // Registry-only (born after the migration): no legacy ladder arm.
+  {
+    method: 'GET',
+    path: '/admin/api/market/metrics',
+    surface: 'admin',
+    middleware: [requireAdmin],
+    meta: ADMIN_META,
+    handler: marketMetricsHandler,
+  },
   {
     method: 'GET',
     path: '/admin/api/perf/summary',
@@ -3407,6 +3900,14 @@ export const routes: RouteDef[] = [
     handler: restoreSlotHandler,
   },
   {
+    method: 'POST',
+    path: '/admin/api/moderation/characters/:id/clear-item-name',
+    surface: 'admin',
+    middleware: [requireAdmin, requireAdminTarget('character')],
+    meta: adminTargetMeta('character'),
+    handler: clearItemNameHandler,
+  },
+  {
     method: 'GET',
     path: '/admin/api/accounts/:id/daily-rewards-events',
     surface: 'admin',
@@ -3421,6 +3922,57 @@ export const routes: RouteDef[] = [
     middleware: [requireAdmin, requireAdminTarget('account')],
     meta: adminTargetMeta('account'),
     handler: resetPasswordHandler,
+  },
+
+  // Economy oversight (p2p market launch): the rich list, per-account gold
+  // breakdown, and the persisted suspicion-flag workflow.
+  {
+    method: 'GET',
+    path: '/admin/api/wealth/top',
+    surface: 'admin',
+    middleware: [requireAdmin],
+    meta: ADMIN_META,
+    handler: wealthTopHandler,
+  },
+  {
+    method: 'GET',
+    path: '/admin/api/accounts/:id/wealth',
+    surface: 'admin',
+    middleware: [requireAdmin, requireAdminTarget('account')],
+    meta: adminTargetMeta('account'),
+    handler: accountWealthHandler,
+  },
+  {
+    method: 'GET',
+    path: '/admin/api/accounts/:id/flags',
+    surface: 'admin',
+    middleware: [requireAdmin, requireAdminTarget('account')],
+    meta: adminTargetMeta('account'),
+    handler: accountFlagsHandler,
+  },
+  {
+    method: 'GET',
+    path: '/admin/api/flags',
+    surface: 'admin',
+    middleware: [requireAdmin],
+    meta: ADMIN_META,
+    handler: flagsHandler,
+  },
+  {
+    method: 'POST',
+    path: '/admin/api/flags/:id/status',
+    surface: 'admin',
+    middleware: [requireAdmin, requireAdminTarget('flag')],
+    meta: adminTargetMeta('flag'),
+    handler: flagStatusHandler,
+  },
+  {
+    method: 'POST',
+    path: '/admin/api/flags/:id/note',
+    surface: 'admin',
+    middleware: [requireAdmin, requireAdminTarget('flag')],
+    meta: adminTargetMeta('flag'),
+    handler: flagNoteHandler,
   },
   {
     method: 'POST',
@@ -3556,6 +4108,17 @@ export const routes: RouteDef[] = [
     middleware: [requireAdmin, requireAdminTarget('account'), withBody()],
     meta: adminTargetMeta('account'),
     handler: liftCheaterMarkHandler,
+  },
+  // The admin-panel kick (server/admin_kick_api.ts): registry-only like the
+  // Cheater mark pair, so the same withBody mount, operator gate pair, and
+  // envelope; the legacy rollback answers 404 for it by design.
+  {
+    method: 'POST',
+    path: '/admin/api/moderation/accounts/:id/kick',
+    surface: 'admin',
+    middleware: [requireAdmin, requireAdminTarget('account'), withBody()],
+    meta: adminTargetMeta('account'),
+    handler: adminKickHandler,
   },
   {
     method: 'POST',

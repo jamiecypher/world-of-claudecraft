@@ -16,6 +16,8 @@
 // (instant, zone): it draws no randomness and reads no live clock, using only
 // Intl.DateTimeFormat, new Date(ms), and Date.UTC.
 
+import { DOUBLE_HONOR_LEAD_MS } from '../src/sim/pvp/honor_event';
+
 export const DEFAULT_RAID_RESET_TIME_ZONE = 'America/New_York';
 
 // The civil-time hour of the daily raid reset: 03:00, the classic 3 AM daily reset.
@@ -121,6 +123,45 @@ export function nextRaidResetMs(
   return today > nowMs ? today : zoneResetInstant(y, mo, d + 1, zone);
 }
 
+// The civil weekday (0 Sunday .. 6 Saturday) of the reset-zone calendar date the
+// instant falls on. Weekday is pure calendar arithmetic once the civil date is
+// known, so Date.UTC on the date parts answers it without another zone lookup.
+function zoneWeekday(instantMs: number, zone: string): number {
+  const { y, mo, d } = zoneDate(instantMs, zone);
+  return new Date(Date.UTC(y, mo - 1, d)).getUTCDay();
+}
+
+// The weekly raid reset weekday: Tuesday, the classic-era US reset day. Chosen
+// against 28 days of measured prod concurrency (2026-08): the population is
+// EU-evening / US-afternoon shaped (weekly peak Sunday ~18:00-20:00 UTC, daily
+// trough 00:00-06:00 UTC), so Tuesday RAID_RESET_HOUR US Eastern lands in the
+// dead band, every lockout week keeps one full weekend, and the boundary reuses
+// the daily-reset hour players already know.
+export const WEEKLY_RESET_WEEKDAY = 2;
+
+/**
+ * The next WEEKLY raid reset strictly after nowMs: RAID_RESET_HOUR:00 zone-local
+ * time on the configured weekday (default Tuesday). A kill in the small hours of
+ * reset day unlocks at that same morning's boundary; the boundary instant itself
+ * belongs to the next week (the same strictly-after contract nextRaidResetMs
+ * keeps). DST transitions resolve through zoneResetInstant exactly like the
+ * daily boundary.
+ */
+export function nextWeeklyRaidResetMs(
+  nowMs: number,
+  zone: string = DEFAULT_RAID_RESET_TIME_ZONE,
+  weekday: number = WEEKLY_RESET_WEEKDAY,
+): number {
+  const { y, mo, d } = zoneDate(nowMs, zone);
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const candidate = zoneResetInstant(y, mo, d + offset, zone);
+    if (candidate > nowMs && zoneWeekday(candidate, zone) === weekday) return candidate;
+  }
+  // Unreachable: eight consecutive civil days always contain the weekday with a
+  // future reset instant; kept as a loud failure rather than a silent lock.
+  throw new Error(`nextWeeklyRaidResetMs found no boundary after ${nowMs} in ${zone}`);
+}
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
@@ -142,11 +183,84 @@ function pad2(n: number): string {
  * randomness. A caller reads the clock and passes the instant in, which is what
  * keeps the sim deterministic.
  */
+// resetDayKey and its eventLeadDayKey twin below run in the 20 Hz world loop,
+// and each computation builds two Intl.DateTimeFormat instances (~0.1ms). The
+// answer can only change on an epoch-minute boundary (the reset hour is a whole
+// hour and modern zone offsets are whole minutes), so memoize per (epoch
+// minute, zone). Still pure: the memo key is derived from the arguments alone,
+// so the same inputs always give the same output. The map is tiny (the loop
+// alternates two buckets per zone); the cap is a leak guard for many-zone
+// callers like the tests.
+const DAY_KEY_MEMO_MAX = 16;
+const dayKeyMemo = new Map<string, string>();
+
 export function resetDayKey(nowMs: number, zone: string = DEFAULT_RAID_RESET_TIME_ZONE): string {
+  const memoKey = `${Math.floor(nowMs / 60_000)}:${zone}`;
+  const memoized = dayKeyMemo.get(memoKey);
+  if (memoized !== undefined) return memoized;
   const { y, mo, d } = zoneDate(nowMs, zone);
   // Date.UTC normalizes the day-before rollback across month and year edges. The
   // arithmetic is on a pure calendar triple, never on an instant, so no offset or
   // DST transition can shift which date comes out.
   const at = new Date(Date.UTC(y, mo - 1, zoneHour(nowMs, zone) < RAID_RESET_HOUR ? d - 1 : d));
-  return `${at.getUTCFullYear()}-${pad2(at.getUTCMonth() + 1)}-${pad2(at.getUTCDate())}`;
+  const key = `${at.getUTCFullYear()}-${pad2(at.getUTCMonth() + 1)}-${pad2(at.getUTCDate())}`;
+  if (dayKeyMemo.size >= DAY_KEY_MEMO_MAX) dayKeyMemo.clear();
+  dayKeyMemo.set(memoKey, key);
+  return key;
+}
+
+/**
+ * The weekend event's early-open probe: the reset-day window this realm will
+ * be in DOUBLE_HONOR_LEAD_MS from the given instant. The game loop feeds it to
+ * the sim beside `resetDayKey` (Sim.eventLeadDay), and honor_event.ts opens
+ * the Double Honor window when either key reads a weekend day, which is what
+ * moves the open from Saturday 3 AM back to Friday 3 PM realm time. Pure in
+ * (instant, zone), like everything else here; the offline twin is
+ * `eventLeadDayOf` in src/game/utc_day.ts.
+ */
+export function eventLeadDayKey(
+  nowMs: number,
+  zone: string = DEFAULT_RAID_RESET_TIME_ZONE,
+): string {
+  return resetDayKey(nowMs + DOUBLE_HONOR_LEAD_MS, zone);
+}
+
+// Whole seconds until the reset that CLOSES the current window (Masterwrought
+// phase 14, the daily-gate refusal countdown): the when-half of resetDayKey,
+// fed to the sim beside it so a daily_limit refusal can tell the player when
+// the gate reopens. Runs in the 20 Hz loop like resetDayKey, so the resolved
+// INSTANT is memoized per (window, zone): within one window it is a constant,
+// and nextRaidResetMs builds several Intl.DateTimeFormat instances per call.
+// Still pure in (instant, zone); ceil'd and floored at 1 so a caller never
+// reads 0 (the sim's "no calendar" sentinel) from a live realm clock.
+const NEXT_RESET_MEMO_MAX = 16;
+const nextResetMemo = new Map<string, number>();
+
+/** Test-only observable for the memo's size bound (the ForTest seam idiom):
+ *  the map is module-private, so without this the clear-on-overflow line has
+ *  no behavioral witness (an unbounded map answers every probe correctly). */
+export function nextResetMemoSizeForTest(): number {
+  return nextResetMemo.size;
+}
+
+export function dailyResetRemainingSec(
+  nowMs: number,
+  zone: string = DEFAULT_RAID_RESET_TIME_ZONE,
+): number {
+  const memoKey = `${resetDayKey(nowMs, zone)}:${zone}`;
+  let resetAt = nextResetMemo.get(memoKey);
+  // Self-expiring on the RESOLVED instant, never the label alone: in a zone
+  // whose local 03:00 is ambiguous on DST fall-back (the EET family,
+  // Pacific/Chatham), resetDayKey flips at the FIRST 03:00 while the reset
+  // resolves to the SECOND, so a label-trusting memo would serve a stale
+  // instant (and the floor's "1 second" lie) for the rest of that window.
+  // Re-resolving once the cached instant passes keeps one recompute per day
+  // and handles a backward wall-clock step across a boundary too (the wave-1
+  // hot-path review, measured over all 418 zones).
+  if (resetAt === undefined || nowMs >= resetAt) {
+    resetAt = nextRaidResetMs(nowMs, zone);
+    if (nextResetMemo.size >= NEXT_RESET_MEMO_MAX) nextResetMemo.clear();
+    nextResetMemo.set(memoKey, resetAt);
+  }
+  return Math.max(1, Math.ceil((resetAt - nowMs) / 1000));
 }

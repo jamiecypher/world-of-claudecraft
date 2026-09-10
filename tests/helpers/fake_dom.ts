@@ -1,6 +1,7 @@
 export class FakeStyle {
   display = '';
   color = '';
+  cursor = '';
   left = '';
   top = '';
   right = '';
@@ -76,6 +77,7 @@ export class FakeElement extends EventTarget {
   scrollHeight = 0;
   scrollWidth = 0;
   clientWidth = 0;
+  clientHeight = 0;
   focused = false;
   private html = '';
   private classes = '';
@@ -189,6 +191,10 @@ export class FakeElement extends EventTarget {
 
   focus(): void {
     this.focused = true;
+  }
+
+  blur(): void {
+    this.focused = false;
   }
 
   setPointerCapture(_pointerId: number): void {}

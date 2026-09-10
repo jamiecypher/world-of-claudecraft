@@ -21,6 +21,7 @@
 // color literal here) and the two typeahead timings are named constants.
 
 import { CLASSES } from '../sim/data';
+import { GUILD_ROSTER_PAGE_SEATS } from '../sim/guild_roster';
 import type { PlayerClass } from '../sim/types';
 import type { IWorld } from '../world_api';
 import { deedTitleText } from './deed_i18n';
@@ -30,6 +31,7 @@ import { esc } from './esc';
 import { captureFormDraft, restoreFormDraft } from './form_draft';
 import { loadGuildHideOffline, saveGuildHideOffline } from './guild_hide_offline';
 import { formatDateTime, formatNumber, t, tPlural } from './i18n';
+import { moneyHtml } from './money_html';
 import { localizeZone } from './server_i18n';
 import {
   blockRows,
@@ -39,8 +41,11 @@ import {
   type GuildView,
   guildDisplayedRole,
   guildRosterItems,
+  guildRosterView,
   guildView,
   ignoreRows,
+  myPledgeView,
+  pledgePanelView,
   raidView,
   type SocialTab,
   socialStructSig,
@@ -56,9 +61,26 @@ import { svgIcon } from './ui_icons';
 const SUGGEST_DEBOUNCE_MS = 160;
 const SUGGEST_BLUR_CLEAR_MS = 150;
 
+// Founding a guild rides the metered name_screen WS lane (refill 2/s, burst 5,
+// shared with pet_rename and the named perfect_item promotion): a lane DROP
+// sends NOTHING back, so a mashed Found button would read as dead. Hold the
+// submit for a beat after each send, exactly as the legendary naming dialog
+// does (src/ui/hud/professions/legendary_naming_controller.ts, the same lane).
+// About 600ms: longer than the lane's 500ms per-token refill, so an honest
+// retry after the lock lifts always has a token waiting. Re-submitting is
+// always safe; the server re-validates the name.
+export const GUILD_CREATE_LOCK_MS = 600;
+
 // Guild billboard input cap; mirrors GUILD_MOTD_MAX in server/social.ts (the
 // server clamps authoritatively, this is UX only).
 const GUILD_MOTD_MAX = 240;
+
+// Pledge-board recruiting note cap; mirrors the setGuildPledgeSettings slice in
+// server/social.ts (the server clamps authoritatively, this is UX only). The
+// level floor bounds mirror the same server clamp.
+const PLEDGE_NOTE_MAX = 90;
+const PLEDGE_MIN_LEVEL_FLOOR = 1;
+const PLEDGE_MIN_LEVEL_CEIL = 60;
 
 /**
  * Hud-supplied glue. The social window renders no item rows (it uses CSS-classed
@@ -131,6 +153,29 @@ function roleLabel(role: GuildDisplayedRole): string {
   if (role === 'recruit') return t('hud.social.tenure.recruit');
   if (role === 'veteran') return t('hud.social.tenure.veteran');
   return rankLabel(role);
+}
+
+// The roster-expansion confirm body. The price is coin-icon markup (gold and
+// silver glyphs, bare digits), so the localized sentence is escaped FIRST with an
+// inert slot in the price position and the trusted markup spliced in afterwards:
+// catalog and overlay text never reaches innerHTML raw. The NUL slot cannot occur
+// in catalog text and esc() leaves it untouched (deed_i18n.ts uses the same token).
+const PRICE_SLOT = '\u0000';
+export function rosterExpandConfirmHtml(seats: string, priceHtml: string): string {
+  return splicePriceHtml(
+    esc(t('hudChrome.social.roster.confirm', { seats, price: PRICE_SLOT })),
+    priceHtml,
+  );
+}
+
+/** Fill EVERY price slot of an escaped sentence with the trusted price markup
+ *  (split/join: verbatim, no replacement-pattern parsing). A sentence with no slot
+ *  at all (H10 pins the placeholder set, so only a hand-edited overlay could lose
+ *  it) still shows the price after the sentence: a gold spend is never confirmed
+ *  unpriced. */
+export function splicePriceHtml(escapedSentence: string, priceHtml: string): string {
+  if (!escapedSentence.includes(PRICE_SLOT)) return `${escapedSentence} ${priceHtml}`;
+  return escapedSentence.split(PRICE_SLOT).join(priceHtml);
 }
 
 /** One guild-roster row. A stateless string builder (module-level, exported so
@@ -210,6 +255,11 @@ export class SocialWindow {
   // is actionable info, never gated on graphics tier). Loaded once; the delegated body
   // handler flips + persists it and refreshes the list in place.
   private hideOffline = loadGuildHideOffline();
+  // The name_screen lane hold on the Found button (GUILD_CREATE_LOCK_MS). It lives
+  // on the instance, not on the button, because the panel rebuilds its footer on
+  // every structural repaint; applyGuildCreateLock re-stamps the fresh button.
+  private guildCreateLocked = false;
+  private guildCreateTimer: number | undefined;
 
   constructor(private readonly deps: SocialWindowDeps) {}
 
@@ -258,7 +308,14 @@ export class SocialWindow {
     if (struct !== this.lastStruct) {
       this.lastStruct = struct;
       this.lastContent = this.contentSig();
+      // A structural change mid-session (a bought roster page re-pricing the
+      // footer button, a rank change) rebuilds the whole panel, which would
+      // otherwise wipe a half-typed invite or billboard draft: capture and
+      // restore them around the rebuild, the relocalize() recipe.
+      const el = this.deps.root();
+      const draft = captureFormDraft(el);
       this.render();
+      restoreFormDraft(el, draft);
     } else {
       const content = this.contentSig();
       if (content !== this.lastContent) {
@@ -320,6 +377,12 @@ export class SocialWindow {
     // land on a labeled dialog (the sibling cold windows all set this).
     markDialogRoot(el, { label: t('hud.social.title') });
     const w = this.deps.world();
+    // The Pledges tab exists only for officer-plus members; a demotion (or
+    // guild leave) while it is selected falls back to the guild tab rather
+    // than rendering an un-tabbed orphan board (the leaderboard devs-tab
+    // pattern).
+    const pledgePanel = pledgePanelView(w.socialInfo);
+    if (this.tab === 'pledges' && !pledgePanel) this.tab = 'guild';
     const tab = this.tab;
     const online = w.socialInfo !== null;
     const realmTag =
@@ -342,6 +405,24 @@ export class SocialWindow {
           tabs: [
             { id: 'friends', label: t('hud.social.friendsTab') },
             { id: 'guild', label: t('hud.social.guildTab') },
+            // Officer-plus only: the pledge dashboard. The label carries the
+            // live open-pledge count (the count is in the structural
+            // signature, so a new pledge rebuilds the strip).
+            ...(pledgePanel
+              ? [
+                  {
+                    id: 'pledges',
+                    label:
+                      pledgePanel.rows.length > 0
+                        ? t('hudChrome.pledge.tabWithCount', {
+                            count: formatNumber(pledgePanel.rows.length, {
+                              maximumFractionDigits: 0,
+                            }),
+                          })
+                        : t('hudChrome.pledge.tab'),
+                  },
+                ]
+              : []),
             { id: 'ignore', label: t('hudChrome.social.ignoredTab') },
             { id: 'block', label: t('hudChrome.social.blockedTab') },
             { id: 'raid', label: t('hud.social.raidTab') },
@@ -351,7 +432,9 @@ export class SocialWindow {
       ) +
       `<div class="soc-body" id="soc-body-panel" role="tabpanel"></div>` +
       `<div class="soc-notice"></div>` +
-      (tab === 'raid' ? '' : online ? this.footer() : '');
+      // The raid tab has no footer; the pledges tab's actions all live in the
+      // body (the settings editor + per-row decisions), so it takes none either.
+      (tab === 'raid' || tab === 'pledges' ? '' : online ? this.footer() : '');
     this.wireChrome(el);
     // Delegate every row action to ONE listener on the persistent body, so a
     // content refresh (innerHTML swap) never re-attaches per-row handlers.
@@ -363,14 +446,21 @@ export class SocialWindow {
       body.addEventListener('keydown', (e) => {
         const ke = e as KeyboardEvent;
         if (ke.key !== 'Enter') return;
-        if ((ke.target as HTMLElement).matches?.('input[data-field="gmotd"]')) {
+        const target = ke.target as HTMLElement;
+        if (target.matches?.('input[data-field="gmotd"]')) {
           ke.preventDefault();
           this.saveBillboard();
+        } else if (target.matches?.('input[data-field="pnote"], input[data-field="pminlvl"]')) {
+          ke.preventDefault();
+          this.savePledgeSettings();
         }
       });
     }
     this.refreshList();
     this.renderNotice();
+    // The footer was rebuilt above, so a hold taken before this repaint has to be
+    // re-stamped onto the fresh Found button.
+    this.applyGuildCreateLock();
   }
 
   // Lighter refresh: just the list inside the current tab, leaving the footer
@@ -379,21 +469,43 @@ export class SocialWindow {
   private refreshList(): void {
     const body = this.deps.root().querySelector('.soc-body') as HTMLElement | null;
     if (!body) return;
-    // Preserve the billboard edit draft across the innerHTML swap: the panel
+    // Preserve the in-body edit drafts across the innerHTML swap: the panel
     // repaints on the slow-HUD divider whenever ANY social/party content moves
     // (a guildmate's presence, party hp), which would otherwise clobber typing.
-    // defaultValue is the motd rendered at the last paint, so an untouched
-    // input (value === defaultValue, unfocused) takes the fresh server motd.
-    const prevMotd = body.querySelector('input[data-field="gmotd"]') as HTMLInputElement | null;
-    const draft =
-      prevMotd && (prevMotd.value !== prevMotd.defaultValue || document.activeElement === prevMotd)
-        ? {
-            value: prevMotd.value,
-            focused: document.activeElement === prevMotd,
-            selStart: prevMotd.selectionStart,
-            selEnd: prevMotd.selectionEnd,
-          }
-        : null;
+    // defaultValue is the value rendered at the last paint, so an untouched
+    // input (value === defaultValue, unfocused) takes the fresh server value.
+    // Covers the billboard edit (gmotd) and the pledge settings editor
+    // (pnote / pminlvl text-likes, popen checkbox via defaultChecked).
+    const drafts: {
+      field: string;
+      value: string;
+      checked: boolean;
+      isCheckbox: boolean;
+      focused: boolean;
+      selStart: number | null;
+      selEnd: number | null;
+    }[] = [];
+    for (const prev of Array.from(
+      body.querySelectorAll<HTMLInputElement>(
+        'input[data-field="gmotd"], .soc-pledge-settings input[data-field]',
+      ),
+    )) {
+      const isCheckbox = prev.type === 'checkbox';
+      const dirty = isCheckbox
+        ? prev.checked !== prev.defaultChecked
+        : prev.value !== prev.defaultValue;
+      const focused = document.activeElement === prev;
+      if (!dirty && !focused) continue;
+      drafts.push({
+        field: prev.dataset.field ?? '',
+        value: prev.value,
+        checked: prev.checked,
+        isCheckbox,
+        focused,
+        selStart: isCheckbox ? null : prev.selectionStart,
+        selEnd: isCheckbox ? null : prev.selectionEnd,
+      });
+    }
     const online = this.deps.world().socialInfo !== null;
     body.innerHTML =
       this.tab === 'raid'
@@ -404,19 +516,26 @@ export class SocialWindow {
             ? this.friendsHtml()
             : this.tab === 'guild'
               ? this.guildHtml()
-              : this.tab === 'block'
-                ? this.blockHtml()
-                : this.ignoreHtml();
-    if (draft) {
-      const next = body.querySelector('input[data-field="gmotd"]') as HTMLInputElement | null;
+              : this.tab === 'pledges'
+                ? this.pledgesHtml()
+                : this.tab === 'block'
+                  ? this.blockHtml()
+                  : this.ignoreHtml();
+    for (const draft of drafts) {
+      const next = body.querySelector(
+        `input[data-field="${draft.field}"]`,
+      ) as HTMLInputElement | null;
       // A demotion mid-draft removes the edit row entirely (editor-only), so
       // `next` is null then and the draft is dropped.
-      if (next) {
-        next.value = draft.value;
-        if (draft.focused) {
-          next.focus();
+      if (!next) continue;
+      if (draft.isCheckbox) next.checked = draft.checked;
+      else next.value = draft.value;
+      if (draft.focused) {
+        next.focus();
+        // selStart is null for the checkbox (and for any input type without a
+        // selection API); setSelectionRange would throw there.
+        if (!draft.isCheckbox && draft.selStart !== null)
           next.setSelectionRange(draft.selStart, draft.selEnd);
-        }
       }
     }
   }
@@ -450,6 +569,10 @@ export class SocialWindow {
       this.saveBillboard();
       return;
     }
+    if (node.dataset.act === 'pledge-settings-save') {
+      this.savePledgeSettings();
+      return;
+    }
     const w = this.deps.world();
     const act = node.dataset.act;
     const name = node.dataset.name ?? '';
@@ -459,6 +582,9 @@ export class SocialWindow {
     else if (act === 'gkick') w.guildKick(name);
     else if (act === 'promote') w.guildPromote(name);
     else if (act === 'demote') w.guildDemote(name);
+    else if (act === 'pledge-accept') w.guildPledgeDecide(name, true);
+    else if (act === 'pledge-reject') w.guildPledgeDecide(name, false);
+    else if (act === 'pledge-withdraw') w.guildPledgeWithdraw();
     else if (act === 'gtransfer')
       this.deps.showPrompt(
         t('hud.social.transferPrompt', { name: `<b>${esc(name)}</b>` }),
@@ -492,6 +618,23 @@ export class SocialWindow {
       .querySelector('input[data-field="gmotd"]') as HTMLInputElement | null;
     if (!input) return;
     this.deps.world().guildSetMotd(input.value);
+  }
+
+  // Send the pledge-board recruiting settings up through IWorld: the accepting
+  // toggle, the level floor (parsed + clamped here for UX; the server clamps
+  // authoritatively), and the board note ('' clears it). A malformed level
+  // falls back to the floor, matching an unset field.
+  private savePledgeSettings(): void {
+    const root = this.deps.root();
+    const open = root.querySelector('input[data-field="popen"]') as HTMLInputElement | null;
+    const level = root.querySelector('input[data-field="pminlvl"]') as HTMLInputElement | null;
+    const note = root.querySelector('input[data-field="pnote"]') as HTMLInputElement | null;
+    if (!open || !level || !note) return;
+    const parsed = Number.parseInt(level.value, 10);
+    const minLevel = Number.isFinite(parsed)
+      ? Math.min(PLEDGE_MIN_LEVEL_CEIL, Math.max(PLEDGE_MIN_LEVEL_FLOOR, parsed))
+      : PLEDGE_MIN_LEVEL_FLOOR;
+    this.deps.world().setGuildPledgeSettings(open.checked, minLevel, note.value);
   }
 
   private friendsHtml(): string {
@@ -570,10 +713,22 @@ export class SocialWindow {
   private guildHtml(): string {
     const w = this.deps.world();
     const view = guildView(w.socialInfo, w.player.name);
-    if (!view.guild) return `<div class="soc-empty">${esc(t('hud.social.noGuild'))}</div>`;
+    if (!view.guild)
+      return `<div class="soc-empty">${esc(t('hud.social.noGuild'))}</div>` + this.myPledgeHtml();
     const g = view.guild;
     const guildCount = formatNumber(g.memberCount, { maximumFractionDigits: 0 });
-    const head = `<div class="soc-guild-head">${esc(g.name)} <span class="gm">${esc(tPlural('hudChrome.plurals.guildMembers', g.memberCount, { rank: rankLabel(g.rank), count: guildCount }))}</span></div>`;
+    // The guild name carries its lifetime-XP colour tier (the nameplate ladder,
+    // shared .guild-tier-N classes with the guild board).
+    // The seat readout beside the rank line: the roster's bought cap
+    // (memberCap) is what the count is measured against, so a guild that has
+    // outgrown its base roster can see the ceiling it is buying pages toward.
+    const seats = esc(
+      t('hudChrome.social.roster.seats', {
+        count: guildCount,
+        cap: formatNumber(g.memberCap, { maximumFractionDigits: 0 }),
+      }),
+    );
+    const head = `<div class="soc-guild-head"><span class="guild-tier-${g.tier}">${esc(g.name)}</span> <span class="gm">${esc(tPlural('hudChrome.plurals.guildMembers', g.memberCount, { rank: rankLabel(g.rank), count: guildCount }))}</span> <span class="gm" data-field="roster-seats">${seats}</span></div>`;
     // The persisted "hide offline" toggle: a pressed-state button (a single click event
     // through the delegated body handler, unlike a label+checkbox that double-fires).
     const toggle =
@@ -627,6 +782,65 @@ export class SocialWindow {
       edit +
       `</div>`
     );
+  }
+
+  // The unguilded viewer's own standing pledge, under the guild tab's empty
+  // state (docs/prd/guild-pledge-board.md): which guild the pledge names (in
+  // its colour tier), since when, and the withdraw action. Empty when not
+  // pledged; pledging itself lives on the guild high-score board.
+  private myPledgeHtml(): string {
+    const pledge = myPledgeView(this.deps.world().socialInfo);
+    if (!pledge) return '';
+    // The guild name rides pre-escaped markup INTO the template (the
+    // transferPrompt pattern), so the locale owns the sentence order while the
+    // name still carries its colour-tier span.
+    const line = t('hudChrome.pledge.yourPledge', {
+      guild: `<span class="guild-tier-${pledge.tier}">${esc(pledge.guildName)}</span>`,
+    });
+    return (
+      `<div class="soc-my-pledge">` +
+      `<span class="soc-my-pledge-line">${line}</span>` +
+      `<span class="soc-my-pledge-since">${esc(t('hudChrome.pledge.since', { date: formatDateTime(new Date(pledge.sinceMs), { dateStyle: 'medium' }) }))}</span>` +
+      `<button type="button" class="btn" data-act="pledge-withdraw">${esc(t('hudChrome.pledge.withdraw'))}</button>` +
+      `</div>`
+    );
+  }
+
+  // The officer Pledges tab: the recruiting settings editor (accepting toggle,
+  // level floor, the board note) over the open pledges awaiting a decision.
+  // UX-only gating: the server enforces the real officer-plus checks on every
+  // command this tab sends.
+  private pledgesHtml(): string {
+    const panel = pledgePanelView(this.deps.world().socialInfo);
+    if (!panel) return `<div class="soc-empty">${esc(t('hud.social.noGuild'))}</div>`;
+    const s = panel.settings;
+    const settings =
+      `<div class="soc-pledge-settings">` +
+      `<div class="soc-billboard-label">${esc(t('hudChrome.pledge.settings'))}</div>` +
+      `<label class="soc-pledge-open"><input type="checkbox" data-field="popen"${s.enabled ? ' checked' : ''}/> ${esc(t('hudChrome.pledge.acceptingLabel'))}</label>` +
+      `<label class="soc-pledge-minlvl">${esc(t('hudChrome.pledge.minLevelLabel'))} ` +
+      `<input inputmode="numeric" pattern="[0-9]*" maxlength="2" data-field="pminlvl" value="${esc(String(s.minLevel))}" autocomplete="off"/></label>` +
+      `<div class="soc-pledge-note-row">` +
+      `<input maxlength="${PLEDGE_NOTE_MAX}" value="${esc(s.note)}" aria-label="${esc(t('hudChrome.pledge.noteLabel'))}" placeholder="${esc(t('hudChrome.pledge.notePlaceholder'))}" data-field="pnote" autocomplete="off" spellcheck="false"/>` +
+      `<button type="button" class="btn" data-act="pledge-settings-save">${esc(t('hudChrome.pledge.save'))}</button>` +
+      `</div></div>`;
+    if (panel.rows.length === 0)
+      return settings + `<div class="soc-empty">${esc(t('hudChrome.pledge.empty'))}</div>`;
+    const rows = panel.rows
+      .map((p) => {
+        const since = formatDateTime(new Date(p.sinceMs), { dateStyle: 'medium' });
+        return (
+          `<div class="soc-row">` +
+          `<span class="soc-id"><span class="soc-name">${esc(p.name)}</span><span class="soc-sub">${esc(t('hud.social.levelClass', { level: formatNumber(p.level, { maximumFractionDigits: 0 }), className: playerClassDisplayName(p.cls) }))}</span></span>` +
+          `<span class="soc-meta">${esc(t('hudChrome.pledge.since', { date: since }))}</span>` +
+          `<span class="soc-actions">` +
+          `<button type="button" class="soc-x soc-pledge-accept" data-act="pledge-accept" data-name="${esc(p.name)}" title="${esc(t('hudChrome.pledge.acceptTitle', { name: p.name }))}">${svgIcon('check')}</button>` +
+          `<button type="button" class="soc-x" data-act="pledge-reject" data-name="${esc(p.name)}" title="${esc(t('hudChrome.pledge.rejectTitle', { name: p.name }))}">${svgIcon('close')}</button>` +
+          `</span></div>`
+        );
+      })
+      .join('');
+    return settings + rows;
   }
 
   private raidHtml(): string {
@@ -712,12 +926,26 @@ export class SocialWindow {
         16,
         true,
       );
+    // Roster expansion (the pure core decides who may buy and at what price;
+    // the server re-prices and refuses everyone but the Guild Master anyway):
+    // the leader sees an Expand roster button (the seats and price live in the
+    // confirm prompt), or a disabled button once the ladder is complete; other
+    // ranks see nothing here. It leads the same footer row the disband / leave
+    // button ends (.soc-foot-start pushes it to the start edge).
+    const roster = guildRosterView(this.deps.world().socialInfo);
+    const expand =
+      roster && guild.rank === 'leader'
+        ? roster.nextRosterPrice === null
+          ? `<button class="btn soc-foot-start" data-act="guild-expand" disabled>${esc(t('hudChrome.social.roster.maxed'))}</button>`
+          : `<button class="btn soc-foot-start" data-act="guild-expand">${esc(t('hudChrome.social.roster.expand'))}</button>`
+        : '';
     // classic MMOs: a Guild Master with other members can't just leave (they disband,
     // or hand over leadership via the crown action). Everyone else can leave.
-    foot +=
+    const leave =
       guild.rank === 'leader' && guild.members.length > 1
-        ? `<div class="soc-add soc-leave"><button class="btn" data-act="guild-disband">${esc(t('hud.social.disbandGuild'))}</button></div>`
-        : `<div class="soc-add soc-leave"><button class="btn" data-act="guild-leave">${esc(t('hud.social.leaveGuild'))}</button></div>`;
+        ? `<button class="btn" data-act="guild-disband">${esc(t('hud.social.disbandGuild'))}</button>`
+        : `<button class="btn" data-act="guild-leave">${esc(t('hud.social.leaveGuild'))}</button>`;
+    foot += `<div class="soc-add soc-leave">${expand}${leave}</div>`;
     return foot;
   }
 
@@ -776,9 +1004,26 @@ export class SocialWindow {
       else if (act === 'guild-invite') void this.resolveAndAct('ginvite', field('ginvite'));
       else if (act === 'guild-create') {
         const n = field('gname');
-        if (n) {
+        if (n && !this.guildCreateLocked) {
           w.guildCreate(n);
           this.clearInput('gname');
+          this.lockGuildCreate();
+        }
+      } else if (act === 'guild-expand') {
+        // Gold leaves the buyer's own purse and never comes back, so the page
+        // is bought through the shared confirm prompt like a disband. The
+        // prompt re-reads the price from the pure core at click time.
+        const roster = guildRosterView(w.socialInfo);
+        if (roster?.canExpandRoster && roster.nextRosterPrice !== null) {
+          this.deps.showPrompt(
+            rosterExpandConfirmHtml(
+              formatNumber(GUILD_ROSTER_PAGE_SEATS, { maximumFractionDigits: 0 }),
+              moneyHtml(roster.nextRosterPrice, { compact: true, grouping: false }),
+            ),
+            t('hudChrome.social.roster.confirmAction'),
+            () => w.guildBuyRosterPage(),
+            () => {},
+          );
         }
       } else if (act === 'guild-leave')
         this.deps.showPrompt(
@@ -985,6 +1230,34 @@ export class SocialWindow {
       this.clearInput('ginvite');
     }
     this.renderSuggest(kind, []);
+  }
+
+  // Hold the Found button for one lane beat after a send. One-shot re-arm: the
+  // timer lifts the hold, and a landed creation lifts it sooner by retiring the
+  // create row entirely (the guild footer replaces it on the next repaint).
+  private lockGuildCreate(): void {
+    this.guildCreateLocked = true;
+    window.clearTimeout(this.guildCreateTimer);
+    this.guildCreateTimer = window.setTimeout(() => {
+      this.guildCreateTimer = undefined;
+      this.guildCreateLocked = false;
+      this.applyGuildCreateLock();
+    }, GUILD_CREATE_LOCK_MS);
+    this.applyGuildCreateLock();
+  }
+
+  // Stamp the hold onto whichever Found button is currently mounted. Called
+  // after every full render so a structural repaint mid-hold cannot hand the
+  // player a live button, and no player-visible string changes (disabled +
+  // aria-busy is the house busy form; `.btn:disabled` carries the visuals).
+  private applyGuildCreateLock(): void {
+    const btn = this.deps
+      .root()
+      .querySelector('.soc-add .btn[data-act="guild-create"]') as HTMLButtonElement | null;
+    if (!btn) return;
+    btn.disabled = this.guildCreateLocked;
+    if (this.guildCreateLocked) btn.setAttribute('aria-busy', 'true');
+    else btn.removeAttribute('aria-busy');
   }
 
   private clearInput(field: string): void {

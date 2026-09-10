@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { DungeonMapModel } from '../src/ui/dungeon_map_view';
 import {
   BG_MAP_FIELD_PAD_PX,
   type BgMapModel,
@@ -25,6 +26,8 @@ function core() {
     station: (type) => `Station ${type}`,
     poi: (zoneId, index) => `POI ${zoneId}/${index}`,
     rift: (name, rank) => `${name} (${rank ?? '?'})`,
+    npc: (id) => `NPC ${id}`,
+    mob: (id) => `Mob ${id}`,
   });
 }
 
@@ -85,6 +88,7 @@ function crowdedOverworldModel(): MapPaintResult {
       { mx: 340, my: 320, kind: 'mailbox' },
       { mx: 350, my: 320, kind: 'noticeboard' },
     ],
+    farmPatches: [{ mx: 360, my: 320, patchId: 'patch_eastbrook', zoneId: 'eastbrook_vale' }],
     navigation: [
       {
         mx: 280,
@@ -338,6 +342,8 @@ describe('map semantic accessibility core', () => {
       station: stationName,
       poi: (zoneId, index) => `${zoneId}/${index}`,
       rift: (name) => name,
+      npc: (id) => id,
+      mob: (id) => id,
     });
     const model = {
       view: {},
@@ -347,6 +353,7 @@ describe('map semantic accessibility core', () => {
       gatherNodes: [],
       stations: [{ mx: 100, my: 100, stationId: 'forge', type: 'forge' }],
       services: [],
+      farmPatches: [],
       navigation: [],
       player: { mx: 280, my: 280, angle: 0 },
       allies: [],
@@ -362,6 +369,38 @@ describe('map semantic accessibility core', () => {
     expect(stationName).toHaveBeenCalledTimes(1);
   });
 
+  it('semantically exposes the player, dungeon exits, bosses, NPCs, and party members', () => {
+    const description = core().updateDungeon(
+      {
+        markers: [
+          { kind: 'player', cx: 280, cy: 280, angle: 0 },
+          { kind: 'exit', cx: 280, cy: 500 },
+          { kind: 'gate', cx: 280, cy: 60 },
+          { kind: 'npc', cx: 180, cy: 180, templateId: 'maelin' },
+          {
+            kind: 'mob',
+            cx: 380,
+            cy: 180,
+            templateId: 'varkhul',
+            aggro: true,
+            boss: true,
+          },
+          { kind: 'party', cx: 180, cy: 380, cls: 'mage', dead: false },
+        ],
+      } as unknown as DungeonMapModel,
+      'Molten Assembly',
+      560,
+    );
+
+    expect(description).toContain('You');
+    expect(description).toContain('Dungeon exit');
+    expect(description).toContain('Sealed gate');
+    expect(description).toContain('Point of interest: NPC maelin');
+    expect(description).toContain('Boss attacking you: Mob varkhul');
+    expect(description).toContain('Party member');
+    expect(description).not.toContain('No meaningful markers are visible.');
+  });
+
   it('reserves crowded summaries for every resource, station, and service identity', () => {
     const stationName = vi.fn((type: string) => `Station ${type}`);
     const zoneName = vi.fn((id: string) => `Zone ${id}`);
@@ -372,6 +411,8 @@ describe('map semantic accessibility core', () => {
       station: stationName,
       poi: (zoneId, index) => `${zoneId}/${index}`,
       rift: (name) => name,
+      npc: (id) => id,
+      mob: (id) => id,
     });
     const model = crowdedOverworldModel();
 
@@ -389,7 +430,8 @@ describe('map semantic accessibility core', () => {
     }
     expect(first).toContain('Service: Mailbox');
     expect(first).toContain('Service: Notice Board');
-    expect(first).toContain('Additional markers: 12.');
+    expect(first).toContain('Garden beds');
+    expect(first).toContain('Additional markers: 13.');
 
     const stationCalls = stationName.mock.calls.length;
     const zoneCalls = zoneName.mock.calls.length;
@@ -412,6 +454,7 @@ describe('map semantic accessibility core', () => {
         ],
         stations: [],
         services: [],
+        farmPatches: [],
         navigation: [],
         player: null,
         allies: [],
@@ -425,6 +468,35 @@ describe('map semantic accessibility core', () => {
       );
     },
   );
+
+  it('names a farm patch with the argument-free garden-bed label, or nothing at all', () => {
+    const withPatch = {
+      view: {},
+      cursor: 'default',
+      questAreas: [],
+      npcs: [],
+      gatherNodes: [],
+      stations: [],
+      services: [],
+      farmPatches: [{ mx: 280, my: 200, patchId: 'patch_eastbrook', zoneId: 'eastbrook_vale' }],
+      navigation: [],
+      player: { mx: 280, my: 280, angle: 0 },
+      allies: [],
+      party: [],
+      portals: [],
+      pois: [],
+    } as unknown as MapPaintResult;
+
+    // No {name} argument: the label stands alone, and the summary's own
+    // direction plus distance band identify which site is meant.
+    expect(core().updateOverworld(withPatch, 'Eastbrook Vale', 560)).toContain(
+      'Garden beds: north, near.',
+    );
+
+    // Negative arm: a zone with no authored patch says nothing about beds.
+    const withoutPatch = { ...withPatch, farmPatches: [] } as unknown as MapPaintResult;
+    expect(core().updateOverworld(withoutPatch, 'Eastbrook Vale', 560)).not.toContain('Garden');
+  });
 
   it('rebuilds cached prose when only the loaded language changes', () => {
     const view = core();

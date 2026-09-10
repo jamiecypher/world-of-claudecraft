@@ -387,6 +387,7 @@ describe('buildDeedsView', () => {
       titleReward: true,
       borderReward: false,
       crestId: 'deed_cat_combat',
+      missingPoiMarkIds: [],
     });
     // Unearned watched counter deed: watchable AND watched, no ribbons.
     expect(view.entries.find((e) => e.id === 'cmb_counter')).toEqual({
@@ -402,6 +403,7 @@ describe('buildDeedsView', () => {
       titleReward: false,
       borderReward: false,
       crestId: 'deed_cat_combat',
+      missingPoiMarkIds: [],
     });
   });
 
@@ -791,6 +793,46 @@ describe('buildDeedsView', () => {
 });
 
 // ---------------------------------------------------------------------------
+// missingPoiMarkIds (exploration wayfarer deeds)
+// ---------------------------------------------------------------------------
+
+describe('missing poi marks (exploration wayfarer deeds)', () => {
+  it('lists every unvisited poi mark, in trigger order, while unearned', () => {
+    const view = buildDeedsView(makeInput({ category: 'exploration' }));
+    const entry = view.entries.find((e) => e.id === 'exp_visits');
+    expect(entry?.missingPoiMarkIds).toEqual(['poi:a', 'poi:b']);
+  });
+
+  it('drops a mark from the list the moment it is visited', () => {
+    const s = stats((st) => st.visited.add('poi:a'));
+    const view = buildDeedsView(makeInput({ category: 'exploration', deedStats: s }));
+    const entry = view.entries.find((e) => e.id === 'exp_visits');
+    expect(entry?.missingPoiMarkIds).toEqual(['poi:b']);
+  });
+
+  it('is empty once every mark is visited', () => {
+    const s = stats((st) => {
+      st.visited.add('poi:a');
+      st.visited.add('poi:b');
+    });
+    const view = buildDeedsView(makeInput({ category: 'exploration', deedStats: s }));
+    const entry = view.entries.find((e) => e.id === 'exp_visits');
+    expect(entry?.missingPoiMarkIds).toEqual([]);
+  });
+
+  it('is empty once the deed is earned, even with marks never visited', () => {
+    const view = buildDeedsView(
+      makeInput({
+        category: 'exploration',
+        deedsEarned: new Map([['exp_visits', '2026-08-01']]),
+      }),
+    );
+    const entry = view.entries.find((e) => e.id === 'exp_visits');
+    expect(entry?.missingPoiMarkIds).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The real catalog (drift pins)
 // ---------------------------------------------------------------------------
 
@@ -799,18 +841,36 @@ describe('real catalog integration', () => {
     const view = buildDeedsView(
       makeInput({ deeds: DEEDS, order: DEED_ORDER, category: 'progression' }),
     );
-    // 273 deeds - 4 feats - 9 hidden = 260 visible to a fresh character (the
+    // 287 deeds - 4 feats - 9 hidden = 274 visible to a fresh character. The
+    // farming absorb (masterwrought Phase 11d) carried this branch's 279 to 286
+    // with its seven deeds, none of them feat-flagged or hidden, so both
+    // subtrahends are unchanged and the identity moves with the total alone.
+    // The chain below is the 279 history it extends (the
     // Drakelands brood pair, the four battleground deeds, the Rift coverage
-    // pair, the seven per-craft rare-tier profession deeds, the twelve
-    // remaining starter-zone chronicle pairs, the four Reliquary Curator rank
-    // bridges, the three WARFARE honor ranks, four of the five Phase 18
-    // Reliquary completion-ladder deeds, and the walk-in castle visit pair;
-    // col_reliquary_complete is the catalog's one off-prefix feat, so it sits
-    // outside the completion denominator like the three feat_ deeds).
-    expect(view.summary.visibleTotal).toBe(260);
-    // The bucket sum adds the feat-flagged rows back on top (3 on the Feats
-    // shelf plus the off-prefix capstone on Collection).
-    expect(view.categories.reduce((n, c) => n + c.visible, 0)).toBe(264);
+    // pair, the per-craft rare-tier profession deeds, the twelve remaining
+    // starter-zone chronicle pairs, the four Reliquary Curator rank bridges,
+    // the three WARFARE honor ranks, four of the five Phase 18 Reliquary
+    // completion-ladder deeds, the walk-in castle visit pair, the Proving
+    // Shore graduation deed, the five Crucible raid deeds, the Roots'
+    // Bramblehide set collection deed, this branch's own Crucible
+    // professions additions (col_farm_roster, col_deepest_cast,
+    // prog_field_to_feast, prog_legendmaker) and hid_forgebreaker (the
+    // Forgebreaker quest's hidden deed), PLUS OSSBrain PR3781's own feat-flag
+    // changes, which land on existing deed ids rather than adding new ones
+    // (the total stays 300; only the feat/hidden split moves).
+    // col_reliquary_complete is the catalog's off-prefix feat, so it sits
+    // outside the completion denominator with every other feat, and
+    // hid_forgebreaker sits outside it unearned like every other hidden deed.
+    // Recomputed directly against the merged live catalog
+    // (src/sim/content/deeds.ts) with a standalone probe calling
+    // buildDeedsView + countsTowardCompletion directly (tsx, no full
+    // compile), since the tree does not compile yet:
+    // 300 deeds - 22 feats - 10 hidden = 268 visible to a fresh character.
+    expect(view.summary.visibleTotal).toBe(268);
+    // The bucket sum adds the feat-flagged rows back on top (hidden-unearned
+    // deeds never enter a bucket at all, so only the 22 feats separate this
+    // from visibleTotal): 268 + 22 = 290.
+    expect(view.categories.reduce((n, c) => n + c.visible, 0)).toBe(290);
   });
 
   it('offers exactly the live catalog border deeds once they are earned', () => {
@@ -849,6 +909,65 @@ describe('real catalog integration', () => {
     for (const def of Object.values(DEEDS)) {
       expect(DEED_DISPLAY_CATEGORIES).toContain(deedDisplayCategory(def.category));
     }
+  });
+
+  it('lists the real Thornpeak wayfarer marks still outstanding at 9 of 10', () => {
+    const wayfarer = DEEDS.exp_peaks_wayfarer;
+    if (wayfarer.trigger.kind !== 'visits') throw new Error('fixture drift');
+    const markIds = wayfarer.trigger.markIds;
+    const s = stats((st) => {
+      for (const mark of markIds) {
+        if (mark !== 'poi:thornpeak_heights:gravewyrm_sanctum') st.visited.add(mark);
+      }
+    });
+    const view = buildDeedsView(
+      makeInput({ deeds: DEEDS, order: DEED_ORDER, deedStats: s, category: 'exploration' }),
+    );
+    const entry = view.entries.find((e) => e.id === 'exp_peaks_wayfarer');
+    expect(entry?.missingPoiMarkIds).toEqual(['poi:thornpeak_heights:gravewyrm_sanctum']);
+  });
+
+  it('never surfaces a missing-places list for a visits deed outside the poi: namespace', () => {
+    const view = buildDeedsView(
+      makeInput({ deeds: DEEDS, order: DEED_ORDER, category: 'chronicle' }),
+    );
+    const gatherer = view.entries.find((e) => e.id === 'chr_vale_gatherer');
+    expect(gatherer?.missingPoiMarkIds).toEqual([]);
+  });
+
+  it('pins the exact set of live deeds an all-poi visits trigger admits', () => {
+    // A literal, not a computed re-check: a content change that adds a new
+    // poi:-only visits deed (or retires one of these) should have to move
+    // this pin deliberately, so the missing-places line's real coverage is a
+    // visible decision rather than a silent side effect of a catalog edit.
+    const admitted = Object.values(DEEDS)
+      .filter((def) => {
+        if (def.trigger.kind !== 'visits') return false;
+        const marks = def.trigger.markIds;
+        return marks.length > 0 && marks.every((m) => m.startsWith('poi:'));
+      })
+      .map((def) => def.id)
+      .sort();
+    expect(admitted).toEqual([
+      'exp_long_road_north',
+      'exp_marsh_wayfarer',
+      'exp_peaks_wayfarer',
+      'exp_vale_wayfarer',
+    ]);
+  });
+
+  it('lists the missing hub settlements for the cross-zone Long Road North deed', () => {
+    const longRoad = DEEDS.exp_long_road_north;
+    if (longRoad.trigger.kind !== 'visits') throw new Error('fixture drift');
+    const s = stats((st) => st.visited.add('poi:eastbrook_vale:eastbrook'));
+    const view = buildDeedsView(
+      makeInput({ deeds: DEEDS, order: DEED_ORDER, deedStats: s, category: 'exploration' }),
+    );
+    const entry = view.entries.find((e) => e.id === 'exp_long_road_north');
+    expect(entry?.missingPoiMarkIds).toEqual([
+      'poi:mirefen_marsh:fenbridge',
+      'poi:thornpeak_heights:highwatch',
+    ]);
   });
 });
 

@@ -44,12 +44,23 @@ import { isPersistentEngineAura } from '../persistent_aura';
 import type { PlayerMeta } from '../sim';
 import type { SimContext } from '../sim_context';
 import { type Aura, type AuraKind, CAST_COMPLETE_EPS, DT, type Entity } from '../types';
+import { applyWellFedOnMealComplete } from '../wellfed';
 import { tickAfflictionAura, tickMaledictGaze } from './affliction';
 import { isStunned } from './cc';
+import {
+  cleanupCraftedCollectionAuras,
+  onCraftedCollectionHeal,
+} from './crafted_collection_effects';
 import { regenerateRuinOutOfCombat, tickPyreGuardian } from './destruction';
 import { druidEngineOnBleedTick } from './druid_engines';
 import { applyGreaterInvisibilityAftereffect } from './greater_invisibility';
-import { detonateOssuaryMark, OSSUARY_MARK_ABILITY_ID } from './necromancy';
+import { consumeHealAbsorb } from './heal';
+import { isColdsightInternalMarkerAuraId } from './hunter_coldsight_read';
+import {
+  detonateOssuaryMark,
+  OSSUARY_MARK_ABILITY_ID,
+  regenerateSoulFragmentsOutOfCombat,
+} from './necromancy';
 import { tickPaladinOathChainPull } from './paladin_control';
 import { priestOnAuraEnded } from './priest/talents';
 import { preservesGloomtithe, vespersOnDotTick } from './priest/vespers';
@@ -79,6 +90,7 @@ const FRIENDLY_NPC_REJECTED_AURA_KINDS: ReadonlySet<AuraKind> = new Set([
   'bleed_vuln',
   'corrode',
   'faerie_fire',
+  'melting_acid',
   'spellvuln',
   'vulnerability',
   'tongues',
@@ -93,6 +105,7 @@ export function isRejectedFriendlyNpcAura(aura: Aura): boolean {
 export function updateRegen(ctx: SimContext, p: Entity, meta: PlayerMeta): void {
   if (ctx.tickCount % 40 !== 0) return; // every 2 seconds (the classic tick)
   regenerateRuinOutOfCombat(ctx, p, meta);
+  regenerateSoulFragmentsOutOfCombat(ctx, p, meta);
   // Lifesap restores whichever resource bar is currently live, including across
   // form changes. Hard control stills the sap rather than banking free resource.
   if (!isStunned(p)) {
@@ -172,7 +185,23 @@ export function updateRegen(ctx: SimContext, p: Entity, meta: PlayerMeta): void 
       });
     }
     c.remaining -= 2;
-    if (c.remaining <= 0) p[slot] = null;
+    if (c.remaining <= 0) {
+      // The meal FINISHED, which is the only moment a Well Fed buff is owed
+      // (classic: interrupted eating grants nothing, and every early exit
+      // clears the slot without reaching here). The mint itself lives in
+      // src/sim/wellfed.ts (one aura id, one mint site); it draws no rng.
+      // Clear THEN grant: the payload is held in a local and the consuming slot
+      // is nulled before the aura lands, so the meal is already over from every
+      // reader's point of view when applyAura runs. The reverse order works
+      // today only because nothing on the apply path consults isConsuming; this
+      // one stays correct if anything ever does (a buff that refuses to land on
+      // an eating character, a cancel-on-consume rule).
+      // Only the food arm of Consuming can carry a payload (FoodConsuming,
+      // src/sim/types.ts); the narrowing is the type's, not a runtime guard.
+      const wellFed = c.kind === 'food' ? c.wellFed : undefined;
+      p[slot] = null;
+      applyWellFedOnMealComplete(ctx, p, wellFed);
+    }
   }
 }
 
@@ -244,6 +273,7 @@ export function cleanseFriendlyNpcAuras(ctx: SimContext, e: Entity): void {
 }
 
 export function updateAuras(ctx: SimContext, e: Entity): void {
+  cleanupCraftedCollectionAuras(ctx, e);
   if (e.dead) {
     e.stealthed = e.auras.some((a) => a.kind === 'stealth');
     return;
@@ -351,11 +381,17 @@ export function updateAuras(ctx: SimContext, e: Entity): void {
           if (a.leechPct !== undefined) {
             const src = dotSource;
             if (src && !src.dead) {
-              const intended = Math.round(tickDamage * a.leechPct);
-              const healed = Math.min(intended, src.maxHp - src.hp);
-              if (healed > 0) {
-                src.hp += healed;
-                const overheal = intended - healed;
+              // A leech is healing the SOURCE receives, so it runs the same
+              // recipient-side pipeline as applyHeal: incoming-heal mult, then
+              // the absorb drain, then the missing-hp clamp.
+              const intended = Math.round(tickDamage * a.leechPct * ctx.healingTakenMult(src));
+              const landing = consumeHealAbsorb(ctx, src, intended);
+              const absorbed = intended - landing;
+              const healed = Math.min(landing, src.maxHp - src.hp);
+              onCraftedCollectionHeal(ctx, src, src, landing - healed);
+              if (healed > 0 || absorbed > 0) {
+                if (healed > 0) src.hp += healed;
+                const overheal = landing - healed;
                 ctx.emit({
                   type: 'heal2',
                   sourceId: src.id,
@@ -363,19 +399,33 @@ export function updateAuras(ctx: SimContext, e: Entity): void {
                   amount: healed,
                   crit: false,
                   ability: a.name,
+                  ...(absorbed > 0 ? { absorbed } : {}),
                   ...(overheal > 0 ? { overheal } : {}),
                 });
-                ctx.healingThreat(src, src, healed);
+                if (healed > 0) ctx.healingThreat(src, src, healed);
               }
             }
           }
           if (e.dead) return;
+          if (a.maxTickStacks !== undefined) {
+            const oldStacks = Math.max(1, a.stacks ?? 1);
+            const nextStacks = Math.min(a.maxTickStacks, oldStacks + 1);
+            if (nextStacks !== oldStacks) {
+              const valuePerStack = a.value / oldStacks;
+              a.stacks = nextStacks;
+              a.value = Math.max(1, Math.round(valuePerStack * nextStacks));
+            }
+          }
         } else if (a.kind === 'hot' && !tickMendingCurrent(ctx, e, a)) {
           const intended = Math.round(a.value * ctx.healingTakenMult(e));
-          const healed = Math.min(intended, e.maxHp - e.hp);
-          if (healed > 0) {
-            e.hp += healed;
-            const overheal = intended - healed;
+          const landing = consumeHealAbsorb(ctx, e, intended);
+          const absorbed = intended - landing;
+          const healed = Math.min(landing, e.maxHp - e.hp);
+          const healer = ctx.entities.get(a.sourceId);
+          if (healer) onCraftedCollectionHeal(ctx, healer, e, landing - healed);
+          if (healed > 0 || absorbed > 0) {
+            if (healed > 0) e.hp += healed;
+            const overheal = landing - healed;
             ctx.emit({
               type: 'heal2',
               sourceId: a.sourceId,
@@ -385,10 +435,11 @@ export function updateAuras(ctx: SimContext, e: Entity): void {
               ability: a.name,
               hot: true,
               abilityId: a.id,
+              ...(absorbed > 0 ? { absorbed } : {}),
               ...(overheal > 0 ? { overheal } : {}),
             });
             const src = ctx.entities.get(a.sourceId);
-            if (src) ctx.healingThreat(src, e, healed);
+            if (src && healed > 0) ctx.healingThreat(src, e, healed);
           }
         } else if (a.kind === 'buff_mana_grace' && e.resourceType === 'mana') {
           e.resource = Math.min(e.maxResource, e.resource + Math.round(a.value));
@@ -423,7 +474,12 @@ export function updateAuras(ctx: SimContext, e: Entity): void {
       if (a.id === CHEATER_MARK_AURA_ID) e.cheaterMark = undefined;
       priestOnAuraEnded(ctx, e, a);
       ctx.applyNonPlayerStatAura(e, a, -1);
-      ctx.emit({ type: 'aura', targetId: e.id, name: a.name, gained: false });
+      // Coldsight Read's three internal bookkeeping markers never emit, even
+      // via this generic path (they carry an 86400s timeout that should never
+      // fire, but a marker forced to zero must still stay silent).
+      if (!isColdsightInternalMarkerAuraId(a.id)) {
+        ctx.emit({ type: 'aura', targetId: e.id, name: a.name, gained: false });
+      }
       applyGreaterInvisibilityAftereffect(ctx, e, a);
       // A HoT that ran its FULL duration (this natural-expiry path, never a
       // dispel/overwrite) reports to the caster's talent procs. No rng.

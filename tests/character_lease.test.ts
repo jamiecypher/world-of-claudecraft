@@ -18,14 +18,17 @@ import {
   acquireCharacterLease,
   heartbeatCharacterLeases,
   LEASE_TTL_SECONDS,
+  openMailPartitionWriteGate,
   openMarketWriteGate,
   PROCESS_LEASE_HOLDER,
   releaseAllCharacterLeases,
   releaseCharacterLease,
   saveCharacterAndMarketState,
   saveCharacterState,
+  saveCharacterStateOnClient,
 } from '../server/db';
 import { REALM } from '../server/realm';
+import type { StorageAppliedEffect } from '../server/storage_purchase_db';
 import type { CharacterState, MailSave, MarketSave } from '../src/sim/sim';
 
 // The load-bearing values are pinned as bare literals below, never as the same
@@ -149,9 +152,12 @@ describe('shutdown wiring (source pin)', () => {
   it('main.ts drains queued records, then sweeps leases, then closes the pool', () => {
     // The shutdown closure in server/main.ts is not unit-drivable, so pin its
     // ordering by source. The load-bearing order is: endAllPlaySessions() (close
-    // the play-session rows), then bankLedgerIdle() (flush every queued audit row
-    // WHILE this process still holds the leases), then releaseAllCharacterLeases(),
-    // then pool.end() (both drain and sweep need a live pool). Draining BEFORE the
+    // the play-session rows), then the bank-ledger drain (flush every queued
+    // audit row WHILE this process still holds the leases, to a FINITE deadline:
+    // bankLedgerIdle takes the budget and races it internally, so a database
+    // that accepts the connection and never answers cannot hold the process past
+    // the supervisor's kill grace), then releaseAllCharacterLeases(), then
+    // pool.end() (both drain and sweep need a live pool). Draining BEFORE the
     // sweep matters: once the leases drop, a replacement process can load the same
     // character and write new bank_ledger rows, and any rows still queued here would
     // flush AFTER them with higher insertion ids, inverting the id order the offline
@@ -160,12 +166,16 @@ describe('shutdown wiring (source pin)', () => {
     // rejected by pool.end() would go missing until that character's next login
     // (the join reconcile is the only heal). Unstuck telemetry stops intake and
     // drains to its finite deadline in that window. Match the awaited CALL forms
-    // so a prose mention in a comment never shifts an index.
-    const src = readFileSync(new URL('../server/main.ts', import.meta.url), 'utf8');
+    // on COMMENT-STRIPPED source (the tunables codeOnly idiom): a prose mention
+    // must never shift an index, and a commented-out call form must not keep
+    // its position pin green.
+    const src = readFileSync(new URL('../server/main.ts', import.meta.url), 'utf8')
+      .replace(/^[ \t]*\/\*[\s\S]*?\*\/[ \t]*$/gm, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
     const saveAll = src.indexOf("await game.saveAll('shutdown')");
     const endSessions = src.indexOf('await game.endAllPlaySessions(');
     const sweep = src.indexOf('await releaseAllCharacterLeases(');
-    const ledgerDrain = src.indexOf('await bankLedgerIdle()');
+    const ledgerDrain = src.indexOf('await bankLedgerIdle(BANK_LEDGER_SHUTDOWN_DRAIN_MS)');
     const deedsDrain = src.indexOf('await deedRecordsIdle()');
     const unstuckDrain = src.indexOf('await stopUnstuckRecords(UNSTUCK_RECORD_SHUTDOWN_DRAIN_MS)');
     const poolEnd = src.indexOf('await pool.end()');
@@ -191,14 +201,29 @@ describe('shutdown wiring (source pin)', () => {
 // saveCharacterAndMarketState directly). The character UPDATE reports the given
 // rowCount; every other statement (BEGIN / SET LOCAL / world_state / COMMIT /
 // ROLLBACK) resolves harmlessly. rowCount drives the lease-fence boolean.
+// The material-source pre-image columns the save's locking read (or, on the
+// single-statement path, its own RETURNING) really answers with. This fixture's
+// character holds neither container, which is a REAL pre-image: a row that
+// answered NOTHING would be refused by the save rather than read as empty.
+const PREIMAGE_ROW = { before_bank: null, before_vault: null };
+
 function checkedOutClient(updateRowCount: number | undefined) {
-  const query = vi.fn(async (sql: string, _values?: unknown[]) =>
-    /UPDATE characters/i.test(String(sql))
-      ? ({ rows: [], rowCount: updateRowCount } as any)
-      : ({ rows: [], rowCount: 0 } as any),
-  );
+  const query = vi.fn(async (sql: string, _values?: unknown[]) => {
+    const text = String(sql);
+    // The separate D145 row lock: the character row exists, so it answers.
+    if (/FOR NO KEY UPDATE/i.test(text) && !/UPDATE characters/i.test(text)) {
+      return { rows: [PREIMAGE_ROW], rowCount: 1 } as any;
+    }
+    if (/UPDATE characters/i.test(text)) {
+      // A landed write returns its row (the CTE form RETURNs the pre-image); a
+      // fenced-out one returns none, exactly as PostgreSQL would.
+      const rows = (updateRowCount ?? 0) > 0 ? [PREIMAGE_ROW] : [];
+      return { rows, rowCount: updateRowCount } as any;
+    }
+    return { rows: [], rowCount: 0 } as any;
+  });
   const release = vi.fn();
-  return { query, release };
+  return { query, release, on: vi.fn(), removeListener: vi.fn() };
 }
 
 const STATE = {
@@ -208,7 +233,79 @@ const STATE = {
   inventory: [],
 } as unknown as CharacterState;
 const MARKET = { listings: [], collections: {} } as unknown as MarketSave;
-const MAIL = { mail: [], nextMailId: 1 } as unknown as MailSave;
+// A non-empty single-recipient partition: these tests assert BOTH escrow
+// world_state writes land (market + mail), so an empty partitions array
+// (which now issues no mail SQL at all, see save_character_and_market.test.ts)
+// would silently drop that half of the coverage.
+const MAIL_PARTITIONS: { recipientKey: string; letters: MailSave['mail'] }[] = [
+  {
+    recipientKey: 'char-42',
+    letters: [
+      {
+        id: 1,
+        recipientKey: 'char-42',
+        recipientName: 'Testchar',
+        senderName: 'System',
+        kind: 'system',
+        subject: 'Welcome',
+        body: '',
+        copper: 0,
+        items: [],
+        deliverIn: 0,
+        secondsLeft: -1,
+        read: false,
+      },
+    ],
+  },
+];
+const STORAGE_EFFECT: StorageAppliedEffect = {
+  realm: REALM,
+  accountId: 7,
+  characterId: 42,
+  itemId: 'strongbox_rung_01',
+  expectedCostClaudium: 100,
+  idempotencyKey: 'storage-effect-1',
+  spendClaimToken: '00000000-0000-4000-8000-000000000001',
+  purchasedSlotsBefore: 0,
+  purchasedSlotsAfter: 6,
+};
+
+function storageEffectClient(updateRowCount: number) {
+  const query = vi.fn(async (sql: string) => {
+    if (/SELECT id FROM accounts/i.test(sql)) return { rows: [{ id: 7 }], rowCount: 1 };
+    if (/FOR NO KEY UPDATE/i.test(sql) && !/UPDATE characters/i.test(sql)) {
+      return { rows: [PREIMAGE_ROW], rowCount: 1 };
+    }
+    if (/UPDATE characters/i.test(sql)) {
+      return { rows: updateRowCount > 0 ? [PREIMAGE_ROW] : [], rowCount: updateRowCount };
+    }
+    if (/FROM storage_purchase_applied_receipts/i.test(sql)) return { rows: [], rowCount: 0 };
+    if (/FROM storage_purchases[\s\S]*FOR UPDATE/i.test(sql)) {
+      return {
+        rows: [
+          {
+            id: 81,
+            realm: REALM,
+            account_id: 7,
+            character_id: 42,
+            item_id: 'strongbox_rung_01',
+            expected_cost_claudium: 100,
+            idempotency_key: 'storage-effect-1',
+            spend_claim_token: STORAGE_EFFECT.spendClaimToken,
+            status: 'pending',
+          },
+        ],
+        rowCount: 1,
+      };
+    }
+    if (/INSERT INTO storage_purchase_applied_receipts/i.test(sql)) {
+      return { rows: [{ source_purchase_id: 81 }], rowCount: 1 };
+    }
+    if (/DELETE FROM storage_purchases/i.test(sql)) return { rows: [], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  });
+  return { query, release: vi.fn(), on: vi.fn(), removeListener: vi.fn() };
+}
 
 describe('acquireCharacterLease fail-closed form (a NULL account_id can never be stolen)', () => {
   it('carries the same-account arm as PLAIN equality and never IS NOT DISTINCT FROM', async () => {
@@ -231,7 +328,7 @@ describe('saveCharacterState lease fence', () => {
     dbMock.connect.mockReset();
   });
 
-  it('fences the write in ONE UPDATE (holder + nonce), with no separate SELECT pre-check', async () => {
+  it('fences the write in ONE UPDATE (holder + nonce), and takes the row lock first (D145)', async () => {
     const client = checkedOutClient(1);
     dbMock.connect.mockResolvedValueOnce(client as any);
 
@@ -241,13 +338,27 @@ describe('saveCharacterState lease fence', () => {
     const stmts = client.query.mock.calls.map((c) => String(c[0]));
     const updates = stmts.filter((s) => /UPDATE characters/i.test(s));
     // Exactly one character write, and the lease check EXISTS-fences it in the SAME
-    // statement. A check-then-write pair would race a same-account takeover that
-    // steals the lease between the SELECT and the UPDATE.
+    // statement. A lease check-then-write pair would race a same-account takeover
+    // that steals the lease between the SELECT and the UPDATE.
     expect(updates).toHaveLength(1);
     expect(updates[0]).toContain('EXISTS');
     expect(updates[0]).toContain('character_leases');
-    // No standalone SELECT statement (the EXISTS subquery rides inside the UPDATE).
-    expect(stmts.some((s) => /^\s*SELECT/i.test(s))).toBe(false);
+    // The LEASE FENCE still rides the UPDATE, never a separate lease check: no
+    // standalone SELECT touches character_leases. D145
+    // (qr-19-live-nonce-fence-write-loss) DOES add one standalone statement, the
+    // characters row lock, taken FIRST so the fence's uncorrelated InitPlan is
+    // evaluated with the row already held; it is a row LOCK, not a lease check.
+    const selects = stmts.filter((s) => /^\s*SELECT/i.test(s));
+    expect(selects.every((s) => !/character_leases/i.test(s))).toBe(true);
+    const lockIdx = stmts.findIndex(
+      (s) => /FROM characters\b/i.test(s) && /FOR NO KEY UPDATE/i.test(s),
+    );
+    const updateIdx = stmts.findIndex((s) => /UPDATE characters/i.test(s));
+    expect(
+      lockIdx,
+      'the characters row lock must precede the fenced UPDATE',
+    ).toBeGreaterThanOrEqual(0);
+    expect(lockIdx).toBeLessThan(updateIdx);
     // holder + nonce are bound into that one fenced statement.
     const updateCall = client.query.mock.calls.find((c) => /UPDATE characters/i.test(String(c[0])));
     expect(updateCall?.[1]).toEqual([42, 7, expect.any(String), PROCESS_LEASE_HOLDER, 'nonce-1']);
@@ -275,25 +386,76 @@ describe('saveCharacterState lease fence', () => {
     // Legacy path returns true regardless of rowCount (unconditional write, as before).
     expect(ok).toBe(true);
     const updateCall = client.query.mock.calls.find((c) => /UPDATE characters/i.test(String(c[0])));
-    // No lease fence, and the params stop at the JSON state (no holder / nonce).
-    expect(String(updateCall?.[0])).not.toContain('EXISTS');
+    // No lease fence: the `none` fence still takes the single-statement
+    // pre-image CTE form (its RETURNING carries the two anchor EXISTS probes
+    // every save family member carries), so an EXISTS in the text no longer
+    // proves a lease fence; the absence of character_leases does.
+    expect(String(updateCall?.[0])).not.toContain('character_leases');
     expect(updateCall?.[1]).toEqual([42, 7, expect.any(String)]);
+  });
+
+  it('atomically locks account -> writes character -> archives effect -> commits', async () => {
+    const client = storageEffectClient(1);
+    dbMock.connect.mockResolvedValueOnce(client as any);
+
+    await expect(saveCharacterState(42, 7, STATE, 'nonce-1', [STORAGE_EFFECT])).resolves.toBe(true);
+    const sqls = client.query.mock.calls.map((call) => String(call[0]));
+    const at = (pattern: RegExp) => sqls.findIndex((sql) => pattern.test(sql));
+    expect(at(/SELECT id FROM accounts/)).toBeLessThan(at(/UPDATE characters/));
+    expect(at(/UPDATE characters/)).toBeLessThan(
+      at(/INSERT INTO storage_purchase_applied_receipts/),
+    );
+    expect(at(/INSERT INTO bank_ledger/)).toBeLessThan(at(/DELETE FROM storage_purchases/));
+    expect(at(/DELETE FROM storage_purchases/)).toBeLessThan(at(/^COMMIT/));
+    expect(sqls).not.toContain('ROLLBACK');
+  });
+
+  it('retains the effect transaction when the character fence misses', async () => {
+    const client = storageEffectClient(0);
+    dbMock.connect.mockResolvedValueOnce(client as any);
+
+    await expect(saveCharacterState(42, 7, STATE, 'stale', [STORAGE_EFFECT])).resolves.toBe(false);
+    const sqls = client.query.mock.calls.map((call) => String(call[0]));
+    expect(sqls.some((sql) => /SELECT id FROM accounts/.test(sql))).toBe(true);
+    expect(sqls.some((sql) => /storage_purchase_applied_receipts/.test(sql))).toBe(false);
+    expect(sqls.some((sql) => /bank_ledger/.test(sql))).toBe(false);
+    expect(sqls).toContain('ROLLBACK');
+  });
+});
+
+describe('saveCharacterStateOnClient storage effects', () => {
+  it('owns the account lock and effect write around its fenced character update', async () => {
+    const client = storageEffectClient(1);
+    await expect(
+      saveCharacterStateOnClient(client as any, 42, 7, STATE, 'nonce-1', [STORAGE_EFFECT]),
+    ).resolves.toBe(true);
+
+    const sqls = client.query.mock.calls.map((call) => String(call[0]));
+    const account = sqls.findIndex((sql) => /SELECT id FROM accounts/.test(sql));
+    const character = sqls.findIndex((sql) => /UPDATE characters/.test(sql));
+    const receipt = sqls.findIndex((sql) =>
+      /INSERT INTO storage_purchase_applied_receipts/.test(sql),
+    );
+    expect(account).toBeLessThan(character);
+    expect(character).toBeLessThan(receipt);
   });
 });
 
 describe('saveCharacterAndMarketState lease fence', () => {
   beforeEach(() => {
     dbMock.connect.mockReset();
-    // The escrow flush writes the realm-market row, so it is gated on the boot
-    // backfill; open the gate so the transaction runs.
+    // The escrow flush writes the realm-market row and, when it carries any
+    // dirty mail partition, the realm-scoped mail rows too; both are gated on
+    // their own boot backfill. Open both so the transaction runs.
     openMarketWriteGate();
+    openMailPartitionWriteGate();
   });
 
   it('the happy path writes both world_state escrows then COMMIT and resolves true', async () => {
     const client = checkedOutClient(1);
     dbMock.connect.mockResolvedValueOnce(client as any);
 
-    const ok = await saveCharacterAndMarketState(42, 7, STATE, MARKET, MAIL, 'nonce-1');
+    const ok = await saveCharacterAndMarketState(42, 7, STATE, MARKET, MAIL_PARTITIONS, 'nonce-1');
     expect(ok).toBe(true);
 
     const stmts = client.query.mock.calls.map((c) => String(c[0]));
@@ -303,11 +465,44 @@ describe('saveCharacterAndMarketState lease fence', () => {
     expect(stmts.some((s) => /ROLLBACK/.test(s))).toBe(false);
   });
 
+  it('writes storage effects after both world escrows and before COMMIT', async () => {
+    const client = storageEffectClient(1);
+    dbMock.connect.mockResolvedValueOnce(client as any);
+
+    await expect(
+      saveCharacterAndMarketState(
+        42,
+        7,
+        STATE,
+        MARKET,
+        MAIL_PARTITIONS,
+        'nonce-1',
+        undefined,
+        undefined,
+        [STORAGE_EFFECT],
+      ),
+    ).resolves.toBe(true);
+    const sqls = client.query.mock.calls.map((call) => String(call[0]));
+    const account = sqls.findIndex((sql) => /SELECT id FROM accounts/.test(sql));
+    const character = sqls.findIndex((sql) => /UPDATE characters/.test(sql));
+    const world = sqls
+      .map((sql, index) => (/world_state/.test(sql) ? index : -1))
+      .filter((i) => i >= 0);
+    const receipt = sqls.findIndex((sql) =>
+      /INSERT INTO storage_purchase_applied_receipts/.test(sql),
+    );
+    const commit = sqls.findIndex((sql) => /^COMMIT/.test(sql));
+    expect(account).toBeLessThan(character);
+    expect(world).toHaveLength(2);
+    expect(world.at(-1) ?? -1).toBeLessThan(receipt);
+    expect(receipt).toBeLessThan(commit);
+  });
+
   it('a fenced-out character UPDATE (rowCount 0) rolls back, writes neither escrow, and resolves false', async () => {
     const client = checkedOutClient(0);
     dbMock.connect.mockResolvedValueOnce(client as any);
 
-    const ok = await saveCharacterAndMarketState(42, 7, STATE, MARKET, MAIL, 'nonce-1');
+    const ok = await saveCharacterAndMarketState(42, 7, STATE, MARKET, MAIL_PARTITIONS, 'nonce-1');
     expect(ok).toBe(false);
 
     const stmts = client.query.mock.calls.map((c) => String(c[0]));
@@ -325,7 +520,14 @@ describe('saveCharacterAndMarketState lease fence', () => {
     const client = checkedOutClient(0);
     dbMock.connect.mockResolvedValueOnce(client as any);
 
-    const ok = await saveCharacterAndMarketState(42, 7, STATE, MARKET, MAIL, 'stale-nonce');
+    const ok = await saveCharacterAndMarketState(
+      42,
+      7,
+      STATE,
+      MARKET,
+      MAIL_PARTITIONS,
+      'stale-nonce',
+    );
     expect(ok).toBe(false);
 
     const charCall = client.query.mock.calls.find((c) => /UPDATE characters/i.test(String(c[0])));

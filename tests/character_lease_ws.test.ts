@@ -73,6 +73,13 @@ function makeDeps(opts: { joinResult?: any; hasSession?: boolean; acquireResult?
       resolve: (policy: unknown) => policy,
       release: vi.fn(),
     })),
+    beginChatModerationHydration: vi.fn(() => ({
+      resolve: (moderation: unknown) => moderation,
+      release: vi.fn(),
+    })),
+    // The fresh-join arm asks the action-bar store for a still-queued document
+    // before its post-lease reload; this file has nothing queued.
+    hotbarLayouts: { pending: () => null },
   };
   const deps: any = {
     game,
@@ -94,6 +101,7 @@ function makeDeps(opts: { joinResult?: any; hasSession?: boolean; acquireResult?
     acquireCharacterLease: acquireSpy,
     releaseCharacterLease: releaseSpy,
     bankBonusForAccount: bankBonusSpy,
+    characterCountForAccount: vi.fn(async () => 1),
   };
   return {
     deps,

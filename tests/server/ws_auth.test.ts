@@ -11,12 +11,13 @@ import type * as http from 'node:http';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebSocket, WebSocketServer } from 'ws';
+import { ChatModerationLiveState } from '../../server/chat_mod_live';
 import type { AccountModerationStatus, CharacterRow } from '../../server/db';
 import { GeneralChatRateLimitLiveState } from '../../server/general_chat_quota';
 import { isConnectionRefused as realIsConnectionRefused } from '../../server/ip_block';
 import { createWsAuth, type WsAuthDeps } from '../../server/ws_auth';
 import { bufferHandshakeMessages } from '../../server/ws_buffer';
-import { ONLINE_WORLD_AUTH_TYPE } from '../../src/world_api';
+import { DUNGEON_ENTRY_FACING_WIRE_VERSION, ONLINE_WORLD_AUTH_TYPE } from '../../src/world_api';
 
 // A fake socket: real EventEmitter wiring (on/once/off/emit) so the handshake
 // buffer and the post-join ws.on('message'|'close'|'error') handlers work, plus
@@ -77,6 +78,7 @@ function setup() {
   const ws = new FakeWs();
   const session = { pid: 1, tag: 'fake-session' };
   const generalChatRateLimitLiveState = new GeneralChatRateLimitLiveState();
+  const chatModerationLiveState = new ChatModerationLiveState();
   const game = {
     isIpBlocked: vi.fn((_ip: string) => false),
     countIpSessions: vi.fn((_ip: string) => 0),
@@ -90,6 +92,12 @@ function setup() {
     beginGeneralChatRateLimitHydration: vi.fn((accountId: number) =>
       generalChatRateLimitLiveState.beginHydration(accountId),
     ),
+    beginChatModerationHydration: vi.fn((accountId: number) =>
+      chatModerationLiveState.beginHydration(accountId),
+    ),
+    // The fresh-join arm asks the action-bar store for a still-queued document
+    // before its post-lease reload; this file has nothing queued.
+    hotbarLayouts: { pending: () => null },
   };
   const deps: WsAuthDeps = {
     game: game as unknown as WsAuthDeps['game'],
@@ -114,6 +122,7 @@ function setup() {
       mechChromaIds: [],
       weaponSkinIds: [],
       weaponSkinLoadout: {},
+      mountSkinIds: [],
     })),
     // Character-lease deps: the happy path holds the lease so every existing case
     // reaches game.join unchanged; the lease branches themselves are covered by
@@ -134,7 +143,7 @@ function setup() {
     maxPlayersPerRealm: 0,
   };
   const req = {} as http.IncomingMessage;
-  return { ws, game, session, deps, req, generalChatRateLimitLiveState };
+  return { ws, game, session, deps, req, generalChatRateLimitLiveState, chatModerationLiveState };
 }
 
 function joinedMeta(game: ReturnType<typeof setup>['game']): Record<string, unknown> {
@@ -244,13 +253,13 @@ describe('createWsAuth: authenticateWebSocket reject paths', () => {
     expectNoAdmissionWork(fixture);
   });
 
-  it('2c. rejects an auth-world-5 client on the auth-world-6 server before all admission work', async () => {
+  it('2c-25. rejects an auth-world-25 client before all admission work', async () => {
     const fixture = setup();
     const { ws, deps, req } = fixture;
 
     await createWsAuth(deps).authenticateWebSocket(
       asWs(ws),
-      JSON.stringify({ t: 'auth-world-5', token: 'tok', character: 7 }),
+      JSON.stringify({ t: 'auth-world-25', token: 'tok', character: 7 }),
       req,
     );
 
@@ -261,7 +270,67 @@ describe('createWsAuth: authenticateWebSocket reject paths', () => {
     expectNoAdmissionWork(fixture);
   });
 
-  it.each(['auth-world', 'auth-world-7', 'auth-world-next', 'auth-world-01', 'auth-world-1.0'])(
+  it('2c. rejects a source-unaware auth-world-26 client before all admission work', async () => {
+    const fixture = setup();
+    const { ws, deps, req } = fixture;
+
+    await createWsAuth(deps).authenticateWebSocket(
+      asWs(ws),
+      JSON.stringify({ t: 'auth-world-26', token: 'tok', character: 7 }),
+      req,
+    );
+
+    expectSendThenClose(
+      ws,
+      errorFrame('Game and server versions are incompatible. Reload or update, then try again.'),
+    );
+    expectNoAdmissionWork(fixture);
+  });
+
+  it('2c-harvest. rejects a pre-Field-Kit auth-world-27 client before all admission work', async () => {
+    const fixture = setup();
+    const { ws, deps, req } = fixture;
+
+    await createWsAuth(deps).authenticateWebSocket(
+      asWs(ws),
+      JSON.stringify({ t: 'auth-world-27', token: 'tok', character: 7 }),
+      req,
+    );
+
+    expectSendThenClose(
+      ws,
+      errorFrame('Game and server versions are incompatible. Reload or update, then try again.'),
+    );
+    expectNoAdmissionWork(fixture);
+  });
+
+  it('2c-28. rejects a prior-release auth-world-28 client (profession client without current hazards/layout) before all admission work', async () => {
+    const fixture = setup();
+    const { ws, deps, req } = fixture;
+
+    await createWsAuth(deps).authenticateWebSocket(
+      asWs(ws),
+      JSON.stringify({ t: 'auth-world-28', token: 'tok', character: 7 }),
+      req,
+    );
+
+    expectSendThenClose(
+      ws,
+      errorFrame('Game and server versions are incompatible. Reload or update, then try again.'),
+    );
+    expectNoAdmissionWork(fixture);
+  });
+
+  it.each([
+    'auth-world',
+    // one epoch AHEAD of the live discriminator, derived so a layout-version
+    // bump can never turn this row into the current epoch by accident (the
+    // hardcoded 'auth-world-21' row did exactly that when 20 became 21)
+    ONLINE_WORLD_AUTH_TYPE.replace(/\d+$/, (n) => String(Number(n) + 1)),
+    'auth-world-next',
+    'auth-world-01',
+    'auth-world-1.0',
+  ])(
     '2d. rejects the non-current world auth discriminator %s before all admission work',
     async (authType) => {
       const fixture = setup();
@@ -534,6 +603,28 @@ describe('createWsAuth: Warlock pet-special capability negotiation', () => {
     );
     expect(resume.deps.acquireCharacterLease).not.toHaveBeenCalled();
     expect(joinedMeta(resume.game)).toMatchObject({ petSpecialWireVersion: 1 });
+  });
+});
+
+describe('createWsAuth: dungeon-entry facing capability negotiation', () => {
+  it('accepts only the exact optional capability and otherwise keeps the legacy path', async () => {
+    const capable = setup();
+    await createWsAuth(capable.deps).authenticateWebSocket(
+      asWs(capable.ws),
+      authRaw({ dungeonEntryFacingWire: DUNGEON_ENTRY_FACING_WIRE_VERSION }),
+      capable.req,
+    );
+    expect(joinedMeta(capable.game)).toMatchObject({ dungeonEntryFacingWireVersion: 1 });
+
+    for (const advertised of [undefined, 2, '1', true]) {
+      const legacy = setup();
+      await createWsAuth(legacy.deps).authenticateWebSocket(
+        asWs(legacy.ws),
+        authRaw(advertised === undefined ? {} : { dungeonEntryFacingWire: advertised }),
+        legacy.req,
+      );
+      expect(joinedMeta(legacy.game)).toMatchObject({ dungeonEntryFacingWireVersion: 0 });
+    }
   });
 });
 
@@ -854,6 +945,7 @@ describe('createWsAuth: authenticateWebSocket accept path', () => {
           mechChromaIds: [],
           weaponSkinIds: [],
           weaponSkinLoadout: {},
+          mountSkinIds: [],
         },
         isAdmin: false,
         // Not staff: the snapshotted permission set is EMPTY (fail closed), never
@@ -1041,6 +1133,102 @@ describe('createWsAuth: authenticateWebSocket accept path', () => {
       expect(joinedMeta(current.game).generalChatRateLimit).toEqual(committed);
     },
   );
+
+  it.each([
+    {
+      label: 'mute',
+      hydrated: null,
+      committed: { mutedUntil: '2099-01-01T00:00:00.000Z', reason: 'spam', strikes: 4 },
+      expected: { mutedUntil: '2099-01-01T00:00:00.000Z', reason: 'spam', chatStrikes: 4 },
+    },
+    {
+      label: 'unmute',
+      hydrated: '2099-01-01T00:00:00.000Z',
+      committed: { mutedUntil: null, reason: '', strikes: 1 },
+      expected: { mutedUntil: null, reason: '', chatStrikes: 1 },
+    },
+  ])(
+    // Reproduces the RESUME race server/chat_mod_live.ts exists to close (the
+    // reported bug: a linkdead session's reconnect): a mute or committed admin
+    // unmute pushed onto this account WHILE the auth query snapshot below is
+    // still in flight must win over that now-stale snapshot. Strikes remain
+    // independently fenced.
+    'uses a committed chat-moderation $label that arrives during auth hydration on resume',
+    async ({ hydrated, committed, expected }) => {
+      const current = setup();
+      current.game.hasSessionForCharacter.mockReturnValue(true);
+      let resolveCharacter!: (character: CharacterRow | null) => void;
+      current.deps.moderationStatusForAccount = vi.fn(async () =>
+        modStatus({ chatMutedUntil: hydrated }),
+      );
+      current.deps.getCharacter = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<CharacterRow | null>((resolve) => {
+              resolveCharacter = resolve;
+            }),
+        )
+        .mockResolvedValue(baseChar());
+      const authenticating = createWsAuth(current.deps).authenticateWebSocket(
+        asWs(current.ws),
+        authRaw(),
+        current.req,
+      );
+      await vi.waitFor(() =>
+        expect(current.deps.moderationStatusForAccount).toHaveBeenCalledOnce(),
+      );
+
+      current.chatModerationLiveState.muteChanged(1, committed);
+      current.chatModerationLiveState.strikesChanged(1, committed.strikes);
+      resolveCharacter(baseChar());
+      await authenticating;
+
+      expect(joinedMeta(current.game)).toMatchObject(expected);
+    },
+  );
+
+  it('still catches a push landing after chatMuteStatusForAccount but before the synchronous join boundary', async () => {
+    // The fence must resolve AT the game.join call, not right after its own
+    // DB reads: loadAccountCosmetics (and, on other arms, adminRolesForAccount
+    // / bankBonusForAccount / the lease acquire / the character reload) all
+    // still run between those reads and the actual join, and a push landing
+    // in that later window must not be lost either.
+    const current = setup();
+    current.game.hasSessionForCharacter.mockReturnValue(true);
+    type Cosmetics = Awaited<ReturnType<typeof current.deps.loadAccountCosmetics>>;
+    let resolveCosmetics!: (cosmetics: Cosmetics) => void;
+    current.deps.loadAccountCosmetics = vi.fn(
+      () =>
+        new Promise<Cosmetics>((resolve) => {
+          resolveCosmetics = resolve;
+        }),
+    );
+    const authenticating = createWsAuth(current.deps).authenticateWebSocket(
+      asWs(current.ws),
+      authRaw(),
+      current.req,
+    );
+    await vi.waitFor(() => expect(current.deps.loadAccountCosmetics).toHaveBeenCalledOnce());
+
+    const committed = { mutedUntil: '2099-01-01T00:00:00.000Z', reason: 'late push', strikes: 3 };
+    current.chatModerationLiveState.muteChanged(1, committed);
+    current.chatModerationLiveState.strikesChanged(1, committed.strikes);
+    resolveCosmetics({
+      completedQuestIds: [],
+      mechChromaIds: [],
+      weaponSkinIds: [],
+      weaponSkinLoadout: {},
+      mountSkinIds: [],
+    });
+    await authenticating;
+
+    expect(joinedMeta(current.game)).toMatchObject({
+      mutedUntil: committed.mutedUntil,
+      reason: committed.reason,
+      chatStrikes: committed.strikes,
+    });
+  });
 
   it('falls back to the chat-level mute when the account has no mute', async () => {
     const { ws, game, deps, req } = setup();

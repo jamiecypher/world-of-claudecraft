@@ -30,10 +30,12 @@ import { marshDressingPreloadInternalsForTest } from '../src/render/delve_marsh_
 import { delvePropsPreloadInternalsForTest } from '../src/render/delve_props';
 import { doorPortalPreloadInternalsForTest } from '../src/render/door_portal';
 import { eastbrookGrandArmouryInternalsForTest } from '../src/render/eastbrook_grand_armoury';
+import { farmPatchesPreloadInternalsForTest } from '../src/render/farm_patches';
 import { fishPreloadInternalsForTest } from '../src/render/fish';
 import { galeFeaturesPreloadInternalsForTest } from '../src/render/gale_features';
 import { gardenFeaturesPreloadInternalsForTest } from '../src/render/garden_features';
 import { gatherNodePreloadInternalsForTest } from '../src/render/gather_nodes';
+import { ignivarEnvPropsInternalsForTest } from '../src/render/ignivar_env_props';
 import { mailboxPreloadInternalsForTest } from '../src/render/mailbox';
 import { propPreloadInternalsForTest } from '../src/render/props';
 import { questObjectPreloadInternalsForTest } from '../src/render/quest_objects';
@@ -72,7 +74,7 @@ const armouryFinalPipelineEnabled =
     item.src?.endsWith('eastbrook_grand_armoury-final.glb'),
   ) ?? false;
 const ARMOURY_SHIPPING_BYTE_CEILING = 160 * 1024;
-const ARMOURY_SHIPPING_SHA256 = '4424dca62a14c1f00870ec290bb0f70ad7baeb18a6152f6c938cd86289b443b4';
+const ARMOURY_SHIPPING_SHA256 = 'e384873e2cdaa1b6d40d29b653a5ec254d4dee4e7ab800d4ea4fbb265dc7df00';
 const MANIFEST_HASH_LENGTH = 12;
 
 function expectAssetExistsAndManifested(url: string): void {
@@ -503,6 +505,20 @@ describe('GLB-replacement asset preload sets resolve to real, manifested files',
     expectAssetExistsAndManifested(mailboxPreloadInternalsForTest.mailboxAssetUrl);
   });
 
+  // The farm patch set: garden beds, the compost bin, and the per-family crop
+  // stage and withered meshes. The renderer's own url list is the source here,
+  // so a family or stage added to the core without an export reds this.
+  it('farm patch assets', () => {
+    const urls = farmPatchesPreloadInternalsForTest.modelUrls;
+    // The full committed set: bed + bin + shared sprout + 3 families x
+    // (stage2, stage3, stage4, withered), plus BOTH harvest feast tables (the
+    // Phase 12 party trestle table and the Phase 18 apex pedestal banquet the
+    // three role feasts wear). A new family, stage or table moves this count
+    // deliberately, in the same change that commits its GLB.
+    expect(urls.length).toBe(17);
+    for (const url of urls) expectAssetExistsAndManifested(url);
+  });
+
   // Thornhollow Fields rune pads: all three defs are filled in now, so this
   // sweeps the real set. Existence + manifest presence is all it claims; the
   // per-file sha256 and parsed-shape contract for those three bodies lives in
@@ -678,6 +694,12 @@ describe('GLB-replacement asset preload sets resolve to real, manifested files',
   it('dungeon door arch asset', () => {
     expectAssetExistsAndManifested(doorPortalPreloadInternalsForTest.doorArchAssetUrl);
     expectAssetExistsAndManifested(doorPortalPreloadInternalsForTest.wildheartGateAssetUrl);
+  });
+
+  it('ignivar raid dressing prop assets', () => {
+    for (const url of Object.values(ignivarEnvPropsInternalsForTest.urls)) {
+      expectAssetExistsAndManifested(url);
+    }
   });
 
   it('quest object assets', () => {

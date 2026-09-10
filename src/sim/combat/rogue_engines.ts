@@ -7,10 +7,15 @@
 // `src/sim`-pure: no DOM/Three/render/ui/game/net imports, no Math.random or
 // Date.now (enforced by tests/architecture.test.ts).
 
+import {
+  ASHVEIL_4PC_VEILED_EDGE_BONUS,
+  CINDERFANG_2PC_VENOM_STAGE_REFUND,
+  setBonusFlag,
+} from '../content/ignivar_set_bonuses';
 import type { PlayerMeta } from '../sim';
 import type { SimContext } from '../sim_context';
 import type { AuraKind, Entity } from '../types';
-import { DUSK_ECONOMY_AURA_ID, DUSK_ECONOMY_LINGER_SEC } from './rogue_talents';
+import { DUSK_ECONOMY_AURA_ID } from './rogue_talents';
 
 // The veil-coupled Dusk Economy window. The discount DURING the veil comes
 // from duskCostMultiplier reading the veil aura directly; this marker covers
@@ -70,8 +75,12 @@ export const BODY_BLOW_ID = 'body_blow';
 export const KNOCKOUT_ID = 'knockout_blow';
 // Veilstrike arms one Veiled Edge: the first Lurker's Strike thrown from
 // inside the veil strikes for double (consumed at the weaponStrike case).
+// v0.42 Skulduggery pass (docs/design/class-balance-v042.md): the repeatable
+// veil-window Edge is halved, +100% -> +50%, so the class's sustained Gloam
+// loop pays less; the actual-stealth opener (rogue_stealth_opener.ts) is the
+// new stronger frontload and never stacks with this one.
 export const VEILED_EDGE_ID = 'veiled_edge';
-export const VEILED_EDGE_BONUS = 1;
+export const VEILED_EDGE_BONUS = 0.5;
 // Every second Red Ribbon banks a Gloam stage (true-stealth openers bank one
 // each; veil-window openers never do, see rogueEngineOnCast).
 const GLOAM_RHYTHM_KEY = 'rog_gloam_rhythm';
@@ -90,6 +99,35 @@ function specOf(ctx: SimContext, p: Entity): string | null {
   if (p.kind !== 'player') return null;
   const meta = ctx.players.get(p.id);
   return meta ? ctx.playerMods(meta).spec : null;
+}
+
+// The worn-set wearer flags (set_bonus_mods registers setBonusFlag(id, n) in
+// mods.selected for every met tier); bespoke bends below gate on them exactly
+// like talent option ids. Draws no rng.
+function wearsSetBonus(ctx: SimContext, p: Entity, setId: string, pieces: number): boolean {
+  if (p.kind !== 'player') return false;
+  const meta = ctx.players.get(p.id);
+  if (!meta) return false;
+  return ctx.playerMods(meta).selected[setBonusFlag(setId, pieces)] === true;
+}
+
+// Cinderfang 2pc: the per-builder energy refund rises 15 -> 20 for wearers.
+// Read at BOTH refund readers below (the Venom Dart grant and the Craven
+// Thrust grant); the Wicked Slash fallback keeps its exclusion (the
+// anti-self-funding guard) either way.
+function venomStageRefund(ctx: SimContext, p: Entity): number {
+  return wearsSetBonus(ctx, p, 'cinderfang', 2)
+    ? CINDERFANG_2PC_VENOM_STAGE_REFUND
+    : VENOM_STAGE_REFUND;
+}
+
+// Ashveil 4pc: the Veiled Edge value baked into the aura at arm time
+// (consumeVeiledEdge returns 1 + value, so 1 reads back as double, v0.42
+// Skulduggery pass). The wearer is known at the detonation; a gear swap
+// after arming keeps the armed value until the next veil (the same
+// at-grant snapshot the paladin beacon and Dawn's Wrath bakes use).
+function veiledEdgeArmValue(ctx: SimContext, p: Entity): number {
+  return wearsSetBonus(ctx, p, 'ashveil', 4) ? ASHVEIL_4PC_VEILED_EDGE_BONUS : VEILED_EDGE_BONUS;
 }
 
 function addStage(
@@ -195,7 +233,7 @@ export function rogueEngineOnCast(
         VENOM_RITUAL_STAGES,
       );
       if (p.resourceType === 'energy') {
-        p.resource = Math.min(p.maxResource, p.resource + VENOM_STAGE_REFUND);
+        p.resource = Math.min(p.maxResource, p.resource + venomStageRefund(ctx, p));
       }
       const wound = target?.auras.find((aura) => aura.id === 'venomrend' && aura.sourceId === p.id);
       if (wound) {
@@ -221,7 +259,7 @@ export function rogueEngineOnCast(
       // otherwise turn the "lost the angle" button into a near-free primary
       // builder (the Thronebane exploit, docs/design/rogue-v029-spec-engines).
       if (abilityId === 'backstab' && p.resourceType === 'energy') {
-        p.resource = Math.min(p.maxResource, p.resource + VENOM_STAGE_REFUND);
+        p.resource = Math.min(p.maxResource, p.resource + venomStageRefund(ctx, p));
       }
     }
     return;
@@ -289,7 +327,9 @@ export function rogueGloamDetonation(ctx: SimContext, p: Entity, abilityId: stri
     kind: 'veiled_edge',
     remaining: 6,
     duration: 6,
-    value: VEILED_EDGE_BONUS,
+    // Ashveil 4pc bakes 1 here (0.5 for everyone else); consumeVeiledEdge
+    // reads 1 + value back, so the doubled strike stays dynamic.
+    value: veiledEdgeArmValue(ctx, p),
     sourceId: p.id,
     school: 'shadow',
   });

@@ -73,6 +73,7 @@ await page.evaluate(() => {
     'reins_drakemaw_raptor',
     'reins_avian_strider',
     'reins_terrorspark_groundshaker',
+    'reins_lanternback_troll',
   ])
     sim.addItem(id, 1);
 });

@@ -22,6 +22,7 @@ import { queueGatheringGrant } from '../src/sim/professions/gathering';
 import { type PlayerMeta, Sim } from '../src/sim/sim';
 import { FISHING_CAST_ID, type SimEvent } from '../src/sim/types';
 import { terrainHeight } from '../src/sim/world';
+import { completeCorpseHarvest } from './helpers/complete_corpse_harvest';
 import { runCraft } from './helpers/enchant_family_cast';
 
 const PLAYTHROUGH_SEED = 4242;
@@ -260,10 +261,10 @@ describe('scripted playthrough (one sim, live sites only)', () => {
     expect(meta.deedsEarned.has('col_glimmerfin')).toBe(false);
   });
 
-  // 90s budget: the re-hunted koi session sits at index 16 in the shared
+  // 90s budget: the re-hunted koi session sits at index 9 in the shared
   // stream, and every session ticks the REAL world to its bite.
   // Raised timeout (the climb_slope idiom): this beat drives thousands of
-  // REAL world ticks (17 bite-and-reel sessions plus bounded combat waits),
+  // REAL world ticks (19 bite-and-reel sessions plus bounded combat waits),
   // which overruns the 5s default under CI/core contention; every loop is
   // guard-bounded, so a genuine hang still terminates into a failed pin.
   it('beat 11: the koi lands through the REAL bite-and-reel loop and the deed fires on the catch', {
@@ -303,10 +304,32 @@ describe('scripted playthrough (one sim, live sites only)', () => {
         sawBiteOnKoiSession = bit;
       }
     }
-    // Hunted literal (seed 4242, after every beat above), re-recorded on the
-    // release/v0.37.0 base with the castle world content: the koi bites on
-    // the very first session, index 0.
-    expect(koiSession).toBe(0);
+    // Hunted literal (seed 4242, after every beat above), re-recorded with the
+    // craft-cast system: shared-stream draws shift vs the instant-craft era.
+    // Re-hunted 2026-08 for the Eastbrook harbor move (layout v3, d19aa33f76,
+    // docs/design/eastbrook-revamp/site-plan.md): the relocated town, camps,
+    // harbor decks, and retuned terrain shift the world-gen draws and every
+    // shared-stream index downstream. Re-hunted again 2026-08 for the round 3
+    // town refinement (re-threaded roads, three decor props promoted to layout
+    // buildings, retuned terrain stamps): roads, props, and terrain are
+    // world-gen inputs, so the same shared-stream shift applies; the koi now
+    // lands on session index 9. Re-hunted once more for owner refinement
+    // rounds 6 and 6b (the boar and bandit camps traded ground, the harbour
+    // quarter and churchyard landed, the quay was regraded and re-berthed, the
+    // Collapsed Reliquary delve and its POI moved to the Mirror Lake shore, and
+    // three town NPCs were redistributed): all of those are world-gen inputs,
+    // so the shared stream forks again. Re-hunted once more for owner round 6b
+    // (Gorrak's camp and its dressing rejoined the main bandit band, the
+    // duplicate Vale Chapel graveyard retired with its spirit healer, and the
+    // market stalls and four town NPCs moved), all world-gen inputs again.
+    // Re-hunted once more for the Drakelands site swap
+    // (docs/design/drakelands-improvements/plan.md: the Last Keep's castle
+    // removed to flat land on the old Trollmoot rise, the trolls and their
+    // henge onto the old keep grounds, Wyrmwatch's dressing stripped, roads
+    // re-aimed): terrain pads, props, camps, and roads are all world-gen
+    // inputs, so the shared stream forks again; the koi now lands on
+    // session index 37.
+    expect(koiSession).toBe(37);
     expect(sawBiteOnKoiSession).toBe(true); // the celebration follows the bite moment
     expect(meta.deedsEarned.has('col_glimmerfin')).toBe(false); // grant sweeps at the tick tail
     const evs = sim.tick();
@@ -332,19 +355,45 @@ describe('scripted playthrough (one sim, live sites only)', () => {
     sim.addItem('gathering_sickle', 1, pid);
     // Hunted literals (seed 4242, after every beat above): the harvest index
     // where each flavor's 1-in-90 event fires under the shared stream.
+    // Re-hunted 2026-08 for the Copper Dig headland relocation
+    // (docs/design/eastbrook-revamp/master-plan.md), then again on the
+    // castle-wave merged base: the moved camps, veins, road, and terrain
+    // shift the world-gen draws and so every shared-stream index downstream,
+    // the same cause as the quest-dedupe re-record above.
+    // Re-hunted again 2026-08 for the Eastbrook harbor move (layout v3,
+    // d19aa33f76, docs/design/eastbrook-revamp/site-plan.md): the relocated
+    // town, camps, harbor decks, and retuned terrain shift the world-gen
+    // draws, the same cause as the dig-headland re-record. Re-hunted once more
+    // 2026-08 for the round 3 town refinement (re-threaded roads, three decor
+    // props promoted to layout buildings, retuned terrain stamps), the same
+    // cause again. Re-hunted for owner refinement rounds 6 and 6b (camps
+    // traded ground, the harbour quarter and churchyard landed, the quay was
+    // regraded and re-berthed, the delve and its POI moved to the Mirror Lake
+    // shore, three town NPCs were redistributed), the same cause once more:
+    // every index below is re-recorded in order, because each hunt's own loop
+    // length feeds the next one's stream position.
+    // Re-hunted a final time for owner round 6b's own wave: Gorrak's camp and
+    // its tents, crates and fire rejoined the main bandit band northeast, the
+    // duplicate Vale Chapel graveyard retired (one fewer spirit healer in the
+    // world), and the market stalls plus four town NPCs moved. All world-gen
+    // inputs, so the shared stream forks again and all three indices below
+    // were re-recorded ONE AT A TIME, in order, each after the one above it
+    // was already green. Re-recorded the same way for the Drakelands site
+    // swap (the keep castle out, the sites traded, Wyrmwatch stripped): the
+    // reshaped world moves every shared-stream index downstream.
     const hunts: { nodeId: string; deedId: string; itemId: string; hitAt: number }[] = [
-      { nodeId: 'ore_eastbrook_1', deedId: 'col_pristine_vein', itemId: 'copper_ore', hitAt: 338 },
+      { nodeId: 'ore_eastbrook_1', deedId: 'col_pristine_vein', itemId: 'copper_ore', hitAt: 151 },
       {
         nodeId: 'wood_eastbrook_1',
         deedId: 'col_ancient_heartwood',
         itemId: 'ironbark_log',
-        hitAt: 130,
+        hitAt: 0,
       },
       {
         nodeId: 'herb_eastbrook_1',
         deedId: 'col_moonlit_bloom',
         itemId: 'silverleaf_herb',
-        hitAt: 25,
+        hitAt: 160,
       },
     ];
     for (const hunt of hunts) {
@@ -395,19 +444,31 @@ describe('scripted playthrough (one sim, live sites only)', () => {
     mob.corpseTimer = 9999;
     mob.respawnTimer = 9999;
     sim.entities.set(mob.id, mob);
+    sim.addItem('field_kit', 1, pid);
+    // The stored preference concentrates the real cast on hide alone (the old
+    // per-call `['hide']` override no longer exists post-PR3).
+    sim.setHarvestPreference('rough_hide', pid);
     let hitAt = -1;
     for (let i = 0; i < 400 && hitAt < 0; i++) {
       mob.harvestClaimedBy = null;
+      // Reset the corpse's window each attempt: only the specimen-roll retry
+      // is under test here, never decay across hundreds of real casts.
+      mob.corpseTimer = 9999;
       purgeItem('rough_hide');
-      sim.harvestCorpse(mob.id, ['hide'], pid);
+      const result = completeCorpseHarvest(sim, mob.id, pid);
+      if (!result.started) throw new Error('corpse harvest cast refused');
       if (sim.countItem('pristine_hide', pid) > 0) hitAt = i;
     }
-    // Hunted literal (seed 4242, after every beat above), re-recorded on the
-    // release/v0.37.0 base with the castle world content: the rare-or-better
-    // rarity roll that mints the signed specimen lands on attempt index 8.
-    expect(hitAt).toBe(8);
+    // Hunted literal (seed 4242, after every beat above), measured directly
+    // against the merged tree: combining the real HARVEST_CAST_SECONDS cast
+    // (Intentional Gathering PR3) with the release's Eastbrook/Drakelands
+    // world-layout re-hunt yields 2.
+    expect(hitAt).toBe(2);
     const specimen = meta.inventory.find((s) => s.itemId === 'pristine_hide');
-    expect(specimen?.instance?.signer).toBe(meta.name);
+    // The signature rides materialSources, not instance.signer (the two are
+    // mutually exclusive; corpse_harvest_grant.test.ts / corpse_harvest_sim.test.ts
+    // pin the same shape for a signed specimen grant).
+    expect(specimen?.materialSources).toEqual([{ source: { signer: meta.name }, count: 1 }]);
     expect(meta.deedStats.visited.has('gather_event:perfect_specimen')).toBe(true);
     // Reliquary field-note trophy reuses the same gather_event:* id.
     expect(meta.reliquary.marks.has('gather_event:perfect_specimen')).toBe(true);
@@ -498,6 +559,10 @@ describe('scripted playthrough (one sim, live sites only)', () => {
     expect(meta.lastTrainResult?.ok, 'cooking train').toBe(true);
     sim.addItem('raw_stonescale_carp', 3, pid);
     sim.addItem('raw_mirror_trout', 1, pid);
+    // The rice bed the provisioning supply line (Phase 11g) added to this bill.
+    // These grants are literal, not derived from recipe.reagents, so they do
+    // not self-heal when a bill grows.
+    sim.addItem('marsh_rice', 2, pid);
     sim.addItem('goldleaf_herb', 1, pid);
     sim.addItem('cooking_salt', 1, pid);
     runCraft(sim, 'recipe_silvered_carp_supper', false, pid);

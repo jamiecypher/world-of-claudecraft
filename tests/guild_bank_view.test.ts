@@ -16,6 +16,7 @@ import {
   guildBankGoldWithdrawMax,
   guildBankSlotAction,
   guildBankSlotDormant,
+  guildBankSlotFocusKeys,
 } from '../src/ui/guild_bank_view';
 import type { GuildBankInfo } from '../src/world_api';
 
@@ -88,6 +89,19 @@ describe('buildGuildBankView', () => {
     expect(view.slots.every((s) => s.known)).toBe(true);
     expect(view.emptyCells).toBe(9);
     expect(view.empty).toBe(false);
+  });
+
+  it('keys the rim off instance-effective quality: a promoted copy reads legendary here too', () => {
+    // The all-surfaces item-cell rule (phase 13): the shared-pool grid may not
+    // strip the mark a copy wears in the bags; the plain sibling is the
+    // def-only negative.
+    const slots: InvSlot[] = [
+      { itemId: 'sword', count: 1, instance: { rolled: { quality: 'legendary' } } },
+      { itemId: 'sword', count: 1 },
+    ];
+    const view = buildGuildBankView(guildInfo({ slots, capacity: 12 }), lookup, 0);
+    if (view.kind !== 'guild') throw new Error('expected guild');
+    expect(view.slots.map((s) => s.qualityKey)).toEqual(['legendary', 'rare']);
   });
 
   it('flags each pipe dimension dormant (quest / soulbound / noMarketList / transfer lock) and never drops a slot', () => {
@@ -172,6 +186,7 @@ describe('buildGuildBankView', () => {
     const afford = buildGuildBankView(guildInfo({ treasury: price }), lookup, 0);
     if (afford.kind !== 'guild') throw new Error('expected guild');
     expect(afford.buy).toEqual({
+      purchasedSlots: 24,
       nextPrice: price,
       blockSlots: GUILD_BANK_EXPANSION_SLOTS,
       maxed: false,
@@ -208,6 +223,46 @@ describe('buildGuildBankView', () => {
     );
     if (view.kind !== 'guild') throw new Error('expected guild');
     expect(view.slots[0].instance).toBe(instance);
+  });
+});
+
+describe('guildBankSlotFocusKeys', () => {
+  const keysFor = (slots: InvSlot[]): string[] => {
+    const view = buildGuildBankView(guildInfo({ slots }), lookup, 0);
+    if (view.kind !== 'guild') throw new Error('expected guild');
+    return guildBankSlotFocusKeys(view.slots);
+  };
+
+  it('follows a semantic copy across preceding removal and unrelated reorder', () => {
+    const ada = { itemId: 'sword', count: 1, instance: { signer: 'Ada' } };
+    const bea = { itemId: 'sword', count: 1, instance: { signer: 'Bea' } };
+    const potion = { itemId: 'potion', count: 5 };
+    const original = keysFor([potion, ada, bea]);
+    const reordered = keysFor([bea, ada]);
+    expect(reordered[1]).toBe(original[1]);
+    expect(reordered[0]).toBe(original[2]);
+  });
+
+  it('invalidates an indistinguishable duplicate group when one copy disappears', () => {
+    const duplicateA = { itemId: 'potion', count: 2 };
+    const duplicateB = { itemId: 'potion', count: 7 };
+    const duplicateKeys = keysFor([duplicateA, duplicateB]);
+    const [survivorKey] = keysFor([duplicateB]);
+    expect(new Set(duplicateKeys).size).toBe(2);
+    expect(duplicateKeys).not.toContain(survivorKey);
+  });
+
+  it('uses crafted provenance and canonical instance fields as copy identity', () => {
+    const recipeA = keysFor([{ itemId: 'potion', count: 1, craftedRecipeId: 'recipe_a' }]);
+    const recipeB = keysFor([{ itemId: 'potion', count: 1, craftedRecipeId: 'recipe_b' }]);
+    expect(recipeA).not.toEqual(recipeB);
+    const ordered = keysFor([
+      { itemId: 'sword', count: 1, instance: { signer: 'Ada', rolled: { stats: { str: 2 } } } },
+    ]);
+    const reordered = keysFor([
+      { itemId: 'sword', count: 1, instance: { rolled: { stats: { str: 2 } }, signer: 'Ada' } },
+    ]);
+    expect(reordered).toEqual(ordered);
   });
 });
 
@@ -431,6 +486,25 @@ describe('the UNOPENED pane model (rung 0: purse-paid opening)', () => {
     const view = buildGuildBankView(unopened(), lookup, 0);
     if (view.kind !== 'unopened') throw new Error('expected unopened');
     expect(view.open?.price).toBe(90_000); // 9g, the rung-0 literal
+  });
+
+  it('renders the WIRE price verbatim, never a table constant', () => {
+    // 777777 is in no price table: a revert to any client-side constant
+    // fallback (the removed GUILD_BANK_RUNG_PRICES[0] read) fails this arm.
+    const view = buildGuildBankView(unopened({ nextExpansionPrice: 777_777 }), lookup, 777_777);
+    if (view.kind !== 'unopened') throw new Error('expected unopened');
+    expect(view.open?.price).toBe(777_777);
+    expect(view.open?.affordable).toBe(true);
+  });
+
+  it('a priceless snapshot (nextExpansionPrice null) renders NO open row, even for an officer', () => {
+    // Unreachable off a real sim (unopened always quotes rung 0), but the
+    // client handles it honestly: no row (the read-only shape the painter
+    // already renders), never a client-invented price.
+    const view = buildGuildBankView(unopened({ nextExpansionPrice: null }), lookup, 10_000_000);
+    if (view.kind !== 'unopened') throw new Error('expected unopened');
+    expect(view.readOnly).toBe(false);
+    expect(view.open).toBeNull();
   });
 
   it('treasury gold enablement works from day one, exactly like the opened pane', () => {

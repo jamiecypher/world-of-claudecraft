@@ -16,6 +16,10 @@ function tempHome() {
   return dir;
 }
 
+function testCandidates(homeDir) {
+  return playwrightBrowserCandidates({ env: {}, homeDir });
+}
+
 describe('browser path resolver', () => {
   it('discovers Chromium installed by Playwright in the user cache', () => {
     const home = tempHome();
@@ -30,13 +34,30 @@ describe('browser path resolver', () => {
     fs.mkdirSync(path.dirname(chrome), { recursive: true });
     fs.writeFileSync(chrome, '');
 
-    expect(playwrightBrowserCandidates({ homeDir: home })).toContain(chrome);
-    expect(findBrowserPath(playwrightBrowserCandidates({ homeDir: home }))).toBe(chrome);
+    expect(testCandidates(home)).toContain(chrome);
+    expect(findBrowserPath(testCandidates(home))).toBe(chrome);
+  });
+
+  it('discovers current Playwright chrome-linux64 layouts', () => {
+    const home = tempHome();
+    const chrome = path.join(
+      home,
+      '.cache',
+      'ms-playwright',
+      'chromium-1228',
+      'chrome-linux64',
+      'chrome',
+    );
+    fs.mkdirSync(path.dirname(chrome), { recursive: true });
+    fs.writeFileSync(chrome, '');
+
+    expect(testCandidates(home)).toContain(chrome);
+    expect(findBrowserPath(testCandidates(home))).toBe(chrome);
   });
 
   it('keeps returning null when no candidate exists', () => {
     const home = tempHome();
 
-    expect(findBrowserPath(playwrightBrowserCandidates({ homeDir: home }))).toBeNull();
+    expect(findBrowserPath(testCandidates(home))).toBeNull();
   });
 });

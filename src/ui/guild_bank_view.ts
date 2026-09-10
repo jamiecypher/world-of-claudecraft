@@ -34,11 +34,12 @@
 
 import {
   GUILD_BANK_EXPANSION_SLOTS,
-  GUILD_BANK_RUNG_PRICES,
+  GUILD_BANK_RUNG_SLOTS,
   GUILD_BANK_TREASURY_CAP,
   guildBankRungsBought,
 } from '../sim/guild_bank';
 import { isTransferLockedInstance } from '../sim/item_instance_transfer';
+import type { MaterialComposition } from '../sim/material_sources';
 import type { InvSlot, ItemInstancePayload } from '../sim/types';
 import type { GuildBankInfo } from '../world_api';
 import { bagQualityKey } from './bags_view';
@@ -84,12 +85,17 @@ export interface GuildBankSlotModel {
   known: boolean;
   count: number;
   showCount: boolean; // count > 1 (a lone item hides its "1")
-  qualityKey: string; // item quality ?? 'common' (bagQualityKey semantics)
+  qualityKey: string; // instance-effective quality ?? 'common' (bagQualityKey semantics)
   /** Pipe-refused (unwithdrawable) slot: renders visibly distinct, never hidden. */
   dormant: boolean;
   /** Per-copy payload passthrough for the tooltip's instance lines. Dormant
    *  slots arrive already projected (publicInstanceView) by the sim read. */
   instance?: ItemInstancePayload;
+  /** Plain-stack crafting provenance, part of semantic focus identity even
+   *  when no per-instance payload exists. */
+  craftedRecipeId?: string;
+  /** Per-unit material provenance carried by the guild slot snapshot. */
+  materialSources?: MaterialComposition;
 }
 
 /** The header counter: occupied slots over the total budget. */
@@ -118,6 +124,7 @@ export interface GuildBankTreasuryModel {
  *  (informational styling only: the button never gates on affordability, the
  *  family precedent; the sim refuses with its own localized line). */
 export interface GuildBankBuySlotsModel {
+  purchasedSlots: number;
   nextPrice: number | null;
   blockSlots: number;
   maxed: boolean;
@@ -129,6 +136,8 @@ export interface GuildBankBuySlotsModel {
  *  purse-paid, unlike every later rung's treasury enablement; the marker is
  *  informational styling only, the button never gates on it). */
 export interface GuildBankOpenModel {
+  purchasedSlots: number;
+  blockSlots: number;
   price: number;
   affordable: boolean;
 }
@@ -148,7 +157,10 @@ export type GuildBankViewModel =
       // Null for a read-only viewer: the open-the-bank row is an officer
       // action, and modeling its absence here (rather than a painter branch
       // on readOnly) keeps the purse out of the member pane's model entirely,
-      // so the window's refresh signature stays purse-free for them.
+      // so the window's refresh signature stays purse-free for them. Also
+      // null when the snapshot quotes no price (nextExpansionPrice null,
+      // unreachable off a real sim while unopened): the client never invents
+      // a price the server did not send.
       open: GuildBankOpenModel | null;
       readOnly: boolean;
     }
@@ -191,13 +203,26 @@ export function buildGuildBankView(
   };
   if (guildBankRungsBought(info.purchasedSlots) === 0) {
     // No rung bought yet: the bank is unopened (0 item slots). Rung 0's price
-    // rides the same nextExpansionPrice field (defensively falling back to
-    // the table literal, unreachable off a real snapshot).
-    const price = info.nextExpansionPrice ?? GUILD_BANK_RUNG_PRICES[0];
+    // rides the same nextExpansionPrice field, and the SERVER is the only
+    // price authority: a snapshot without one (unreachable off a real sim,
+    // which always quotes rung 0 while unopened) renders NO open row, the
+    // same shape a read-only viewer gets, never a client-invented price.
+    // (Guild rung prices are NOT host-tunable today: the phase 09 override
+    // covers only the personal bank and vault tables. Wire-only rendering
+    // here is guard hygiene, so a future guild retune needs no client work.)
+    const price = info.nextExpansionPrice;
     return {
       kind: 'unopened',
       treasury,
-      open: readOnly ? null : { price, affordable: Math.floor(purseCopper) >= price },
+      open:
+        readOnly || price === null
+          ? null
+          : {
+              purchasedSlots: info.purchasedSlots,
+              blockSlots: GUILD_BANK_RUNG_SLOTS[0],
+              price,
+              affordable: Math.floor(purseCopper) >= price,
+            },
       readOnly,
     };
   }
@@ -209,9 +234,11 @@ export function buildGuildBankView(
       known: item !== undefined,
       count: slot.count,
       showCount: slot.count > 1,
-      qualityKey: bagQualityKey(item ?? {}),
+      qualityKey: bagQualityKey(item ?? {}, slot.instance),
       dormant: guildBankSlotDormant(slot, item),
       instance: slot.instance,
+      craftedRecipeId: slot.craftedRecipeId,
+      ...(slot.materialSources === undefined ? {} : { materialSources: slot.materialSources }),
     };
   });
   const used = slots.length;
@@ -230,6 +257,7 @@ export function buildGuildBankView(
     buy: readOnly
       ? null
       : {
+          purchasedSlots: info.purchasedSlots,
           nextPrice: info.nextExpansionPrice,
           blockSlots: GUILD_BANK_EXPANSION_SLOTS,
           maxed: info.nextExpansionPrice === null,
@@ -238,6 +266,35 @@ export function buildGuildBankView(
     hasDormant: slots.some((s) => s.dormant),
     readOnly,
   };
+}
+
+function canonicalFocusIdentity(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(canonicalFocusIdentity).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalFocusIdentity(record[key])}`)
+    .join(',')}}`;
+}
+
+/** Stable focus identities for a rebuilt guild grid. A preceding unrelated
+ *  removal leaves the key untouched. Duplicate semantic identities include
+ *  both group size and ordinal, so adding or removing an indistinguishable
+ *  copy invalidates every key in that group and safely falls back instead of
+ *  transferring focus to a different copy. */
+export function guildBankSlotFocusKeys(slots: readonly GuildBankSlotModel[]): string[] {
+  const identities = slots.map((slot) =>
+    canonicalFocusIdentity([slot.itemId, slot.instance ?? null, slot.craftedRecipeId ?? null]),
+  );
+  const totals = new Map<string, number>();
+  for (const identity of identities) totals.set(identity, (totals.get(identity) ?? 0) + 1);
+  const ordinals = new Map<string, number>();
+  return identities.map((identity) => {
+    const ordinal = ordinals.get(identity) ?? 0;
+    ordinals.set(identity, ordinal + 1);
+    return `gbank:item:${identity}:copies:${totals.get(identity) ?? 0}:copy:${ordinal}`;
+  });
 }
 
 /** What a click on a guild bank slot does: a whole-stack withdraw, the split

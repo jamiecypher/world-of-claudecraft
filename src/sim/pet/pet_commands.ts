@@ -28,7 +28,13 @@
 // entity-iteration order and guards are unchanged. In-place Entity mutation
 // (`pet.hp = ...`, `pet.auras = pet.auras.filter(...)`, `m.threat.delete(...)`,
 // `r.meta.lastActiveTick = ...`, `delvePetStash.set/delete`) is intentional under
-// the refactor's immutability waiver.
+// the refactor's immutability waiver. ONE DELIBERATE post-extraction exception: an
+// evade check (isEvadingWildMob, mob/evade_immunity.ts) on petAttack/petTaunt/
+// petWaterJet/petSpecial now refuses a mob mid-evade outright, so the mobSwing/
+// Water Jet channel/petRangedAttack impact draws that command would otherwise arm
+// on a later tick (always voided downstream by dealDamage's own evade-immunity
+// gate) never fire. No golden re-mint: no parity scenario drives a pet command
+// against an evading mob.
 //
 // `src/sim`-pure: no DOM/Three/render/ui/game/net imports, no Math.random/Date.now
 // (enforced by tests/architecture.test.ts). data/entity/threat/types are imported
@@ -41,6 +47,8 @@ import { isTemporaryNecromancyUndead } from '../combat/necromancy';
 import { ABILITIES, DUNGEON_X_THRESHOLD, ITEMS, isDelvePos, MOBS } from '../data';
 import { createMob } from '../entity';
 import { consumeSelectedInventorySlot } from '../item_copy_ref';
+import { isEvadingWildMob } from '../mob/evade_immunity';
+import { questGateBlocksAggro } from '../mob/quest_gated_aggro';
 import type { PetState, PlayerMeta } from '../sim';
 import type { SimContext } from '../sim_context';
 import { addThreat, clearThreat } from '../threat';
@@ -299,7 +307,14 @@ export function syncPetLevel(ctx: SimContext, owner: Entity): void {
   applyPetOwnerScaling(ctx, pet);
 }
 
-function cleanPetName(raw: string): string | null {
+/** The pet-name SHAPE (trim, collapse inner whitespace, 2 to 16 letters,
+ *  spaces, hyphens, apostrophes, leading letter), the sim's one authority.
+ *  Exported for the online server's content screen (the phase 13 QA hot-path
+ *  review): the obscenity matcher prices THIS normalized value, never the raw
+ *  wire token, which could be a whole 16 KiB frame (three milliseconds per
+ *  screen) and could hide a slur behind a run of whitespace that this very
+ *  normalization collapses away. Pure, draw-free, host-agnostic. */
+export function cleanPetName(raw: string): string | null {
   const name = raw.trim().replace(/\s+/g, ' ');
   return PET_NAME_RE.test(name) ? name : null;
 }
@@ -308,6 +323,7 @@ export function tameError(ctx: SimContext, p: Entity, target: Entity): string | 
   if (target.kind !== 'mob' || !target.hostile) return 'You cannot tame that.';
   const template = MOBS[target.templateId];
   if (!template || !isTameableFamily(template.family)) return 'Only beasts can be tamed.';
+  if (template.untameable) return 'That beast is too strong to tame.';
   if (template.elite || template.boss || template.rare) return 'That beast is too strong to tame.';
   if (target.level > p.level) return 'That beast is too high level for you to tame.';
   if (target.spawnPos.x > DUNGEON_X_THRESHOLD) return 'You cannot tame dungeon creatures.';
@@ -426,7 +442,7 @@ export function createDemonPet(
   pet.ownerId = owner.id;
   pet.petMode = 'defensive';
   pet.petTauntTimer = 0;
-  // A melee_tank demon (Gloomshade) is built to hold threat, so it comes up with
+  // A melee_tank demon (Duskmurk) is built to hold threat, so it comes up with
   // auto-taunt already on for a solo owner; every other demon keeps the old opt-in
   // default. petCanForceTaunt is the shared taunt-eligibility gate (pet_taunt_gate.ts)
   // so a future tank demon that can't taunt doesn't default on. In a party/raid,
@@ -635,11 +651,15 @@ export function petAttack(ctx: SimContext, pid?: number): void {
     return;
   }
   const target = r.e.targetId !== null ? ctx.entities.get(r.e.targetId) : null;
-  if (!target || target.dead || !ctx.isHostileTo(pets[0], target)) {
+  if (!target || target.dead || isEvadingWildMob(target) || !ctx.isHostileTo(pets[0], target)) {
     ctx.error(r.e.id, 'Your pet needs a hostile target.');
     return;
   }
+  if (questGateBlocksAggro(ctx.players, target, pets[0])) return;
   for (const pet of pets) {
+    if (target.kind === 'mob' && target.hostile && questGateBlocksAggro(ctx.players, target, pet)) {
+      continue;
+    }
     pet.aggroTargetId = target.id;
     pet.inCombat = true;
     if (target.kind === 'mob' && target.hostile) addThreat(target, pet.id, 1);
@@ -671,10 +691,17 @@ export function petTaunt(ctx: SimContext, pid?: number): void {
       : r.e.targetId !== null
         ? (ctx.entities.get(r.e.targetId) ?? null)
         : null;
-  if (target?.kind !== 'mob' || target.dead || !target.hostile || target.ownerId !== null) {
+  if (
+    target?.kind !== 'mob' ||
+    target.dead ||
+    !target.hostile ||
+    target.ownerId !== null ||
+    isEvadingWildMob(target)
+  ) {
     ctx.error(r.e.id, 'Your pet needs a hostile target.');
     return;
   }
+  if (questGateBlocksAggro(ctx.players, target, pet)) return;
   pet.aggroTargetId = target.id;
   pet.inCombat = true;
   addThreat(target, pet.id, 1);
@@ -682,7 +709,7 @@ export function petTaunt(ctx: SimContext, pid?: number): void {
     pet.petManualTauntPending = true;
     return;
   }
-  ctx.applyTaunt(pet, target);
+  if (!ctx.applyTaunt(pet, target)) return;
   pet.petManualTauntPending = false;
   pet.petTauntTimer = PET_GROWL_INTERVAL;
 }
@@ -695,7 +722,8 @@ export function petWaterJet(ctx: SimContext, pid?: number): void {
   const jet = pet ? MOBS[pet.templateId]?.petRanged?.jet : undefined;
   if (!pet || !jet || pet.dead || pet.castingAbility || pet.petTauntTimer > 0) return;
   const target = r.e.targetId !== null ? ctx.entities.get(r.e.targetId) : null;
-  if (!target || target.dead || !ctx.isHostileTo(pet, target)) return;
+  if (!target || target.dead || isEvadingWildMob(target) || !ctx.isHostileTo(pet, target)) return;
+  if (questGateBlocksAggro(ctx.players, target, pet)) return;
   const range = MOBS[pet.templateId]?.petRanged?.range ?? 0;
   if (dist2d(pet.pos, target.pos) > range) return;
   pet.aggroTargetId = target.id;
@@ -703,7 +731,7 @@ export function petWaterJet(ctx: SimContext, pid?: number): void {
   startWaterJet(ctx, pet, target, jet);
 }
 
-/** Manual pet-bar cast for a template-authored signature ability. Gloomshade
+/** Manual pet-bar cast for a template-authored signature ability. Duskmurk
  *  pulls with Abyssal Chain; Emberkin launches an extra Felbolt. */
 export function petSpecial(ctx: SimContext, pid?: number): void {
   const r = ctx.resolve(pid);
@@ -724,10 +752,11 @@ export function petSpecial(ctx: SimContext, pid?: number): void {
   if (ctx.isStunned(pet)) return;
   if (!templateHasPetSpecial(pet.templateId) || (pet.petSkillTimer ?? 0) > 0) return;
   const target = r.e.targetId !== null ? ctx.entities.get(r.e.targetId) : null;
-  if (!target || target.dead || !ctx.isHostileTo(pet, target)) {
+  if (!target || target.dead || isEvadingWildMob(target) || !ctx.isHostileTo(pet, target)) {
     ctx.error(r.e.id, 'Your pet needs a hostile target.');
     return;
   }
+  if (questGateBlocksAggro(ctx.players, target, pet)) return;
   if (!useWarlockPetSkill(ctx, pet, target, petRangedAttack)) return;
   pet.aggroTargetId = target.id;
   pet.inCombat = true;

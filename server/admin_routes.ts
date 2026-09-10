@@ -28,6 +28,9 @@ export const ADMIN_ROUTE_PERMISSIONS: readonly AdminRouteRule[] = [
   { method: 'GET', pattern: '/admin/api/online', permission: 'accounts.read' },
   { method: 'GET', pattern: '/admin/api/online-history', permission: 'analytics.read' },
   { method: 'GET', pattern: '/admin/api/activity', permission: 'analytics.read' },
+  // Live market listing aggregates: realm-wide, zero per-account data, so it
+  // rides analytics.read like the other dashboards.
+  { method: 'GET', pattern: '/admin/api/market/metrics', permission: 'analytics.read' },
   { method: 'GET', pattern: '/admin/api/perf/summary', permission: 'analytics.read' },
   { method: 'GET', pattern: '/admin/api/perf/raw', permission: 'analytics.read' },
   // Server tick-loop profiling capture: ops-sensitive, admin/superadmin only.
@@ -50,6 +53,14 @@ export const ADMIN_ROUTE_PERMISSIONS: readonly AdminRouteRule[] = [
     method: 'POST',
     pattern: /^\/admin\/api\/moderation\/characters\/(\d+)\/restore-slot$/,
     permission: 'moderation.act',
+  },
+  // The phase 13 legendary-name strip: it DESTROYS a player-authored name
+  // with no in-game undo, so like the guild bank purge below it carries its
+  // OWN superadmin-only permission, never moderation.act.
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/moderation\/characters\/(\d+)\/clear-item-name$/,
+    permission: 'moderation.clearItemName',
   },
   { method: 'GET', pattern: '/admin/api/guilds', permission: 'accounts.read' },
   { method: 'GET', pattern: /^\/admin\/api\/guilds\/(\d+)$/, permission: 'accounts.read' },
@@ -83,6 +94,33 @@ export const ADMIN_ROUTE_PERMISSIONS: readonly AdminRouteRule[] = [
 
   { method: 'GET', pattern: '/admin/api/accounts', permission: 'accounts.read' },
   { method: 'GET', pattern: /^\/admin\/api\/accounts\/(\d+)$/, permission: 'accounts.read' },
+  // Economy oversight (p2p market launch). Wealth reads ride accounts.read
+  // (the account list and detail already expose per-character copper to the
+  // same permission); the suspicion-flag workflow is moderation data, so its
+  // reads sit with the moderation queue and its writes with the other audited
+  // moderation actions.
+  { method: 'GET', pattern: '/admin/api/wealth/top', permission: 'accounts.read' },
+  {
+    method: 'GET',
+    pattern: /^\/admin\/api\/accounts\/(\d+)\/wealth$/,
+    permission: 'accounts.read',
+  },
+  {
+    method: 'GET',
+    pattern: /^\/admin\/api\/accounts\/(\d+)\/flags$/,
+    permission: 'moderation.read',
+  },
+  { method: 'GET', pattern: '/admin/api/flags', permission: 'moderation.read' },
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/flags\/(\d+)\/status$/,
+    permission: 'moderation.act',
+  },
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/flags\/(\d+)\/note$/,
+    permission: 'moderation.act',
+  },
   {
     method: 'GET',
     pattern: /^\/admin\/api\/accounts\/(\d+)\/daily-rewards-events$/,
@@ -99,6 +137,24 @@ export const ADMIN_ROUTE_PERMISSIONS: readonly AdminRouteRule[] = [
     permission: 'moderation.act',
   },
   { method: 'GET', pattern: '/admin/api/shared-ips', permission: 'moderation.read' },
+
+  // $WOC Exchange moderation (server/woc_market_routes.ts operator arms).
+  { method: 'GET', pattern: '/admin/api/woc-market/listings', permission: 'moderation.read' },
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/woc-market\/listings\/(\d+)\/suspend$/,
+    permission: 'moderation.act',
+  },
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/woc-market\/sales\/(\d+)\/excluded$/,
+    permission: 'moderation.act',
+  },
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/woc-market\/accounts\/(\d+)\/clear-strikes$/,
+    permission: 'moderation.act',
+  },
   { method: 'GET', pattern: '/admin/api/ip-associations', permission: 'accounts.read' },
 
   { method: 'GET', pattern: '/admin/api/moderation/queue', permission: 'moderation.read' },
@@ -176,6 +232,15 @@ export const ADMIN_ROUTE_PERMISSIONS: readonly AdminRouteRule[] = [
     pattern: /^\/admin\/api\/moderation\/accounts\/(\d+)\/lift-cheater-mark$/,
     permission: 'moderation.act',
   },
+  // The admin-panel kick (server/admin_kick_api.ts): the dashboard twin of the
+  // in-game /kick, which the moderation service already gates on moderation.act
+  // (requiredCommandPermission), so the row states the same rule. Registry-only
+  // like the Cheater mark pair above, hence listed here by hand.
+  {
+    method: 'POST',
+    pattern: /^\/admin\/api\/moderation\/accounts\/(\d+)\/kick$/,
+    permission: 'moderation.act',
+  },
   {
     method: 'POST',
     pattern: /^\/admin\/api\/moderation\/accounts\/(\d+)\/daily-rewards-(ban|unban)$/,
@@ -244,6 +309,17 @@ export const ADMIN_ROUTE_PERMISSIONS: readonly AdminRouteRule[] = [
   {
     method: 'POST',
     pattern: /^\/admin\/api\/user-assets\/(\d+)\/(block|unblock)$/,
+    permission: 'content.moderate',
+  },
+
+  // The Realm Builder of the Month roll (server/realm_builder.ts). Same grant
+  // as the other public-content surfaces above: this decides what the realm
+  // shows the world, on a monument every player walks past.
+  { method: 'GET', pattern: '/admin/api/realm-builders', permission: 'content.moderate' },
+  { method: 'POST', pattern: '/admin/api/realm-builders', permission: 'content.moderate' },
+  {
+    method: 'POST',
+    pattern: '/admin/api/realm-builders/delete',
     permission: 'content.moderate',
   },
 ];

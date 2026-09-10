@@ -19,6 +19,7 @@ import {
   onDelveClearForDeeds,
   onDungeonFinalBossKilledForDeeds,
   onFishCaughtForDeeds,
+  POI_VISIT_RADIUS,
   restoreDeedStats,
   updateDeeds,
 } from '../src/sim/deeds';
@@ -30,6 +31,7 @@ import { turnInQuestCore } from '../src/sim/quests/quest_commands';
 import { type ArenaMatch, type CharacterState, Sim } from '../src/sim/sim';
 import * as duelMod from '../src/sim/social/duel';
 import { type Entity, MAX_LEVEL, MILESTONES, type SimEvent } from '../src/sim/types';
+import { completeCorpseHarvest } from './helpers/complete_corpse_harvest';
 import { runSalvage } from './helpers/enchant_family_cast';
 import { VENDOR_TEST_WORLD } from './sim_shared';
 
@@ -47,6 +49,18 @@ function deedEvents(evs: SimEvent[]): Extract<SimEvent, { type: 'deedUnlocked' }
   return evs.filter((ev): ev is Extract<SimEvent, { type: 'deedUnlocked' }> => {
     return ev.type === 'deedUnlocked';
   });
+}
+
+function stageFallLanding(e: Entity, drop: number): void {
+  const supportY = e.pos.y;
+  e.pos.y = supportY + 0.01;
+  e.prevPos = { ...e.pos };
+  e.fallStartY = supportY + drop;
+  e.onGround = false;
+  e.jumping = false;
+  e.vx = 0;
+  e.vy = 0;
+  e.vz = 0;
 }
 
 // Seat a live 2v2 Fiesta bout (four solo-queuers, countdown run out) so the
@@ -1149,14 +1163,38 @@ describe('persistence', () => {
 
   it('every visited mark a live sim writes stays inside the authored namespaces', () => {
     const sim = makeSim();
-    const { meta } = primary(sim);
+    const { meta, e } = primary(sim);
+    const poi = ZONES.find((z) => z.id === 'eastbrook_vale')!.pois.find(
+      (p) => p.id === 'eastbrook',
+    )!;
+    e.pos.x = poi.x;
+    e.pos.z = poi.z;
+    e.prevPos = { ...e.pos };
     for (let i = 0; i < 25; i++) sim.tick(); // let the 1 Hz proximity sweep run
+    // A sweep-scoped allowlist: parked on a POI for 25 ticks with no action
+    // taken, the only writer that runs is the 1 Hz sweepProximityMarks, which
+    // mints poi: and witness: marks, so those two namespaces are all this arm
+    // can observe. The other names cover deeds.ts's own event-driven marks
+    // (fish, npc, slain, quality, fiesta, plus the farm and farm_crop
+    // namespaces: professions/farming.ts mints farm:planted inline at plant
+    // success, and its harvest arm calls onCropHarvestedForDeeds, which mints
+    // farm:<zone> and farm_crop:<crop>) plus the gather, gather_event and
+    // dungeon marks other modules route through ctx.markVisited; the crafting
+    // marks (masterwork, whose authored masterwork:first mark is written
+    // ungated as a RELIQUARY_PROFESSION_MARKS constant while only the derived
+    // masterwork:<craftId> marks are gated by isCataloguedRelicMark;
+    // craft_rare, apex_feast) are not listed and not reachable here. A mark
+    // outside the list fails whichever writer minted it, but only the sweep's
+    // two namespaces are exercised by this scenario.
     for (const mark of meta.deedStats.visited) {
       expect(mark).toMatch(
-        /^(poi|gather|gather_event|fish|npc|slain|quality|fiesta|dungeon|witness):/,
+        /^(poi|gather|gather_event|fish|npc|slain|quality|fiesta|dungeon|witness|farm|farm_crop):/,
       );
     }
-    // The spawn-square sweep marked the hub POI (bounded, authored input).
+    // Parked on the hub POI (the harbor-town spawn quay sits outside every POI
+    // radius), the sweep marked it (bounded, authored input). Re-pinned 2026-08
+    // for the Eastbrook harbor move (d19aa33f76,
+    // docs/design/eastbrook-revamp/site-plan.md).
     expect(meta.deedStats.visited.has('poi:eastbrook_vale:eastbrook')).toBe(true);
   });
 });
@@ -1541,8 +1579,13 @@ describe('bounded sets on load', () => {
     // serialized fine but were dropped on load while the namespace was missing
     // from VISITED_MARK_NAMESPACES, so a mid-hunt save silently lost rare-event
     // deed progress. The mark must survive the round trip.
+    // 'toString' and 'constructor' give the Object.hasOwn arm its teeth: under
+    // the old `if (ITEMS[id])` truthiness check both index an INHERITED function
+    // off Object.prototype and would be restored into the persisted discovery
+    // ledger as real items; hasOwn drops them. 'not_a_real_item' alone cannot
+    // distinguish the two checks (undefined is falsy under both).
     const stats = restoreDeedStats({
-      itemsDiscovered: ['glimmerfin_koi', 'not_a_real_item'],
+      itemsDiscovered: ['glimmerfin_koi', 'not_a_real_item', 'toString', 'constructor'],
       visited: [
         'poi:eastbrook_vale:eastbrook',
         'gather_event:perfect_specimen',
@@ -1566,6 +1609,50 @@ describe('bounded sets on load', () => {
 });
 
 describe('site wiring (real modules, not direct bumps)', () => {
+  it('does not award Gravity Always Wins when an already-dead ghost lands', () => {
+    const sim = makeSim();
+    const { meta, e } = primary(sim);
+    e.dead = true;
+    e.hp = 0;
+    sim.releaseSpirit();
+    expect(e.dead).toBe(true);
+    expect(e.ghost).toBe(true);
+
+    stageFallLanding(e, 30);
+    const evs = sim.tick();
+
+    expect(e.onGround).toBe(true);
+    expect(meta.deedsEarned.has('hid_fall_death')).toBe(false);
+    expect(deedEvents(evs).filter((ev) => ev.deedId === 'hid_fall_death')).toHaveLength(0);
+  });
+
+  it('awards Gravity Always Wins when a fall transitions a living player to dead', () => {
+    const sim = makeSim();
+    const { meta, e } = primary(sim);
+    e.hp = 1;
+
+    stageFallLanding(e, 30);
+    const evs = sim.tick();
+
+    expect(e.dead).toBe(true);
+    expect(meta.deedsEarned.has('hid_fall_death')).toBe(true);
+    expect(deedEvents(evs).filter((ev) => ev.deedId === 'hid_fall_death')).toHaveLength(1);
+  });
+
+  it('does not award Gravity Always Wins for a damaging nonlethal fall', () => {
+    const sim = makeSim();
+    const { meta, e } = primary(sim);
+    const hpBefore = e.hp;
+
+    stageFallLanding(e, 13);
+    const evs = sim.tick();
+
+    expect(e.hp).toBeLessThan(hpBefore);
+    expect(e.dead).toBe(false);
+    expect(meta.deedsEarned.has('hid_fall_death')).toBe(false);
+    expect(deedEvents(evs).filter((ev) => ev.deedId === 'hid_fall_death')).toHaveLength(0);
+  });
+
   it('a decided duel bumps duelsWon and duelsLost through endDuel', () => {
     const sim = makeSim();
     const a = sim.playerId;
@@ -2449,6 +2536,81 @@ describe('exploration poi identity (marks key on the stable id, not the label)',
   });
 });
 
+describe('POI_VISIT_RADIUS: no two marks a single-zone wayfarer deed needs can overlap', () => {
+  it('every zone a single-zone all-poi visits deed draws from keeps its tightest poi gap over double the radius', () => {
+    // A cross-zone deed (exp_long_road_north) can never have two of its own
+    // marks satisfied from one spot: a player occupies exactly one zone at a
+    // time, and the sweep only matches pois in the zone they are currently in
+    // (src/sim/deeds.ts sweepProximityMarks). Only a SINGLE-zone all-poi deed
+    // is at risk, so that is the only shape this derives zones from.
+    const singleZoneWayfarerZoneIds = new Set<string>();
+    for (const def of Object.values(DEEDS)) {
+      if (def.trigger.kind !== 'visits') continue;
+      const marks = def.trigger.markIds;
+      if (marks.length < 2 || !marks.every((m) => m.startsWith('poi:'))) continue;
+      const zoneIds = new Set(marks.map((m) => m.split(':')[1]));
+      if (zoneIds.size === 1) for (const zoneId of zoneIds) singleZoneWayfarerZoneIds.add(zoneId);
+    }
+    // Non-vacuity: today this is eastbrook_vale/mirefen_marsh/thornpeak_heights
+    // (Wayfarer of the Vale/Marsh/Heights). A future content change that
+    // retires the last one would silently empty this loop.
+    expect([...singleZoneWayfarerZoneIds].sort()).toEqual([
+      'eastbrook_vale',
+      'mirefen_marsh',
+      'thornpeak_heights',
+    ]);
+    // One authored exception: the New Eastbrook program built the town on the
+    // demolished Sowfield parcel (docs/design/eastbrook-revamp/master-plan.md),
+    // and the frozen the_sowfield mark is deliberately earned by visiting the
+    // town that replaced it (src/sim/content/zone1.ts keeps the hidden POI row
+    // so the append-only deeds catalog never strands the trigger). That one
+    // pair may overlap; every other pair keeps the distinct-visit guarantee.
+    const deliberateOverlaps = new Set(['eastbrook_vale:eastbrook|the_sowfield']);
+    for (const zoneId of singleZoneWayfarerZoneIds) {
+      const zone = ZONES.find((z) => z.id === zoneId)!;
+      const pois = zone.pois.filter((p) => p.id !== undefined);
+      let tightest = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < pois.length; i++) {
+        for (let j = i + 1; j < pois.length; j++) {
+          const pairKey = `${zoneId}:${[pois[i].id, pois[j].id].sort().join('|')}`;
+          if (deliberateOverlaps.has(pairKey)) continue;
+          const d = Math.hypot(pois[i].x - pois[j].x, pois[i].z - pois[j].z);
+          if (d < tightest) tightest = d;
+        }
+      }
+      // Strictly over double the radius: standing exactly at the midpoint of
+      // the tightest pair must still leave both marks outside catch range.
+      expect(tightest, `${zoneId} tightest poi gap vs 2x POI_VISIT_RADIUS`).toBeGreaterThan(
+        2 * POI_VISIT_RADIUS,
+      );
+    }
+  });
+
+  it('the actual behavior delta: grants inside the new 24yd band, still refuses just past it', () => {
+    const zone = ZONES.find((z) => z.id === 'thornpeak_heights')!;
+    const poi = zone.pois.find((p) => p.id === 'highwatch')!;
+    const markId = `poi:${zone.id}:${poi.id}`;
+
+    const inside = makeSim();
+    const { meta: metaInside, e: eInside } = primary(inside);
+    eInside.pos.x = poi.x + 22; // between the old 20yd radius and the new 24yd one
+    eInside.pos.z = poi.z;
+    eInside.prevPos = { ...eInside.pos };
+    inside.tickCount = 20;
+    updateDeeds(inside.ctx);
+    expect(metaInside.deedStats.visited.has(markId)).toBe(true);
+
+    const outside = makeSim();
+    const { meta: metaOutside, e: eOutside } = primary(outside);
+    eOutside.pos.x = poi.x + 26; // just past the new radius too
+    eOutside.pos.z = poi.z;
+    eOutside.prevPos = { ...eOutside.pos };
+    outside.tickCount = 20;
+    updateDeeds(outside.ctx);
+    expect(metaOutside.deedStats.visited.has(markId)).toBe(false);
+  });
+});
+
 describe('trade completion counts only non-empty trades (soc_first_trade)', () => {
   it('an empty double-confirm does not count; a one-item trade unlocks it for both', () => {
     const sim = makeSim();
@@ -2667,6 +2829,101 @@ describe('profession deed families (threshold-exact, live sites)', () => {
     expect(meta.renown).toBe(renownBefore);
   });
 
+  it('farming celebration marks: each mark grants exactly its own deed', () => {
+    // Catalog-side grant proof for the D13 farming deeds: the sim-side mark
+    // PRODUCERS (plant success and surviving harvest in
+    // professions/farming.ts) land in a parallel slice, so these arms drive
+    // the marks directly through the same markVisited path the producers
+    // call, the rare-find idiom above.
+    const sim = makeSim();
+    const { meta } = primary(sim);
+    const renownBefore = meta.renown;
+    const marks: [string, string][] = [
+      ['farm:planted', 'prog_first_planting'],
+      ['farm:eastbrook_vale', 'chr_vale_first_harvest'],
+      ['farm:mirefen_marsh', 'chr_marsh_first_harvest'],
+      ['farm:thornpeak_heights', 'chr_peaks_first_harvest'],
+      ['farm:evergarden', 'chr_evergarden_first_harvest'],
+      ['gather_event:golden_harvest', 'col_golden_harvest'],
+    ];
+    for (const [mark, deedId] of marks) {
+      const others = marks.filter(([, d]) => d !== deedId).map(([, d]) => d);
+      const earnedOthersBefore = others.filter((d) => meta.deedsEarned.has(d));
+      sim.ctx.markVisited(meta, mark);
+      sim.tick();
+      expect(meta.deedsEarned.has(deedId), deedId).toBe(true);
+      // Cross-mark fidelity: this mark granted ONLY its own deed.
+      const earnedOthersAfter = others.filter((d) => meta.deedsEarned.has(d));
+      expect(earnedOthersAfter).toEqual(earnedOthersBefore);
+    }
+    // Five renown-5 grants plus the renown-0 golden harvest.
+    expect(meta.renown - renownBefore).toBe(25);
+  });
+
+  it('farming ladder: 99/100 binds exactly, through the live grant drain', () => {
+    const sim = makeSim();
+    const { meta } = primary(sim);
+    meta.gatheringProficiency.farming = 99;
+    sim.ctx.markDeedsDirty(meta.entityId);
+    sim.tick();
+    expect(meta.deedsEarned.has('prog_farming_100')).toBe(false);
+    // The +1 crossing rides the REAL queued-grant drain (drainGatheringGrants
+    // marks the deed sweep itself; no explicit dirty call here).
+    queueGatheringGrant(meta, 'farming', 1);
+    sim.tick();
+    expect(meta.gatheringProficiency.farming).toBe(100);
+    expect(meta.deedsEarned.has('prog_farming_100')).toBe(true);
+    // A farming climb never credits another profession's milestone.
+    expect(meta.deedsEarned.has('prog_mining_100')).toBe(false);
+    // The earned Harvestmaster title is selectable through the one validator
+    // both worlds use.
+    sim.setActiveTitle('prog_farming_100', meta.entityId);
+    expect(meta.activeTitle).toBe('prog_farming_100');
+  });
+
+  it('the seven farming deeds sit in the Book completion set and pay exactly 35 Renown', () => {
+    const NEW_IDS = [
+      'prog_first_planting',
+      'chr_vale_first_harvest',
+      'chr_marsh_first_harvest',
+      'chr_peaks_first_harvest',
+      'chr_evergarden_first_harvest',
+      'col_golden_harvest',
+      'prog_farming_100',
+    ];
+    // All seven are non-feat, non-hidden, so feat_book_complete's meta list
+    // (BOOK_COMPLETE_REQUIREMENTS, derived from the table) must carry them.
+    const bookIds = (DEEDS.feat_book_complete.trigger as { deedIds: string[] }).deedIds;
+    for (const id of NEW_IDS) expect(bookIds, id).toContain(id);
+    // Earning the whole block moves Renown by exactly 35 (5 for the planting
+    // proof, 5 per chronicle, 0 for the luck find, 10 for the milestone).
+    const sim = makeSim();
+    const { meta } = primary(sim);
+    // Warm up the collateral any-profession milestone first: a nonzero
+    // farming proficiency satisfies prog_first_harvest (any trade, amount 1),
+    // which is rig collateral, not part of the D13 block's 35.
+    meta.gatheringProficiency.farming = 1;
+    sim.ctx.markDeedsDirty(meta.entityId);
+    sim.tick();
+    expect(meta.deedsEarned.has('prog_first_harvest')).toBe(true);
+    const renownBefore = meta.renown;
+    for (const mark of [
+      'farm:planted',
+      'farm:eastbrook_vale',
+      'farm:mirefen_marsh',
+      'farm:thornpeak_heights',
+      'farm:evergarden',
+      'gather_event:golden_harvest',
+    ]) {
+      markVisited(sim.ctx, meta, mark);
+    }
+    meta.gatheringProficiency.farming = 100;
+    sim.ctx.markDeedsDirty(meta.entityId);
+    sim.tick();
+    for (const id of NEW_IDS) expect(meta.deedsEarned.has(id), id).toBe(true);
+    expect(meta.renown - renownBefore).toBe(35);
+  });
+
   it('a bag-truncated specimen jackpot grants NO mark and no deed (the find got away)', () => {
     // The interaction.ts hook fires on the LANDED addItemInstance arm only;
     // with every bag slot full the signed jackpot cannot land, the harvest
@@ -2675,6 +2932,12 @@ describe('profession deed families (threshold-exact, live sites)', () => {
     const sim = makeSim();
     const { meta, e: player } = primary(sim);
     const pid = meta.entityId;
+    // A Field Kit before the bags fill, so the retry loop below tests the
+    // specimen truncation it targets, never a missing-kit refusal.
+    sim.addItem('field_kit', 1, pid);
+    // The stored preference concentrates the real cast on hide alone (the old
+    // per-call `['hide']` override no longer exists post-PR3).
+    sim.setHarvestPreference('rough_hide', pid);
     // Occupy every slot BUT keep stack room in a rough_hide stack: the plain
     // grant then lands by top-up (the harvest pre-gate passes) while the
     // SIGNED specimen needs a fresh slot and cannot (an instance never merges
@@ -2695,14 +2958,17 @@ describe('profession deed families (threshold-exact, live sites)', () => {
     let truncatedFindAt = -1;
     for (let i = 0; i < 400 && truncatedFindAt < 0; i++) {
       mob.harvestClaimedBy = null;
+      // Reset the corpse's window each attempt: only the specimen-roll retry
+      // is under test here, never decay across hundreds of real casts.
+      mob.corpseTimer = 9999;
       // Drain the top-up stack back to a single unit so the pre-gate keeps
       // passing while every slot stays occupied.
       const hideSlot = meta.inventory.find((s: { itemId: string }) => s.itemId === 'rough_hide');
       if (hideSlot) hideSlot.count = 1;
-      sim.harvestCorpse(mob.id, ['hide'], pid);
-      const downgrade = sim
-        .drainEvents()
-        .some((e) => e.type === 'gatherDowngrade' && e.surface === 'corpse' && e.lost === 'find');
+      const result = completeCorpseHarvest(sim, mob.id, pid);
+      const downgrade = result.events.some(
+        (e) => e.type === 'gatherDowngrade' && e.surface === 'corpse' && e.lost === 'find',
+      );
       if (downgrade) truncatedFindAt = i;
     }
     // A specimen ROLLED and was truncated (the hunt found the downgrade), yet

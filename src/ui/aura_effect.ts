@@ -24,6 +24,11 @@ import {
 } from '../sim/combat/chronomancy';
 import { MOONTIDE_STAGES, OLD_BLOOD_STAGES, VERDANCE_STAGES } from '../sim/combat/druid_engines';
 import {
+  COLDSIGHT_READ_AURA_ID,
+  COLDSIGHT_READ_FELL_SHOT_MULT,
+  COLDSIGHT_READ_LONG_DRAW_MULT,
+} from '../sim/combat/hunter_coldsight_read';
+import {
   GLOAM_STAGES,
   KNOCKOUT_PER_PIP,
   REDLINE_MAX_DEPTH,
@@ -35,6 +40,57 @@ import {
   GALEHEART_ECHO_DAMAGE,
   WARSPIRIT_CADENCE_STEPS,
 } from '../sim/combat/shaman_warspirit';
+import {
+  IGNIVAR_SOAK_REQUIRED_PLAYERS,
+  IGNIVAR_SOAK_SHARED_MAX_HP,
+} from '../sim/encounters/ignivar';
+import {
+  VARKHUL_ASSEMBLY_CORE_AURA_ID,
+  VARKHUL_ASSEMBLY_FIXATE_AURA_ID,
+  VARKHUL_ASSEMBLY_LINK_AURA_ID,
+  VARKHUL_CINDER_ORBS_AURA_ID,
+  VARKHUL_FORGE_BEAM_EXPOSURE_AURA_ID,
+  VARKHUL_MAKERS_BRAND_AURA_ID,
+  VARKHUL_MAKERS_BRAND_DURATION,
+  VARKHUL_MAKERS_BRAND_MAX_STACKS,
+  VARKHUL_MAKERS_BRAND_PER_STACK,
+  VARKHUL_MAKERS_BRAND_TANK_SWAP_STACKS,
+} from '../sim/encounters/varkhul';
+import {
+  NYTHRAXIS_ASCENSION_AURA_ID,
+  NYTHRAXIS_ASCENSION_HASTE_AURA_ID,
+  NYTHRAXIS_BOUND_AURA_ID,
+  NYTHRAXIS_BOUND_SECONDS_NORMAL,
+  NYTHRAXIS_BOUND_STUN_AURA_ID,
+  NYTHRAXIS_BOUND_VULNERABILITY,
+  NYTHRAXIS_UNBOUND_AURA_ID,
+} from '../sim/nythraxis_binding_sigil';
+import {
+  NYTHRAXIS_IMPALED_AURA_ID,
+  NYTHRAXIS_IMPALED_TICK_MAX_HP_HEROIC,
+  NYTHRAXIS_IMPALED_TICK_MAX_HP_NORMAL,
+  NYTHRAXIS_IMPALED_TICK_SECONDS,
+} from '../sim/nythraxis_bone_spike';
+import {
+  NYTHRAXIS_BONE_STORM_AURA_ID,
+  NYTHRAXIS_BONE_STORM_RADIUS,
+  NYTHRAXIS_BONE_STORM_WHIRL_TICK_MAX_HP_NORMAL,
+} from '../sim/nythraxis_bone_storm';
+import {
+  NYTHRAXIS_DREAD_CURSE_AURA_ID,
+  NYTHRAXIS_DREAD_CURSE_DURATION,
+  NYTHRAXIS_DREAD_CURSE_EVERY,
+  NYTHRAXIS_DREAD_CURSE_HIT_MAX_HP_NORMAL,
+  NYTHRAXIS_DREAD_CURSE_MAX_STACKS,
+  NYTHRAXIS_DREAD_CURSE_PER_STACK_NORMAL,
+  NYTHRAXIS_DREAD_CURSE_TANK_SWAP_STACKS,
+} from '../sim/nythraxis_dread_curse';
+import {
+  NYTHRAXIS_CROWN_ENDURES_AURA_ID,
+  NYTHRAXIS_CROWN_ENDURES_HASTE_AURA_ID,
+  NYTHRAXIS_ENRAGE_HASTE_BONUS,
+} from '../sim/nythraxis_enrage_clock';
+import { NYTHRAXIS_KINGS_WRATH_AURA_ID } from '../sim/nythraxis_kings_wrath';
 import type { AuraKind } from '../sim/types';
 import {
   ENRAGE_DMG_DONE,
@@ -44,6 +100,14 @@ import {
   RECKLESSNESS_RAGE_GEN,
   SUNDER_ARMOR_PCT_PER_STACK,
 } from '../sim/types';
+import { VARKHUL_ASSEMBLY_BURDEN_TICK_SECONDS } from '../sim/varkhul_assembly';
+import {
+  VARKHUL_SHARED_PYRE_AURA_ID,
+  VARKHUL_SHARED_PYRE_RAID_DAMAGE_PER_MISSING,
+  VARKHUL_SHARED_PYRE_REQUIRED_NORMAL,
+  VARKHUL_SHARED_PYRE_TOTAL_DAMAGE_HEROIC,
+  VARKHUL_SHARED_PYRE_TOTAL_DAMAGE_NORMAL,
+} from '../sim/varkhul_shared_pyre';
 
 export type AuraSchool = 'physical' | 'fire' | 'frost' | 'arcane' | 'shadow' | 'holy' | 'nature';
 
@@ -94,10 +158,165 @@ const flatStat = (statKey: string, value: number): AuraEffectDescriptor => ({
  * adding an AuraKind without player-facing explanation is a compile-time error.
  */
 export function auraEffectDescriptor(a: AuraEffectInput): AuraEffectDescriptor | null {
+  // This is a four-second placement marker, not a damage-taken modifier. Its
+  // countdown and localized name are the complete tooltip; the generic
+  // vulnerability copy would misleadingly claim that it adds 0% damage taken.
+  if (a.id === VARKHUL_CINDER_ORBS_AURA_ID) return null;
+  if (a.id === VARKHUL_ASSEMBLY_FIXATE_AURA_ID) {
+    return { key: `${KEY}.varkhulSentinelsGaze`, nums: {} };
+  }
+  if (a.id === VARKHUL_ASSEMBLY_CORE_AURA_ID) {
+    return {
+      key: `${KEY}.varkhulMoltenCore`,
+      nums: { interval: VARKHUL_ASSEMBLY_BURDEN_TICK_SECONDS, min: 2, max: 10 },
+    };
+  }
+  if (a.id === VARKHUL_ASSEMBLY_LINK_AURA_ID) {
+    return {
+      key: `${KEY}.varkhulForgeLink`,
+      nums: {},
+    };
+  }
+  if (a.id === VARKHUL_FORGE_BEAM_EXPOSURE_AURA_ID) {
+    return { key: `${KEY}.varkhulCrucibleExposure`, nums: {} };
+  }
   if (a.id === 'shaman_mending_current') {
     return a.poolPct !== undefined
       ? { key: `${KEY}.mendingCurrentPercent`, nums: { pct: round(a.poolPct) } }
       : { key: `${KEY}.mendingCurrent`, nums: { value: round(a.value) } };
+  }
+  if (a.id === 'ignivar_shared_pyre') {
+    const total = pctFromFrac(IGNIVAR_SOAK_SHARED_MAX_HP);
+    return {
+      key: `${KEY}.sharedPyre`,
+      nums: {
+        total,
+        players: IGNIVAR_SOAK_REQUIRED_PLAYERS,
+        perPlayer: round(total / IGNIVAR_SOAK_REQUIRED_PLAYERS),
+      },
+    };
+  }
+  if (a.id === VARKHUL_SHARED_PYRE_AURA_ID) {
+    const players = Math.max(1, Math.floor(a.stacks ?? VARKHUL_SHARED_PYRE_REQUIRED_NORMAL));
+    const total = pctFromFrac(
+      a.value2 !== undefined && a.value2 > 0
+        ? a.value2
+        : players > VARKHUL_SHARED_PYRE_REQUIRED_NORMAL
+          ? VARKHUL_SHARED_PYRE_TOTAL_DAMAGE_HEROIC
+          : VARKHUL_SHARED_PYRE_TOTAL_DAMAGE_NORMAL,
+    );
+    return {
+      key: `${KEY}.varkhulSharedPyre`,
+      nums: {
+        total,
+        players,
+        perPlayer: round(total / players),
+        missingPenalty: pctFromFrac(VARKHUL_SHARED_PYRE_RAID_DAMAGE_PER_MISSING),
+      },
+    };
+  }
+  if (a.id === VARKHUL_MAKERS_BRAND_AURA_ID) {
+    return {
+      key: `${KEY}.makersBrand`,
+      nums: {
+        duration: VARKHUL_MAKERS_BRAND_DURATION,
+        max: VARKHUL_MAKERS_BRAND_MAX_STACKS,
+        pct: pctFromFrac(VARKHUL_MAKERS_BRAND_PER_STACK),
+        swap: VARKHUL_MAKERS_BRAND_TANK_SWAP_STACKS,
+      },
+    };
+  }
+  if (
+    a.id === NYTHRAXIS_ASCENSION_HASTE_AURA_ID ||
+    a.id === NYTHRAXIS_BOUND_STUN_AURA_ID ||
+    a.id === NYTHRAXIS_CROWN_ENDURES_HASTE_AURA_ID
+  ) {
+    return null;
+  }
+  if (a.id === NYTHRAXIS_ASCENSION_AURA_ID) {
+    return {
+      key: `${KEY}.nythraxisAscension`,
+      nums: {
+        stacks: Math.max(1, Math.trunc(a.stacks ?? 1)),
+        pct: pctFromFrac(a.value),
+      },
+    };
+  }
+  if (a.id === NYTHRAXIS_BOUND_AURA_ID) {
+    return {
+      key: `${KEY}.nythraxisBound`,
+      nums: {
+        pct: pctFromFrac(NYTHRAXIS_BOUND_VULNERABILITY),
+        // The burn window is per difficulty and rides the aura's value2.
+        duration: a.value2 ?? NYTHRAXIS_BOUND_SECONDS_NORMAL,
+      },
+    };
+  }
+  if (a.id === NYTHRAXIS_UNBOUND_AURA_ID) {
+    return {
+      key: `${KEY}.nythraxisUnbound`,
+      nums: { pct: pctFromFrac(a.value) },
+    };
+  }
+  if (a.id === NYTHRAXIS_KINGS_WRATH_AURA_ID) {
+    return {
+      key: `${KEY}.nythraxisKingsWrath`,
+      nums: { pct: pctFromFrac(a.value) },
+    };
+  }
+  if (a.id === NYTHRAXIS_BONE_STORM_AURA_ID) {
+    return {
+      key: `${KEY}.nythraxisBoneStorm`,
+      nums: {
+        // The whirl tick is per difficulty and rides the aura's value2; a
+        // mirror that has not carried it yet falls back to the normal number.
+        tick: pctFromFrac(a.value2 ?? NYTHRAXIS_BONE_STORM_WHIRL_TICK_MAX_HP_NORMAL),
+        radius: NYTHRAXIS_BONE_STORM_RADIUS,
+      },
+    };
+  }
+  if (a.id === NYTHRAXIS_CROWN_ENDURES_AURA_ID) {
+    return {
+      key: `${KEY}.nythraxisCrownEndures`,
+      nums: {
+        stacks: Math.max(1, Math.trunc(a.stacks ?? 1)),
+        pct: pctFromFrac(a.value),
+        haste: pctFromFrac(NYTHRAXIS_ENRAGE_HASTE_BONUS),
+      },
+    };
+  }
+  if (a.id === NYTHRAXIS_DREAD_CURSE_AURA_ID) {
+    // The aura's value is stacks x per-stack, and the per-stack bonus is the one
+    // number heroic changes (nythraxis_dread_curse.ts), so read it back off the
+    // live aura instead of guessing the difficulty; a mirror that has not
+    // carried the value yet falls back to the normal-mode bonus.
+    const stacks = Math.max(1, Math.trunc(a.stacks ?? 1));
+    const perStackFrac = a.value > 0 ? a.value / stacks : NYTHRAXIS_DREAD_CURSE_PER_STACK_NORMAL;
+    return {
+      key: `${KEY}.nythraxisDreadCurse`,
+      nums: {
+        perStack: pctFromFrac(perStackFrac),
+        duration: NYTHRAXIS_DREAD_CURSE_DURATION,
+        stacks,
+        max: NYTHRAXIS_DREAD_CURSE_MAX_STACKS,
+        pct: pctFromFrac(perStackFrac * stacks),
+        hit: pctFromFrac(a.value2 ?? NYTHRAXIS_DREAD_CURSE_HIT_MAX_HP_NORMAL),
+        every: NYTHRAXIS_DREAD_CURSE_EVERY,
+        swap: NYTHRAXIS_DREAD_CURSE_TANK_SWAP_STACKS,
+      },
+    };
+  }
+  if (a.id === NYTHRAXIS_IMPALED_AURA_ID) {
+    // Unbreakable encounter stun with a per-second max-health drain the aura does
+    // not carry (the driver reads the difficulty); both tiers are spelled.
+    return {
+      key: `${KEY}.nythraxisImpaled`,
+      nums: {
+        normal: pctFromFrac(NYTHRAXIS_IMPALED_TICK_MAX_HP_NORMAL),
+        heroic: pctFromFrac(NYTHRAXIS_IMPALED_TICK_MAX_HP_HEROIC),
+        interval: NYTHRAXIS_IMPALED_TICK_SECONDS,
+      },
+    };
   }
   if (a.id === 'temporal_hourglass' && a.kind === 'stasis') {
     return { key: `${KEY}.temporalHourglass`, nums: {} };
@@ -122,6 +341,20 @@ export function auraEffectDescriptor(a: AuraEffectInput): AuraEffectDescriptor |
     return {
       key: `${KEY}.elementalTrance`,
       nums: { pct: pctFromFrac(a.value), mana: pctFromFrac(ELEMENTAL_TRANCE_MANA_PCT) },
+    };
+  }
+  // v0.42.0 Coldsight (docs/design/class-balance-v042.md): the banked
+  // opportunity a completed Fevered Draw grants. Shown on the buff itself
+  // (per the design's "show the charge on the existing aura surface") since
+  // whether it is armed is conditional state a static ability tooltip can't
+  // reflect.
+  if (a.id === COLDSIGHT_READ_AURA_ID && a.kind === 'hunter_coldsight_read') {
+    return {
+      key: `${KEY}.coldsightRead`,
+      nums: {
+        longDrawPct: pctFromMult(COLDSIGHT_READ_LONG_DRAW_MULT),
+        fellShotPct: pctFromMult(COLDSIGHT_READ_FELL_SHOT_MULT),
+      },
     };
   }
   if (a.kind === 'hunter_ferocity') {
@@ -154,7 +387,14 @@ export function auraEffectDescriptor(a: AuraEffectInput): AuraEffectDescriptor |
     return { key: `${KEY}.veilstrikeWindow`, nums: { pct: pctFromFrac(a.value) } };
   }
   if (a.id === 'veiled_edge' && a.kind === 'veiled_edge') {
-    return { key: `${KEY}.veiledEdge`, nums: {} };
+    // v0.42 (docs/design/class-balance-v042.md, "Skulduggery"): the
+    // repeatable veil-window Edge bonus was halved (+100% -> +50%, Ashveil
+    // 4pc +200% -> +100%), so the number must read the aura's actual armed
+    // VALUE (`veiledEdgeArmValue`, base VEILED_EDGE_BONUS or the set bonus)
+    // rather than a hardcoded "double". `veiledEdgeStrike`, not the old
+    // `veiledEdge` key: see the hud_chrome.ts catalog comment for why this
+    // could not reuse the original key.
+    return { key: `${KEY}.veiledEdgeStrike`, nums: { pct: pctFromFrac(a.value) } };
   }
   if (a.kind === 'dusk_economy') {
     return { key: `${KEY}.duskEconomy`, nums: { pct: pctFromFrac(a.value) } };
@@ -233,6 +473,8 @@ export function auraEffectDescriptor(a: AuraEffectInput): AuraEffectDescriptor |
 
     case 'buff_ap':
       return flatStat('ap', a.value);
+    case 'buff_str':
+      return flatStat('str', a.value);
     case 'debuff_ap':
       return flatStat('ap', -Math.abs(a.value));
     case 'buff_armor':
@@ -347,6 +589,10 @@ export function auraEffectDescriptor(a: AuraEffectInput): AuraEffectDescriptor |
     case 'faerie_fire':
       // Fixed-percent armor reduction (does not stack with Sunder).
       return { key: `${KEY}.armorPct`, nums: { pct: round(FAERIE_FIRE_ARMOR_PCT * 100) } };
+    case 'melting_acid':
+      // Percent armor reduction carried on the aura itself; shares the same
+      // max-combine group as Sunder and Faerie Fire, so it reads identically.
+      return { key: `${KEY}.armorPct`, nums: { pct: pctFromFrac(a.value) } };
     case 'corrode': {
       // Mob corrosion: a FLAT, stacking armor shred (value per stack). Keeps the
       // flat-reduction wording the old shared `sunder` kind used.

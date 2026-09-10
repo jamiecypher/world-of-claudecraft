@@ -196,7 +196,36 @@ export const VOICE_PROMPTS = [
       'I built a kingdom that should have outlived the stars. Kneel before your king. Another kingdom comes to challenge me — and you too will join the rest.',
   },
 
-  // -- Eldergleam, the Veiled Hollow (src/sim/content/realm.ts) -------------
+  {
+    npcId: 'ignivar',
+    name: 'Ignivar Ashcaller',
+    voiceDescription:
+      'A natural, actor-led core voiced through an enormous ancient war automaton. Very deep male ' +
+      'bass with dense iron weight, a furnace-like chest resonance, and a dry scorched texture. ' +
+      'Words arrive like heavy mechanisms locking into place: slow attacks, hard consonants, brief ' +
+      "measured gaps, and controlled bursts of heat. Ignivar is Varkhul's disciplined herald, " +
+      'proud and devoted rather than bestial, with fear buried beneath the metal.',
+    sampleText:
+      'Ignivar Ashcaller awakens. Let the world burn! The sky itself will burn! The last flame ' +
+      'consumes all! Varkhul... the seal is broken.',
+  },
+
+  {
+    npcId: 'varkhul',
+    name: 'Varkhul, Forgefather of the Last Flame',
+    voiceDescription:
+      'Native English with archaic dwarven word shapes and broad Highland vowels. Male-presenting, ' +
+      'older than human. An awakened obsidian forge idol with a non-human mineral voice, very low ' +
+      'pitch, immense cavity resonance, sparse breath, and a dry fractured surface. Speech feels ' +
+      'carved rather than spoken: long silences, heavy vowels, chiseled consonants, and occasional ' +
+      'tectonic strain. No human narrator, beast, demon, or machine.',
+    sampleText:
+      'I am Varkhul, Forgefather of the Last Flame. Raise your weapons, little sparks. The spring ' +
+      'did not die. I bound its last memory into iron. Every blow will feed the furnace in my ' +
+      'chest. By ember, stone, and anvil, I will unmake you. Master... I have failed you.',
+  },
+
+  // -- Eldershine, the Veiled Hollow (src/sim/content/realm.ts) -------------
   {
     npcId: 'keeper_saelwyn',
     name: 'Keeper Saelwyn',
@@ -324,17 +353,6 @@ export const VOICE_PROMPTS = [
     sampleText:
       'The forge answers to me. Bring good ore and it will answer to you too. Steel does not ' +
       'forgive a wandering hand, so I will tell you plain before you swear anything.',
-  },
-  {
-    npcId: 'groundskeeper_bram',
-    name: 'Groundskeeper Bram',
-    voiceDescription:
-      'Keeper of the village sporting field, deep field green: a broad, weather-cured country ' +
-      'baritone, gruff and grinning, the tone of a man who referees a rough game and enjoys it. ' +
-      'Rolling rural vowels, easy laugh, firm on the rules. Age 40s to 50s. Male.',
-    sampleText:
-      'The truce holds at the Sowfield: boots and shoulders only. Care to play for the Copper ' +
-      'Pail? Mind the rules and mind your elbows, and we will get along famously.',
   },
   {
     npcId: 'tinker_gizzel',
@@ -558,7 +576,7 @@ export const VOICE_PROMPTS = [
       'war-banners in front of it, and you will understand why I stopped writing things down.',
   },
 
-  // -- The Wraithwood, Gallowmere (src/sim/content/wraithwood.ts) -----------
+  // -- The Wraithwood, Gibbetmere (src/sim/content/wraithwood.ts) -----------
   {
     npcId: 'sexton_marrow',
     name: 'Sexton Marrow',
@@ -567,7 +585,7 @@ export const VOICE_PROMPTS = [
       'sepulchral bass, patient as a tolling bell, kindly in a way that never stops sounding ' +
       'like a funeral. Takes duty to the buried and the living as one job. Age 50s to 60s. Male.',
     sampleText:
-      'We bury them deep here, and we ring the bells so they remember to stay down. Gallowmere ' +
+      'We bury them deep here, and we ring the bells so they remember to stay down. Gibbetmere ' +
       'keeps its people, that is the whole of our law. Mind the bells.',
   },
   {
@@ -743,6 +761,20 @@ export const VOICE_PROMPTS = [
       'Ferry lanterns do not go out in water. That is the point of them.',
   },
 
+  // -- The Proving Shore (src/sim/content/proving_shore.ts) -----------------
+  {
+    npcId: 'ferryman_odo',
+    name: 'Ferryman Odo',
+    voiceDescription:
+      'The tutorial island ferryman and guiding voice, sun-bleached pier: a warm, weathered OLD ' +
+      'male voice, seventies, gravel under real kindness, unhurried grandfatherly encouragement ' +
+      'with a soft coastal lilt. Every line lands like advice from someone who has ferried a ' +
+      'thousand newcomers across and liked every one of them. Age 70s. Male.',
+    sampleText:
+      'Easy ashore, friend. See the golden path at your feet? It knows the way better than I do. ' +
+      'Follow it, and when the bell rings for you, I will be right here at the pier.',
+  },
+
   // -- The Willowfen, Bridgemere (src/sim/content/willowfen.ts) -------------
   {
     npcId: 'waykeeper_pell',
@@ -826,7 +858,7 @@ export const VOICE_PROMPTS = [
   },
   {
     npcId: 'hermit_okku',
-    name: 'Okku',
+    name: 'Okrim',
     voiceDescription:
       'Hermit camped alone under jungle banyans within earshot of drums, deep green: a hushed, ' +
       'cracked male voice, whisper-taut and hyper-attentive, breaking off to count a sound. The ' +
@@ -1041,11 +1073,19 @@ export const VOICE_PROMPTS = [
 // Recurring NPC records → the base voice that speaks for them. gen_npc_lines.mjs
 // consults this so every Aldric/Maren/Halven zone variant reuses one designed voice.
 export const VOICE_ALIAS = {
+  // Riftwright Maelis, the Rift Forgemaster in the Watch Meadow on the Farshore, borrows Quartermaster
+  // Edda's steel-and-salt Redoubt register (the same forge-and-anvil trade, the
+  // same shore) until the forge receives its own designed voice.
+  riftwright_maelis: 'quartermaster_edda',
   brother_aldric_fen: 'brother_aldric',
   brother_aldric_highwatch: 'brother_aldric',
   brother_aldric_raid: 'brother_aldric',
   scout_maren_highwatch: 'scout_maren',
   brother_halven_marsh: 'brother_halven',
+  // Maelin is a development-only raid archivist and reuses the established
+  // measured scholar register until the hidden raid receives bespoke voice art.
+  archivist_maelin_emberward: 'archivist_tullo',
+  archivist_maelin_ember_projection: 'archivist_tullo',
   // Warmarshal Draven Kole, the Highwatch Master of the Warfare Stores, sells the
   // identical WARFARE stock FURY sells in Eastbrook and speaks in the same
   // parade-ground register, so he borrows FURY's designed voice for now. This is
@@ -1054,6 +1094,61 @@ export const VOICE_ALIAS = {
   // own VOICE_PROMPTS entry, with the rank and the cold Highwatch authority the
   // greeting carries, once an ElevenLabs key is available to design and render it.
   warmarshal_draven_kole: 'fury',
+  // The four farmer NPCs (the farming go-live) borrow ROLE-MATCHED designed
+  // voices for now, the Draven Kole precedent: each has its own description
+  // in docs/design/npc_voices.md and is promoted to its own VOICE_PROMPTS
+  // entry once an ElevenLabs key is available to design and render it.
+  farmer_jessica: 'provisioner_fenna',
+  farmer_teasel: 'trapper_brosk',
+  // farmer_hollis borrowed Groundskeeper Bram's country baritone until the
+  // release retired Bram (and his VOICE_PROMPTS entry) with the Sowfield and
+  // the Vale Cup. Re-pointed at the v0.41.0 merge to the nearest surviving
+  // role match: the herd-warden's weathered, steady, rural male register
+  // (docs/design/npc_voices.md carries Hollis's own brief; promote him to
+  // his own VOICE_PROMPTS entry once an ElevenLabs key is available).
+  farmer_hollis: 'huntsman_deral',
+  farmer_verbena: 'orchardist_pomeline',
+  // Quartermaster Bronn Emberward, the Crucible sigil broker: a quartermaster
+  // at a counter selling proof of hard content, the same register Vex's
+  // designed voice carries, so he borrows it as a ROLE match (the Draven Kole
+  // precedent above). Promote him to his own VOICE_PROMPTS entry, with the
+  // forge-warden weight his greeting carries, when a key is available.
+  crucible_quartermaster: 'heroic_quartermaster',
+  // The Proving Shore four (src/sim/content/proving_shore.ts, the tutorial
+  // island). Like Warmarshal Draven Kole above, these are ROLE matches rather
+  // than the same character recurring under a suffixed id: each borrows the
+  // designed voice whose role and register its own dialogue carries. Promote
+  // each to its own VOICE_PROMPTS entry once an ElevenLabs key is available to
+  // design and render it.
+  // Harbor guide greeting newcomers and pointing them to the crossing: the
+  // waycamp keeper's warm, unhurried, hospitable-without-fuss register.
+  wayfarer_bryn: 'waykeeper_pell',
+  // Proving Master running drills for the unsteady: the riding-trial
+  // stablemaster's drill-instructor bark with real fondness under it.
+  instructor_maren: 'stablemaster_marla',
+  // Camp outfitter rattling off bread, water, and a draught: the Highwatch
+  // quartermaster's brisk, no-nonsense inventory cadence.
+  quartermaster_finch: 'quartermaster_bree',
+  // ferryman_odo graduated to his own designed old-man voice (VOICE_PROMPTS
+  // above): he is the island's spoken guide, not a role borrow.
+  // The camp's Gilded Strongbox desk: Eastbrook's own bursar register, the
+  // same institutional voice the brand speaks with in every town.
+  bursar_wick: 'bursar_fernando',
+  // Keeper of the Gauntlet cheering a first run down his lanes: the Fenbridge
+  // warden's steady, patrol-worn encouragement.
+  warden_tam: 'warden_fenwick',
+  // Gauntlet Overseer clocking every run from the finish: the foreman's dry,
+  // seen-it-all worksite judgment.
+  overseer_pell: 'foreman_odell',
+  // Yard Master turning footwork into swordwork: the marshal's parade-ground
+  // bark, softened by a teacher's patience.
+  drillmaster_rook: 'marshal_redbrook',
+  // Keeper of the Strand tallying shells and salvage: the harbor captain's
+  // weathered, water-wise authority.
+  tidewarden_nel: 'captain_thessaly',
+  // Quay Sparring Master introducing the hub dummy and the meters: the same
+  // parade-ground bark the island's Yard Master borrows.
+  drillmaster_hale: 'marshal_redbrook',
 };
 
 /** Resolve any NPC content id to the id of the voice that should speak for it. */

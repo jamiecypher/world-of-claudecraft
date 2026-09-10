@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CORPSE_DURATION } from '../src/sim/combat/damage';
 import {
+  BUILTIN_WORLD,
   DUNGEON_X_THRESHOLD,
   instanceOrigin,
   MOBS,
@@ -19,6 +20,7 @@ import {
 } from '../src/sim/data';
 import {
   baseRespawnSecondsAt,
+  corpseHasDecayed,
   DEFAULT_RESPAWN_SECONDS,
   isSelfScheduled,
   LEGACY_RESPAWN_SECONDS,
@@ -27,7 +29,16 @@ import {
   trashRespawnSecondsForZone,
 } from '../src/sim/respawn_policy';
 import { Sim } from '../src/sim/sim';
-import { DT, type ZoneDef } from '../src/sim/types';
+import { DT, type WorldContent, type ZoneDef } from '../src/sim/types';
+
+const DEATH_SITE_TEST_WORLD: WorldContent = {
+  ...BUILTIN_WORLD,
+  camps: BUILTIN_WORLD.camps.filter((camp) =>
+    ['forest_wolf', 'grix_the_tunnelking', 'training_dummy'].includes(camp.mobId),
+  ),
+  npcs: {},
+  groundObjects: [],
+};
 
 // A minimal ZoneDef the tier function can read; only levelRange and the optional
 // override matter to it, so the rest is inert filler.
@@ -392,9 +403,34 @@ describe('resolveRespawnSeconds: full precedence', () => {
   });
 });
 
+describe('corpseHasDecayed: the render/wire admission signal', () => {
+  it('is false while alive, however low a stale corpseTimer field reads', () => {
+    expect(corpseHasDecayed(false, 0)).toBe(false);
+    expect(corpseHasDecayed(false, -5)).toBe(false);
+  });
+
+  it('is false for a dead mob still inside its loot window', () => {
+    expect(corpseHasDecayed(true, CORPSE_DURATION)).toBe(false);
+    expect(corpseHasDecayed(true, 1)).toBe(false);
+  });
+
+  it('treats an uninitialized corpseTimer as not intentionally decayed', () => {
+    expect(corpseHasDecayed(true, undefined)).toBe(false);
+  });
+
+  it('is true once the window elapses, at and past the zero boundary', () => {
+    expect(corpseHasDecayed(true, 0)).toBe(true);
+    expect(corpseHasDecayed(true, -1)).toBe(true);
+  });
+});
+
 describe('the death site consumes the policy', () => {
   it('puts a slain open-world mob down for the world delay, not the off-map 25s', () => {
-    const sim = new Sim({ seed: 20061, playerClass: 'warrior' });
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      world: DEATH_SITE_TEST_WORLD,
+    });
     expect(sim.cfg.respawnSeconds).toBeUndefined();
     const mob = [...sim.entities.values()].find(
       (e) => e.kind === 'mob' && e.templateId === 'forest_wolf',
@@ -409,7 +445,11 @@ describe('the death site consumes the policy', () => {
   });
 
   it('rolls Grix a fresh 15 to 30 minute timer from the sim rng at death', () => {
-    const sim = new Sim({ seed: 20061, playerClass: 'warrior' });
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      world: DEATH_SITE_TEST_WORLD,
+    });
     const grix = [...sim.entities.values()].find(
       (e) => e.kind === 'mob' && e.templateId === 'grix_the_tunnelking',
     );
@@ -423,8 +463,88 @@ describe('the death site consumes the policy', () => {
     expect(grix.respawnTimer).not.toBe(10_800);
   });
 
+  it('leaves Grix corpseTimer well short of his own respawnTimer, the gap the stuck-corpse fix closes', () => {
+    // Grix's corpse decays on the ordinary 60s window (CORPSE_DURATION) like
+    // any other kill, but his respawn is self-scheduled (respawnWindow) and
+    // always much longer (900 to 1800s). Nothing here respawns him early to
+    // close that gap (his loot window is deliberately bounded, not his
+    // respawn), so the corpse would sit dead-but-decayed for up to half an
+    // hour: entity_view_policy_core.ts's admission check (fed by the wire
+    // `cd` flag added in server/game.ts) is what stops it from rendering and
+    // staying "clickable" as a warped, stuck statue for that whole gap.
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      world: DEATH_SITE_TEST_WORLD,
+    });
+    const grix = [...sim.entities.values()].find(
+      (e) => e.kind === 'mob' && e.templateId === 'grix_the_tunnelking',
+    );
+    if (!grix) throw new Error('no grix_the_tunnelking spawned');
+    sim.dealDamage(null, grix, 999_999, false, 'physical', null, 'hit');
+    expect(grix.corpseTimer).toBe(CORPSE_DURATION);
+    expect(grix.respawnTimer).toBeGreaterThan(grix.corpseTimer);
+  });
+
+  it('expires lootability and current targets when a long-scheduled corpse decays', () => {
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      world: DEATH_SITE_TEST_WORLD,
+    });
+    const grix = [...sim.entities.values()].find(
+      (e) => e.kind === 'mob' && e.templateId === 'grix_the_tunnelking',
+    );
+    if (!grix) throw new Error('no grix_the_tunnelking spawned');
+    sim.dealDamage(sim.player, grix, 999_999, false, 'physical', null, 'hit');
+    grix.lootable = true;
+    grix.loot = { copper: 25, items: [{ itemId: 'wolf_fang', count: 1 }] };
+    grix.lootRecipientIds = [sim.playerId];
+    sim.player.targetId = grix.id;
+
+    for (let i = 0; i < Math.ceil(CORPSE_DURATION / DT) + 1; i++) sim.tick();
+
+    expect(grix.dead).toBe(true);
+    expect(grix.respawnTimer).toBeGreaterThan(0);
+    expect(corpseHasDecayed(grix.dead, grix.corpseTimer)).toBe(true);
+    expect(grix.lootable).toBe(false);
+    expect(grix.loot).toEqual({ copper: 25, items: [{ itemId: 'wolf_fang', count: 1 }] });
+    expect(grix.lootRecipientIds).toEqual([sim.playerId]);
+    expect(sim.player.targetId).toBeNull();
+    expect(sim.lootCorpse(grix.id, sim.playerId)).toBe(false);
+  });
+
+  it('refuses direct harvest commands once the corpse has decayed', () => {
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      world: DEATH_SITE_TEST_WORLD,
+    });
+    const wolf = [...sim.entities.values()].find(
+      (e) => e.kind === 'mob' && e.templateId === 'forest_wolf',
+    );
+    if (!wolf) throw new Error('no forest_wolf spawned');
+    sim.player.pos = { ...wolf.pos };
+    sim.dealDamage(sim.player, wolf, 99_999, false, 'physical', null, 'hit');
+    wolf.lootable = true;
+    wolf.corpseTimer = 0;
+    wolf.respawnTimer = 999;
+    wolf.harvestClaimedBy = null;
+
+    // Decayed (corpseTimer 0): admission refuses on corpse_invalid before it
+    // ever reaches the Field Kit check, so no kit is needed for this refusal.
+    sim.harvestCorpse(wolf.id, sim.playerId);
+
+    expect(wolf.harvestClaimedBy).toBeNull();
+  });
+
   it('honors an explicit global base, which is what the fast suites rely on', () => {
-    const sim = new Sim({ seed: 20061, playerClass: 'warrior', respawnSeconds: 2 });
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      respawnSeconds: 2,
+      world: DEATH_SITE_TEST_WORLD,
+    });
     const mob = [...sim.entities.values()].find(
       (e) => e.kind === 'mob' && e.templateId === 'forest_wolf',
     );
@@ -471,7 +591,12 @@ describe('the death site consumes the policy', () => {
 
     // ...and end to end: a harvestable Eastbrook beast is back on the 60s
     // delay, not 60 plus a corpse window.
-    const sim = new Sim({ seed: 20061, playerClass: 'warrior', noPlayer: true });
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      noPlayer: true,
+      world: DEATH_SITE_TEST_WORLD,
+    });
     const wolf = [...sim.entities.values()].find(
       (e) => e.kind === 'mob' && e.templateId === 'forest_wolf',
     );
@@ -493,7 +618,11 @@ describe('the death site consumes the policy', () => {
   });
 
   it('still caps corpse decay at a fixed template respawn (the training dummy)', () => {
-    const sim = new Sim({ seed: 20061, playerClass: 'warrior' });
+    const sim = new Sim({
+      seed: 20061,
+      playerClass: 'warrior',
+      world: DEATH_SITE_TEST_WORLD,
+    });
     const dummy = [...sim.entities.values()].find(
       (e) => e.kind === 'mob' && e.templateId === 'training_dummy',
     );

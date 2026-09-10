@@ -128,6 +128,9 @@ export const en = {
       difficulty: 'Difficulty',
       name: 'Name',
       spec: 'Spec',
+      // Blank means every planted bed, which is what the farmgrow command
+      // itself does without an argument; the action description says so.
+      bed: 'Bed id (optional)',
     },
     difficulty: { normal: 'Normal', heroic: 'Heroic' },
     actions: {
@@ -171,7 +174,8 @@ export const en = {
       },
       biskit: {
         label: 'Equip BIS-20 kit',
-        description: 'Wear the best-in-slot epic set for a spec across every slot. Gear only.',
+        description:
+          'Wear the strongest complete raid-parse loadout observed for a spec. Gear only.',
       },
       gold: { label: 'Add gold', description: 'Add gold to the current purse.' },
       quest: { label: 'Complete quest', description: 'Complete a specific quest by id.' },
@@ -186,6 +190,11 @@ export const en = {
       gather: {
         label: 'Grant gathering skill',
         description: 'Increase a gathering profession.',
+      },
+      farmgrow: {
+        label: 'Ripen crops',
+        description:
+          'Bring your planted crop beds to their ready time, or one bed by id. Nothing else changes: the outcome was rolled when you planted.',
       },
       teleport: { label: 'Teleport', description: 'Move to exact world coordinates.' },
       dungeon: {
@@ -221,6 +230,7 @@ export const en = {
     pristineVein: '{finder} struck a pristine vein!',
     ancientHeartwood: '{finder} felled an ancient heartwood!',
     moonlitBloom: '{finder} discovered a moonlit bloom!',
+    goldenHarvest: '{finder} reaped a golden harvest!',
   },
   apiError: apiErrorStrings,
   guide: guideStrings,
@@ -346,10 +356,6 @@ export const en = {
     serverLabel: 'Choose your world',
     serverAria: 'Select world: Online or Offline',
     serverOfflineSub: 'Instant local world',
-    caLabel: '$WOC Contract Address',
-    caCopyAria: 'Copy contract address',
-    caNote:
-      'WOC is our community token. It is not needed to play. Join Discord to discuss the WOC utility and flywheel.',
   },
   auth: {
     enterRealm: 'Enter the World',
@@ -659,6 +665,16 @@ export const en = {
     unlink: 'Unlink',
     unlinkTitle: 'Remove wallet verification from this account',
     unlinkAria: 'Remove wallet verification from this account',
+    // The R11 re-auth prompt (src/ui/wallet_reauth_prompt.ts): changing or
+    // removing a linked wallet asks for the account password first.
+    reauthTitle: 'Confirm wallet change',
+    reauthUnlinkTitle: 'Confirm wallet removal',
+    reauthHelp: 'For your security, enter your account password to authorize this change.',
+    reauthNoPassword:
+      'This account signs in without a password. Set a password in account settings first, then try again.',
+    reauthConfirm: 'Confirm',
+    reauthCancel: 'Cancel',
+    reauthClose: 'Close',
     signOut: 'Disconnect',
     signOutTitle: 'Disconnect the wallet app on this browser',
     signOutAria: 'Disconnect the wallet app on this browser',
@@ -732,6 +748,8 @@ export const en = {
         'Choose a wallet extension in this browser. You will sign a verification message, then return to the desktop app.',
       paymentBody:
         'Choose the wallet linked to your account and approve the transaction in this browser.',
+      stepUpBody:
+        'Choose the wallet linked to your account and sign the $WOC Exchange authorization message. Signing is free and moves no funds.',
       extensionHelp:
         'No compatible wallet extension was found. Install or unlock Phantom, Solflare, or another Solana browser wallet, then retry.',
       safety: 'World of ClaudeCraft never asks for your recovery phrase or private key.',
@@ -881,6 +899,8 @@ export const en = {
       portalOpens: 'A {tier}-rank rift tears open in {zone}!',
       portalSealed: 'The {tier}-rank rift in {zone} has been sealed.',
       portalCollapses: 'The {tier}-rank rift in {zone} collapses.',
+      lootRecoveryNotice:
+        "The rift's entrance will hold a while yet: should your party fall, you may still walk back for what you earned.",
       levelGate: 'Only adventurers of level {level} or higher may enter this rift.',
       deadEntry: 'You cannot enter a rift while dead.',
       deadEntryCombat:
@@ -901,6 +921,7 @@ export const en = {
       forgeUpgraded: 'Rift upgrade completed for {name}.',
       forgeEnchanted: 'Rift enchant completed for {name}.',
       forgeSocketed: 'Rift gem socketed for {name}.',
+      forgeGemReplaced: 'Rift gem replaced for {name}: {gem} destroyed.',
       // Boss lethal death-zone detonation log lines (src/sim/mob/locomotion.ts).
       // Each fires at the moment a telegraphed zone expires. Emitted in English
       // by the sim; re-localized via the sim.rift.detonate* rules in sim_i18n.ts.
@@ -920,10 +941,6 @@ export const en = {
       detonateStormcallersWrath: "Stormcaller's Wrath erupts!",
       detonateAbyssalMaw: 'Abyssal Maw closes!',
       detonateCrushingDepth: 'Crushing Depth crushes!',
-      detonatePactSeal: 'Pact Seal detonates!',
-      detonateBloodRite: 'Blood Rite falls!',
-      detonatePitSentence: 'Pit Sentence detonates!',
-      detonateHellfireBrand: 'Hellfire Brand detonates!',
     },
     delve: {
       cannotEnterNow: 'You cannot enter a delve right now.',
@@ -998,6 +1015,7 @@ export const en = {
       shopSealPremiumOnly:
         "This seal yields only to a master's hand. Only the Premium ante can open it.",
       passageSealed: 'The passage is sealed.',
+      enemiesRemain: 'Clear the remaining enemies first.',
       moveCloserPassage: 'Move closer to the passage.',
       moveCloserChest: 'Move closer to the chest.',
       moveCloserReliquary: 'Move closer to the reliquary.',
@@ -1112,6 +1130,34 @@ export const en = {
     buyConfirmTitle: 'Confirm Purchase',
     buyConfirmBody: 'Buy {item} for {marks} Heroic Marks? Marks purchases cannot be refunded.',
     buyConfirmAccept: 'Buy',
+    buyConfirmCancel: 'Cancel',
+  },
+  crucibleShop: {
+    // The Crucible Quartermaster window (Ignivar raid sigil redemption):
+    // title/close reuse the vendor keys; only the sigil-specific strings live
+    // here. {list} is the viewer's held sigils with counts; {sigil} is the
+    // one token a row costs.
+    // The gossip-dialog row label: its OWN copy (never "Browse Goods"), since
+    // a redemption counter is not a goods grid.
+    browse: 'Redeem Sigils',
+    browseAria: 'Redeem Crucible sigils with {name}',
+    // The zero-rows arm of the shop grid; unreachable while every class has
+    // sets, but a silently empty panel is the worse failure mode.
+    empty: 'No set pieces are redeemable for your class.',
+    balance: 'Your sigils: {list}',
+    // One held-sigil entry inside {list}: the window composes each through
+    // this key and joins them with formatList, so a locale can reorder the
+    // count and name and keep its own list punctuation (the
+    // hudChrome.enchanting.replaceConfirmCostItem pattern).
+    balanceEntry: '{name} x{count}',
+    noSigils: 'You hold no Crucible sigils.',
+    price: '1 {sigil}',
+    buyAria: 'Redeem {sigil} for {item}',
+    // Confirm dialog gating each redemption: a consumed sigil records no
+    // buyback, so a mis-tap would be unrefundable without it.
+    buyConfirmTitle: 'Confirm Redemption',
+    buyConfirmBody: 'Redeem your {sigil} for {item}? A consumed sigil cannot be refunded.',
+    buyConfirmAccept: 'Redeem',
     buyConfirmCancel: 'Cancel',
   },
   // The Card Master window (Card Duel minigame): queue join/leave affordance
@@ -1294,24 +1340,24 @@ export const en = {
     boss: {
       varric: {
         bell: {
-          emote: 'Deacon Varric grips the buried bell with both hands!',
-          log: 'Deacon Varric begins to toll the burial bell.',
-          warning: 'Move away from Deacon Varric!',
+          emote: 'Deacon Vandric grips the buried bell with both hands!',
+          log: 'Deacon Vandric begins to toll the burial bell.',
+          warning: 'Move away from Deacon Vandric!',
           impact: "The bell's toll cracks the chamber floor!",
           lesson: 'Bell Toll: a ground slam every twelve seconds. Move out before it lands.',
         },
         raise: {
-          emote: 'Deacon Varric calls names from the broken graves!',
-          log: 'Deacon Varric begins Raise Dead.',
+          emote: 'Deacon Vandric calls names from the broken graves!',
+          log: 'Deacon Vandric begins Raise Dead.',
           warning: 'Stop the grave rite!',
           object: 'The cracked grave shudders with stolen breath.',
           interrupt_ok: 'The grave rite falters.',
-          interrupt_fail: "The dead answer Deacon Varric's call!",
+          interrupt_fail: "The dead answer Deacon Vandric's call!",
           lesson: 'Interrupt the cracked grave within five seconds or the dead rise to his call.',
         },
         pull: 'You step on hallowed dust with unclean purpose. Kneel, and be counted.',
         intro: 'No soul is lost. Only misplaced.',
-        mid60: 'Deacon Varric reads names from the ledger with shaking triumph.',
+        mid60: 'Deacon Vandric reads names from the ledger with shaking triumph.',
         mid30: 'The burial bell answers every name he speaks.',
         defeat: 'No... I had the names... I had them all...',
       },
@@ -1548,7 +1594,7 @@ export const en = {
       reliquary_shoulder: { name: 'Crumbled Spaulders' },
       reliquary_gloves_rog: { name: 'Bonewarden Grips' },
       deacon_reliquary_helm: { name: "Deacon's Reliquary Helm" },
-      varric_shadow_cowl: { name: "Varric's Shadow Cowl" },
+      varric_shadow_cowl: { name: "Vandric's Shadow Cowl" },
       siltguard_helm: { name: 'Siltguard Helm' },
       bulwark_rusted_pauldrons: { name: 'Bulwark-Rusted Pauldrons' },
       nhalias_bell_maul: { name: "Nhalia's Bell-Maul" },
@@ -1584,6 +1630,9 @@ export const en = {
       kings_signet: { name: "King's Signet" },
       event_skin_token: { name: 'Mysterious Cosmetic Cache' },
       heroic_mark: { name: 'Heroic Mark' },
+      wyrmfall_core: { name: 'Wyrmfall Core' },
+      sundered_essence: { name: 'Sundered Essence' },
+      makers_ember: { name: "Maker's Ember" },
       eastbrook_buckler: { name: 'Eastbrook Buckler' },
       eastbrook_greatsword: { name: 'Eastbrook Greatsword' },
       highwatch_greatsword: { name: 'Highwatch Greatsword' },
@@ -1607,7 +1656,7 @@ export const en = {
       cryptplate_helm: { name: 'Cryptplate Helm' },
       shadowpulse_slippers: { name: 'Shadowpulse Slippers' },
       bonechill_cord: { name: 'Bonechill Cord' },
-      mistforged_pauldrons: { name: 'Mistforged Pauldrons' },
+      mistforged_pauldrons: { name: 'Fogforged Pauldrons' },
       tideguard_faceguard: { name: 'Tideguard Faceguard' },
       sunken_court_mantle: { name: 'Sunken Court Mantle' },
       lunar_choir_leggings: { name: 'Lunar Choir Leggings' },
@@ -1688,6 +1737,10 @@ export const en = {
       reins_shadowjump_toad: { name: 'Reins of Kama-Kage the Shadow-Jump Toad' },
       reins_stormfeather_griffin: { name: 'Reins of the Sky-Reach Stormfeather' },
       reins_thunderstrut_gobbler: { name: 'Reins of Thunderstrut the Grand Gobbler' },
+      // Ignivar raid legendary drops (Varkhul the Forgefather); dev-give-only
+      // until the raid loot pass wires them.
+      varkhul_forgebreaker: { name: 'Forgebreaker, Engine of Varkhul' },
+      varkhul_emberward: { name: 'Emberward, Bulwark of Varkhul' },
     },
     itemSets: itemSetEntityText,
     mobs: {

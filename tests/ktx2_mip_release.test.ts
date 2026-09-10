@@ -17,7 +17,9 @@ import {
   isKtx2MipReleaseEnabled,
   KTX2_MIP_EXEMPT_MODEL_ROOTS,
   KTX2_MIP_RELEASABLE_MODEL_ROOTS,
+  KTX2_RESTORE_MAX_WAIT_MS,
   type Ktx2MipLevel,
+  type Ktx2RestoreTarget,
   ktx2MipReleaseInternalsForTest,
   ktx2MipsOnContextLost,
   ktx2MipsRestored,
@@ -26,6 +28,8 @@ import {
   stashKtx2TranscodeSource,
 } from '../src/render/assets/ktx2_mip_release';
 import { residencyBudget } from '../src/render/assets/residency_budget';
+import { type BackgroundGpuQueue, GPU_WORK_PRIORITY } from '../src/render/background_gpu_queue';
+import { FAR_VISTA_ENTRY_MAX_WAIT_MS } from '../src/render/far_terrain';
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -254,6 +258,429 @@ describe('context-loss restore story', () => {
     expect(tex.mipmaps as unknown).toBe(freshMips);
   });
 
+  it('bounds the curtain wait so a slow/contended backlog cannot hold it past maxWaitMs, and the abandoned restore still lands (graphics-rebuild stall)', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    let transcodeSettled = false;
+    setKtx2MipRederive(async (source) => {
+      structuredClone(source, { transfer: [source] });
+      // A long-session graphics-preset switch can carry many textures still
+      // contending for the shared transcode worker pool well past any single
+      // curtain's patience: simulate one still in flight when the bound hits.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      transcodeSettled = true;
+      return { mipmaps: freshMips, format: tex.format as number };
+    });
+    ktx2MipsOnContextLost();
+    const settled = await ktx2MipsRestored(10);
+    // The bound must have won the race: this call cannot itself have blocked
+    // for the transcode's full 30ms, and must report that it timed out.
+    expect(settled).toBe(false);
+    expect(transcodeSettled).toBe(false);
+    // The restore keeps running in the background...
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('restoring');
+    // ...and lands correctly once it actually finishes: giving up on the wait
+    // must not corrupt or drop the in-flight restore itself.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(transcodeSettled).toBe(true);
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('armed');
+  });
+
+  it('the timeout warning reports only what THIS call started waiting on, not restores a second loss adds mid-wait', async () => {
+    // Reviewer nit: inflightRestores.size read at FIRE time can include
+    // restores a second context loss started after this ktx2MipsRestored
+    // call already began waiting, inflating the count past what this wait
+    // actually promised to cover.
+    vi.useFakeTimers();
+    try {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const first = armedTexture(2);
+      simulateUpload(first);
+      setKtx2MipRederive(() => new Promise<never>(() => {})); // never settles
+      ktx2MipsOnContextLost(); // starts restoring `first` only
+
+      let settled: boolean | null = null;
+      void ktx2MipsRestored(10).then((v) => {
+        settled = v;
+      });
+
+      // A second loss starts mid-wait, adding a SECOND restore to the live
+      // registry after this call already snapshotted its own target.
+      const second = armedTexture(2);
+      simulateUpload(second);
+      ktx2MipsOnContextLost(); // starts restoring `second` only (`first` is already 'restoring')
+      expect(ktx2MipReleaseInternalsForTest.entryCount()).toBe(2);
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(settled as boolean | null).toBe(false);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('restore bound hit with 1 texture(s) still restoring'),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the default bound is KTX2_RESTORE_MAX_WAIT_MS: the real (no-argument) main.ts call site is actually bounded', async () => {
+    vi.useFakeTimers();
+    try {
+      const tex = armedTexture(2);
+      simulateUpload(tex);
+      setKtx2MipRederive(() => new Promise<never>(() => {})); // never settles
+      ktx2MipsOnContextLost();
+      let settled: boolean | null = null;
+      void ktx2MipsRestored().then((v) => {
+        settled = v;
+      });
+      await vi.advanceTimersByTimeAsync(KTX2_RESTORE_MAX_WAIT_MS - 1);
+      expect(settled).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled as boolean | null).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pins KTX2_RESTORE_MAX_WAIT_MS to TIED FOR THE tightest of this rebuild curtain's stage bounds", () => {
+    // Equal to renderer.ts's private VIEW_PREWARM_MAX_MS (3000, pinned by
+    // tests/prewarm_policy.test.ts), below FAR_VISTA_ENTRY_MAX_WAIT_MS (4000,
+    // far_terrain.ts): NEVER looser than either, on purpose. This stage
+    // protects a purely cosmetic, self-healing transient (a stub-black
+    // texture that repaints itself once its restore lands), while the other
+    // two protect a horizon pop and real first-draw links, so it is the one
+    // that can most afford to give up first. The three stages are sequential
+    // awaits inside prewarmRenderer (src/main.ts), so what they jointly
+    // permit is the SUM of all three, not the max of any one.
+    expect(KTX2_RESTORE_MAX_WAIT_MS).toBe(3000);
+    // VIEW_PREWARM_MAX_MS is unexported (private to renderer.ts): pinned
+    // against its known literal, same as the doc comment above.
+    expect(KTX2_RESTORE_MAX_WAIT_MS).toBeLessThanOrEqual(3000); // VIEW_PREWARM_MAX_MS
+    expect(KTX2_RESTORE_MAX_WAIT_MS).toBeLessThanOrEqual(FAR_VISTA_ENTRY_MAX_WAIT_MS);
+  });
+
+  it('an Infinity bound waits outright instead of firing almost immediately (the setTimeout(fn, Infinity) coercion trap)', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async (source) => {
+      structuredClone(source, { transfer: [source] });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { mipmaps: freshMips, format: tex.format as number };
+    });
+    ktx2MipsOnContextLost();
+    const settled = await ktx2MipsRestored(Number.POSITIVE_INFINITY);
+    expect(settled).toBe(true);
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+  });
+
+  it('starts restores most-recently-armed first, so a session-wide backlog does not starve the zone the player is standing in', () => {
+    enableKtx2MipRelease(() => false);
+    const older = makeTexture(2);
+    stashKtx2TranscodeSource(older, new Uint8Array([1]).buffer);
+    armKtx2MipRelease(older);
+    simulateUpload(older);
+    const newer = makeTexture(2);
+    stashKtx2TranscodeSource(newer, new Uint8Array([2]).buffer);
+    armKtx2MipRelease(newer);
+    simulateUpload(newer);
+
+    const order: number[] = [];
+    setKtx2MipRederive((source) => {
+      order.push(new Uint8Array(source)[0] as number);
+      return new Promise<never>(() => {}); // never settles; call order is all this pins
+    });
+    ktx2MipsOnContextLost();
+    expect(order).toEqual([2, 1]);
+  });
+
+  /** A controllable stand-in for a Ktx2RestoreTarget: queues the work
+   *  function instead of invoking it, so a test can assert the texture stays
+   *  on stubs until the caller explicitly drains a unit. `initTexture` is a
+   *  bare spy: this double asserts what was CALLED, not real GL behavior. */
+  function makeStepQueue(): {
+    queue: BackgroundGpuQueue;
+    target: Ktx2RestoreTarget;
+    run: ReturnType<typeof vi.fn>;
+    initTexture: ReturnType<typeof vi.fn>;
+    drain: () => void;
+  } {
+    const pending: Array<() => void> = [];
+    const run = vi.fn(
+      (work: () => unknown) =>
+        new Promise((resolve, reject) => {
+          pending.push(() => {
+            try {
+              resolve(work());
+            } catch (error) {
+              reject(error);
+            }
+          });
+        }),
+    );
+    const initTexture = vi.fn();
+    const queue = { run } as unknown as BackgroundGpuQueue;
+    return {
+      queue,
+      target: { queue, host: { initTexture } },
+      run,
+      initTexture,
+      drain: () => {
+        const units = pending.splice(0);
+        for (const unit of units) unit();
+      },
+    };
+  }
+
+  it('paces the re-upload through a provided queue instead of applying it the moment the transcode lands', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const { target, drain } = makeStepQueue();
+
+    ktx2MipsOnContextLost(() => target);
+    // Let the (immediately-resolved) transcode's microtask chain settle. The
+    // re-upload is now sitting in the queue, not yet applied.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mipsOf(tex)[0]?.data.byteLength).toBe(0);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('restoring');
+
+    drain();
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('armed');
+  });
+
+  it('runs the real upload INSIDE the queued unit so the queue prices the true GL cost, not a ~0ms flag flip', async () => {
+    // The reviewed regression: applyRestore alone only flips tex.needsUpdate,
+    // which three's own render loop uploads later, unpriced by the queue's
+    // admission ledger (`admission?.spend(syncMs, label)` in
+    // background_gpu_queue.ts). Matching texture_prep_lane.ts's
+    // `host.initTexture` pattern, the unit must call it itself.
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const { target, initTexture, drain } = makeStepQueue();
+
+    ktx2MipsOnContextLost(() => target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(initTexture).not.toHaveBeenCalled();
+
+    drain();
+    expect(initTexture).toHaveBeenCalledTimes(1);
+    expect(initTexture).toHaveBeenCalledWith(tex);
+    // The upload call must see the swapped-in real mips, not the stale stubs:
+    // applyRestore has to run before initTexture, inside the same unit.
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+  });
+
+  it('does not call initTexture when the restore no longer applies by the time its queued unit runs (disposed texture)', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    setKtx2MipRederive(async () => ({ mipmaps: makeMips(2), format: tex.format as number }));
+    const { target, initTexture, drain } = makeStepQueue();
+
+    ktx2MipsOnContextLost(() => target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    tex.dispose();
+    drain();
+    expect(initTexture).not.toHaveBeenCalled();
+  });
+
+  it('skips the real upload, but keeps the restored mips, when the host context is lost by the time the queued unit runs', async () => {
+    // The reviewed regression: three's initTexture has no lost-context guard
+    // of its own, unlike render(), and its onUpdate callback
+    // (releaseAfterUpload here) fires regardless of whether any GL work
+    // actually happened. Calling it while the host reports a lost context
+    // would re-release the freshly restored mips back to stubs having never
+    // reached the GPU, with nothing left to re-arm a restore afterward. This
+    // double's initTexture mirrors that real contract (it fires onUpdate
+    // exactly like `simulateUpload` does elsewhere in this file) and its
+    // queue admits the unit immediately, modeling "the unit ran while the
+    // context was still lost" rather than pacing it further out.
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const initTexture = vi.fn((t: unknown) => simulateUpload(t as THREE.CompressedTexture));
+    const queue = {
+      run: vi.fn((work: () => unknown) => Promise.resolve(work())),
+    } as unknown as BackgroundGpuQueue;
+    const target: Ktx2RestoreTarget = {
+      queue,
+      host: { initTexture, getContext: () => ({ isContextLost: () => true }) },
+    };
+
+    ktx2MipsOnContextLost(() => target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(initTexture).not.toHaveBeenCalled();
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('armed');
+    expect((tex.source as unknown as { dataReady: boolean }).dataReady).toBe(true);
+  });
+
+  it('still runs the real upload when the host reports a live context', async () => {
+    // Companion to the lost-context case above: a host that implements
+    // getContext() but reports a live context must not accidentally suppress
+    // every upload.
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const { target, initTexture, drain } = makeStepQueue();
+    (target.host as { getContext?: () => { isContextLost(): boolean } }).getContext = () => ({
+      isContextLost: () => false,
+    });
+
+    ktx2MipsOnContextLost(() => target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    drain();
+
+    expect(initTexture).toHaveBeenCalledTimes(1);
+    expect(initTexture).toHaveBeenCalledWith(tex);
+  });
+
+  it('paces a rebuild-path straggler through the NEW renderer queue, read live at apply time, not the (gone) queue live at contextlost', async () => {
+    // The graphics-rebuild reviewer finding: ktx2MipsOnContextLost fires from
+    // the recycle's own webglcontextlost, before the new renderer (and its
+    // queue) exists. A snapshotted `target` argument would freeze at whatever
+    // was live THEN (undefined, mid-rebuild); a getter re-reads the caller's
+    // own live binding at the point the transcode actually resolves instead,
+    // which src/main.ts holds across the rebuild (renderer/rendererReady are
+    // reassigned at commit, well after this fires). Model that here: the
+    // getter answers undefined until the transcode settles, then flips to a
+    // real target right before the settle's continuation runs, standing in
+    // for "the rebuild's commit landed while this restore was in flight".
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    let resolveTranscode: (result: { mipmaps: Ktx2MipLevel[]; format: number }) => void;
+    setKtx2MipRederive(
+      () =>
+        new Promise((resolve) => {
+          resolveTranscode = resolve;
+        }),
+    );
+    const { target: newRendererTarget, drain } = makeStepQueue();
+    let live: Ktx2RestoreTarget | undefined; // "no renderer yet" at contextlost time
+
+    ktx2MipsOnContextLost(() => live);
+    expect(live).toBeUndefined();
+    // The rebuild's commit lands while the transcode is still in flight.
+    live = newRendererTarget;
+    resolveTranscode!({ mipmaps: freshMips, format: tex.format as number });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A snapshotted-at-contextlost target would have applied immediately
+    // (undefined at that moment); this must instead be sitting paced in the
+    // new renderer's queue, proving the getter was consulted late.
+    expect(mipsOf(tex)[0]?.data.byteLength).toBe(0);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('restoring');
+
+    drain();
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('armed');
+  });
+
+  it('waits for a target supplier so graphics rebuild restores pace through the candidate renderer queue', async () => {
+    // Companion to the straggler test above, from the other direction: here
+    // the resolver's OWN return value is a promise (matching the game
+    // entry's ktx2_restore_upload_queue coordinator, whose current() stays
+    // pending while a graphics rebuild has the client paused), instead of a
+    // plain getter that happens to be re-invoked. Both paths must defer to
+    // the eventual live target rather than treating "not yet answered" as
+    // "no target".
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const candidate = makeStepQueue();
+    let publishCandidateTarget: (target: Ktx2RestoreTarget | undefined) => void = () => {};
+    const targetWhenCandidateExists = new Promise<Ktx2RestoreTarget | undefined>((resolve) => {
+      publishCandidateTarget = resolve;
+    });
+
+    ktx2MipsOnContextLost(() => targetWhenCandidateExists);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(candidate.run).not.toHaveBeenCalled();
+    expect(mipsOf(tex)[0]?.data.byteLength).toBe(0);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('restoring');
+
+    publishCandidateTarget(candidate.target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(candidate.run).toHaveBeenCalledTimes(1);
+    expect(mipsOf(tex)[0]?.data.byteLength).toBe(0);
+    candidate.drain();
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('armed');
+  });
+
+  it('ktx2MipsRestored still gates on the QUEUED re-upload, not just the transcode, so the curtain cannot reveal stubs', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const { target, drain } = makeStepQueue();
+
+    ktx2MipsOnContextLost(() => target);
+    let settled = false;
+    void ktx2MipsRestored().then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The transcode landed, but the curtain gate must not resolve while the
+    // paced re-upload is still sitting in the queue.
+    expect(settled).toBe(false);
+    drain();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(true);
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+  });
+
+  it('queues the re-upload at cosmetic BACKGROUND priority with a ktx2-restore label the budget can learn', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    setKtx2MipRederive(async () => ({ mipmaps: makeMips(2), format: tex.format as number }));
+    const { target, run } = makeStepQueue();
+    ktx2MipsOnContextLost(() => target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(run).toHaveBeenCalledTimes(1);
+    const [, priority, label] = run.mock.calls[0] as [unknown, number, string];
+    expect(priority).toBe(GPU_WORK_PRIORITY.BACKGROUND);
+    expect(label).toBe('ktx2-restore:upload');
+  });
+
+  it('applies the restore directly when the queue refuses (a renderer rebuild/shutdown mid-restore), never stranding the texture on stubs', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    const freshMips = makeMips(2);
+    setKtx2MipRederive(async () => ({ mipmaps: freshMips, format: tex.format as number }));
+    const queue = {
+      run: () => Promise.reject(new Error('Background GPU queue is shut down')),
+    } as unknown as BackgroundGpuQueue;
+
+    ktx2MipsOnContextLost(() => ({ queue, host: { initTexture: vi.fn() } }));
+    await ktx2MipsRestored();
+    expect(tex.mipmaps as unknown).toBe(freshMips);
+    expect(ktx2MipReleaseInternalsForTest.stateOf(tex)).toBe('armed');
+  });
+
+  it('discards a queued re-upload if the texture is disposed before its unit runs', async () => {
+    const tex = armedTexture(2);
+    simulateUpload(tex);
+    setKtx2MipRederive(async () => ({ mipmaps: makeMips(2), format: tex.format as number }));
+    const { target, drain } = makeStepQueue();
+
+    ktx2MipsOnContextLost(() => target);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    tex.dispose(); // fires the 'dispose' listener, dropping the registry entry
+    expect(() => drain()).not.toThrow();
+    expect(ktx2MipReleaseInternalsForTest.entryCount()).toBe(0);
+  });
+
   it('does not restart a transcode already in flight on a second loss', () => {
     const tex = armedTexture(2);
     simulateUpload(tex);
@@ -379,6 +806,9 @@ describe('category policy', () => {
       'battleground',
       'biome',
       'city',
+      // the Drakelands rebuild kit: placer-built world dressing, drawn only
+      // by the world renderer through the env-prop template cache
+      'drakelands_kit',
       'dungeon',
       'foliage',
       'medieval_village_v2',
@@ -584,13 +1014,49 @@ describe('wiring pins (source scans, anchor style per docs/qa-gate.md)', () => {
     expect(enableAt).toBeGreaterThanOrEqual(0);
     expect(deferredAt).toBeGreaterThanOrEqual(0);
     expect(enableAt).toBeLessThan(deferredAt);
-    // (2) The re-transcode kick must sit INSIDE the canvas webglcontextlost
-    // listener (it serves both in-place loss and the rebuild recycle).
+    // (2) The re-transcode kick must sit INSIDE the onLost callback wired
+    // through attachContextRecoveryHandlers (context_loss_recovery.ts), which
+    // dispatches on the same canvas webglcontextlost event for both in-place
+    // loss and the rebuild recycle. The callbacks themselves are built by
+    // src/game/context_loss_diagnostics.ts (kept out of main.ts's own
+    // zero-headroom line ceiling), so main.ts only needs to pass a thunk that
+    // calls the real ktx2MipsOnContextLost with the late-bound queue supplier
+    // (rather than checking rendererReady in the thunk: graphics-rebuild
+    // context loss fires after shutdown has marked the old renderer unready
+    // but before the candidate renderer exists) through to that builder, and
+    // the builder itself must still call it inside onLost, before onRestored.
+    expect(mainSrc).toContain(
+      'ktx2MipsOnContextLost: () => ktx2MipsOnContextLost(ktx2RestoreUploadQueue.current)',
+    );
+    const buildSrc = read('src/game/context_loss_diagnostics.ts');
+    expect(between(buildSrc, 'onLost: () => {', 'onRestored:')).toContain(
+      'deps.ktx2MipsOnContextLost()',
+    );
+    expect(mainSrc).toContain(
+      "import { createKtx2RestoreUploadQueueCoordinator } from './game/ktx2_restore_upload_queue'",
+    );
+    expect(mainSrc).toContain('createKtx2RestoreUploadQueueCoordinator<Ktx2RestoreTarget>()');
+    expect(mainSrc).toContain('ktx2RestoreUploadQueue.setPaused(paused)');
+    expect(between(mainSrc, 'shutdownRenderer: async (current)', 'recycleContext')).toContain(
+      'ktx2RestoreUploadQueue.publish(undefined)',
+    );
+    const buildRendererBlock = between(
+      mainSrc,
+      'buildRenderer: (_target, recycled) => {',
+      'prepareCurrentZone',
+    );
+    expect(buildRendererBlock).toContain(
+      'ktx2RestoreUploadQueue.publish({ queue: next.backgroundGpuWork, host: next.webgl })',
+    );
     expect(
-      between(mainSrc, "addEventListener('webglcontextlost'", 'webglcontextrestored'),
-    ).toContain('ktx2MipsOnContextLost()');
+      buildRendererBlock.indexOf(
+        'ktx2RestoreUploadQueue.publish({ queue: next.backgroundGpuWork, host: next.webgl })',
+      ),
+    ).toBeLessThan(buildRendererBlock.indexOf('return next'));
     // (3) The curtain gate must sit INSIDE the rebuild prewarm step, after the
-    // far-vista hold, so the reveal never shows stub-black world textures.
+    // far-vista hold, so the reveal normally shows no stub-black world
+    // textures (bounded by KTX2_RESTORE_MAX_WAIT_MS: a large session-wide
+    // backlog can still outlast it, see the bounded-wait tests above).
     expect(between(mainSrc, 'prewarmRenderer: async (next)', 'validateRenderer')).toContain(
       'await ktx2MipsRestored()',
     );

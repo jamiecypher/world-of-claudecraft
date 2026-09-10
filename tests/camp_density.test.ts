@@ -405,14 +405,15 @@ describe('the density model covers the shipped world', () => {
       .sort();
     expect(noXp).toEqual([
       'dragonkin_egg',
+      'nythraxis_bone_spike',
       'spider_egg',
       'spider_egg_sac',
-      'vale_cup_ball',
       'yumi_cat',
     ]);
-    // Two are camp-spawned: the sac is placed by delve room logic and the ball
-    // and the cat are battleground objectives, so no camp cluster can ever hold
-    // those three and the density model never sees them.
+    // Two are camp-spawned: the sac is placed by delve room logic, the ball
+    // and the cat are battleground objectives, and the Nythraxis Bone Spike is
+    // raised by the raid encounter script under an impaled raider, so no camp
+    // cluster can ever hold those and the density model never sees them.
     //
     // spider_egg is the second, and it is deliberately NOT added to the
     // dense-by-design exemption: the Broodmother clutch sits in ordinary Widow

@@ -7,6 +7,18 @@
 import type { DeedLocaleTable } from '../deed_i18n';
 
 export const table: DeedLocaleTable = {
+  prog_ready_for_an_adventure: {
+    name: "Prêt pour l'aventure",
+    desc: "Diplômez-vous du Rivage de l'Épreuve : terminez chaque leçon de l'île, puis sonnez la cloche du bac pour rentrer à Eastbrook.",
+  },
+  exp_dawnhold_castle: {
+    name: 'Une porte ouverte sur le jardin',
+    desc: 'Rendez visite au Château Dawnhold et flânez dans ses salles baignées de soleil.',
+  },
+  exp_the_last_keep: {
+    name: 'Les salles silencieuses',
+    desc: 'Franchissez les portes du Dernier Donjon et parcourez ses salles silencieuses.',
+  },
   pvp_bg_first_capture: {
     name: 'Bannière en main',
     desc: 'Capturez un drapeau dans les Champs de Thornhollow.',
@@ -76,7 +88,7 @@ export const table: DeedLocaleTable = {
     desc: 'Recoltez un filon de minerai, un bosquet de bois et un carre d herbes a Nightbloom.',
   },
   chr_nightbloom_first_cast: {
-    name: 'Une ride sur le puits lunaire',
+    name: 'Une ondulation sur la Source lunaire',
     desc: 'Pechez un poisson dans les eaux de Nightbloom.',
   },
   chr_wraithwood_gatherer: {
@@ -190,7 +202,7 @@ export const table: DeedLocaleTable = {
   },
   prog_master_gatherer: {
     name: 'Maître récolteur',
-    desc: 'Atteignez 100 points de maîtrise dans trois quelconques des métiers Minage, Bûcheronnage, Herboristerie et Pêche.',
+    desc: 'Atteignez 100 points de maîtrise dans trois métiers de récolte différents.',
   },
   prog_first_craft: { name: 'Fait main', desc: 'Réussissez votre première fabrication.' },
   prog_craft_specialist: {
@@ -304,7 +316,7 @@ export const table: DeedLocaleTable = {
     title: 'Terrasse-wyrm',
   },
   dgn_sanctum_speed: {
-    name: 'Sprint du Sanctuaire',
+    name: 'Course du Sanctum',
     desc: 'Vainquez Korzul le Gravewyrm dans les 15 minutes suivant la prise du Sanctuaire du Gravewyrm par votre groupe.',
   },
   dgn_nythraxis_gravebreaker: {
@@ -344,7 +356,7 @@ export const table: DeedLocaleTable = {
     desc: 'Nettoyer la Litanie noyée au palier héroïque.',
   },
   dlv_lore_journal: {
-    name: 'Marginalia',
+    name: 'Notes marginales',
     desc: 'Débloquer les cinq entrées du journal de plongée.',
   },
   dlv_companion_max: {
@@ -370,7 +382,7 @@ export const table: DeedLocaleTable = {
   },
   dlv_varric_ringers: {
     name: 'Les cloches se taisent',
-    desc: "Vaincre le Diacre Varric alors que chaque Sonneur funéraire qu'il relève a déjà été abattu.",
+    desc: "Vaincre le Diacre Vandric alors que chaque Sonneur funéraire qu'il relève a déjà été abattu.",
   },
   dlv_nhalia_bells: {
     name: 'Étouffe-cloches',
@@ -383,7 +395,6 @@ export const table: DeedLocaleTable = {
   },
   chr_vale_chapter_ii: {
     name: 'Chronique du Val, chapitre II',
-    desc: 'Terminer le deuxième chapitre de la chronique de Saul : bandits, murlocs et vermine de la mine abattus, un match disputé au Pré de la Truie et le Reliquaire bravé.',
   },
   chr_vale_chapter_iii: {
     name: 'Chronique du Val',
@@ -404,7 +415,6 @@ export const table: DeedLocaleTable = {
   },
   chr_vale_cup_debut: {
     name: 'Prétendant au Seau de cuivre',
-    desc: "Entrer sur le terrain et toucher le ballon lors d'un match de Coupe du Val au Pré de la Truie.",
   },
   chr_vale_rares: {
     name: 'Les terreurs du Val',
@@ -449,12 +459,12 @@ export const table: DeedLocaleTable = {
   },
   chr_peaks_chapter_iii: {
     name: 'Chronique de Thornpeak',
-    desc: "Mener l'histoire de la montagne à son terme : le Culte du Wyrm brisé, le Sanctuaire réduit au silence, le Pic Éveillé abattu et toutes les terreurs nommées des falaises terrassées.",
+    desc: 'Découvrez toute l’histoire de la montagne : les Broodsworn brisés, le Sanctum réduit au silence, le Pic éveillé abattu et chaque terreur nommée des crêtes vaincue.',
     title: 'de Thornpeak',
   },
   chr_peaks_sparring: {
     name: 'Exercices de rempart',
-    desc: "Infliger 1 000 points de dégâts au total au Mannequin d'entraînement qui surplombe Highwatch.",
+    desc: "Infliger 1 000 points de dégâts au total à un mannequin d'entraînement.",
   },
   chr_peaks_glimmer_cast: {
     name: 'Eau froide, lumière plus froide encore',
@@ -550,7 +560,7 @@ export const table: DeedLocaleTable = {
   },
   col_quartermaster_buyout: {
     name: 'Client privilégié',
-    desc: "Découvrir les dix pièces du stock de l'Intendant Vex.",
+    desc: "Découvrir les dix pièces d'équipement du stock de l'Intendant Vex.",
   },
   col_glimmerfin: {
     name: "Une lueur d'espoir",
@@ -604,69 +614,53 @@ export const table: DeedLocaleTable = {
   },
   pvp_vcup_first_match: {
     name: 'Crampons sur le pré',
-    desc: "Disputez un match de la Coupe du Val jusqu'à son terme au Pré de la Truie, victoire ou défaite.",
   },
   pvp_vcup_first_win: {
     name: 'Premier trophée',
-    desc: 'Remportez un match classé de la Coupe du Val.',
   },
   pvp_vcup_wins_10: {
     name: 'Briscard de la balle au sanglier',
-    desc: 'Remportez 10 matchs classés de la Coupe du Val.',
   },
   pvp_vcup_wins_25: {
     name: 'Légende de la balle au sanglier',
-    desc: 'Remportez 25 matchs classés de la Coupe du Val.',
     title: 'Légende de la balle au sanglier',
   },
   pvp_vcup_first_goal: {
     name: 'Compteur débloqué',
-    desc: "Marquez un but lors d'un match classé de la Coupe du Val.",
   },
   pvp_vcup_hat_trick: {
     name: 'Coup du chapeau',
-    desc: 'Marquez trois buts dans un même match classé de la Coupe du Val, en catégorie 3v3 ou plus.',
   },
   pvp_vcup_golden_goal: {
     name: 'Instant en or',
-    desc: "Marquez le but en or qui décide d'un match classé de la Coupe du Val.",
   },
   pvp_vcup_first_save: {
     name: 'Des mains sûres',
-    desc: "Réalisez un arrêt en tant que gardien lors d'un match classé de la Coupe du Val.",
   },
   pvp_vcup_clean_sheet: {
     name: 'Rien ne passe',
-    desc: 'Remportez un match classé de la Coupe du Val en tant que gardien sans encaisser de but.',
   },
   pvp_vcup_guild_win: {
     name: 'Pour la bannière',
-    desc: 'Remportez un match classé de la Coupe du Val disputé sous la bannière de votre guilde.',
   },
   pvp_fiesta_first_bout: {
     name: "Taper l'incruste",
-    desc: "Disputez un combat de Fiesta 2v2 jusqu'au bout, victoire ou défaite.",
   },
-  pvp_fiesta_first_win: { name: "L'âme de la Fiesta", desc: 'Remportez un combat de Fiesta 2v2.' },
+  pvp_fiesta_first_win: { name: "L'âme de la Fiesta" },
   pvp_fiesta_double: {
     name: 'Coup double',
-    desc: "Réussissez deux mises au tapis en Fiesta en l'espace de quatre secondes.",
   },
   pvp_fiesta_shutdown: {
     name: 'Trouble-fête',
-    desc: 'Mettez au tapis un adversaire de Fiesta en pleine série de trois ou plus.',
   },
   pvp_fiesta_full_build: {
     name: 'Sur son trente-et-un',
-    desc: 'Remportez un combat de Fiesta avec une amélioration verrouillée à chacune des trois vagues.',
   },
   pvp_fiesta_powerups: {
     name: 'Un de chaque',
-    desc: 'Ramassez au moins une fois chacun des quatre bonus du ring : Démon de vitesse, Colosse, Bottes lunaires et Berserker.',
   },
   pvp_fiesta_five_kills: {
     name: 'Toute la fête sur le dos',
-    desc: 'Réussissez cinq mises au tapis en un seul combat de Fiesta.',
   },
   soc_first_party: {
     name: "L'union fait la force",
@@ -1066,6 +1060,114 @@ export const table: DeedLocaleTable = {
     name: 'Sanctuaire enluminé',
     desc: 'Enluminer la page Héroïque : Sanctuaire du Gravewyrm du Reliquaire.',
     title: 'Lumière du Sanctuaire',
+  },
+  soc_strongbox_outfitter: {
+    name: 'Le Pourvoyeur du coffre',
+    desc: 'Déverrouiller votre premier emplacement de sac de banque.',
+  },
+  soc_four_bags_deep: {
+    name: 'Les quatre sacs',
+    desc: 'Déverrouiller les quatre emplacements de sac de banque.',
+  },
+  dgn_ignivar: {
+    name: 'Le Héraut tombe',
+    desc: 'Vainquez Ignivar, Héraut de la Dernière Flamme, dans le Creuset de la Dernière Source.',
+  },
+  dgn_ignivar_heroic: {
+    name: 'Héroïque : Le Héraut tombe',
+    desc: 'Vainquez Ignivar, Héraut de la Dernière Flamme, en difficulté héroïque.',
+  },
+  dgn_varkhul: {
+    name: 'La Forge se refroidit',
+    desc: 'Vainquez Varkhul, Père de la Forge de la Dernière Flamme, dans le Creuset intérieur.',
+  },
+  dgn_varkhul_heroic: {
+    name: 'Héroïque : La Forge se refroidit',
+    desc: 'Vainquez Varkhul, Père de la Forge de la Dernière Flamme, en difficulté héroïque.',
+  },
+  dgn_varkhul_flawless: {
+    name: 'Pas une braise perdue',
+    desc: "Vainquez Varkhul, Père de la Forge de la Dernière Flamme, en difficulté héroïque sans qu'un seul membre du raid ne meure.",
+    title: "l'Indemne",
+  },
+  col_set_bramblehide: {
+    name: 'Peau de Ronces de Roots',
+    desc: 'Découvrir chaque pièce de la Peau de Ronces de Roots.',
+  },
+  prog_jewelcrafting_rare: {
+    name: 'Poli jusqu’à l’éclat',
+    desc: 'Fabriquez votre premier objet de palier rare en Joaillerie.',
+  },
+  prog_jewelcrafting_50: {
+    name: 'Facette et filigrane',
+    desc: 'Atteignez 50 points de compétence en Joaillerie.',
+  },
+  prog_grandmaster_jewelcrafting: {
+    name: 'Grand maître de la joaillerie',
+    desc: 'Atteignez 125 points de compétence en Joaillerie, le sommet de ce métier.',
+    title: 'Grand maître de la joaillerie',
+  },
+  prog_inscription_rare: {
+    name: 'Écrit à l’encre fine',
+    desc: 'Fabriquez votre premier objet de palier rare en Calligraphie.',
+  },
+  prog_inscription_50: {
+    name: 'Plume et pigment',
+    desc: 'Atteignez 50 points de compétence en Calligraphie.',
+  },
+  prog_grandmaster_inscription: {
+    name: 'Grand maître de l’inscription',
+    desc: 'Atteignez 125 points de compétence en Calligraphie, le sommet de ce métier.',
+    title: 'Grand maître de l’inscription',
+  },
+  col_deepest_cast: {
+    name: 'Le lancer le plus profond',
+    desc: 'Obtenez une canne à pêche Rouage-horloge, la seule canne qui atteigne les prises les plus profondes.',
+  },
+  prog_first_planting: {
+    name: 'Tout commence par semer',
+    desc: 'Plantez votre première culture dans un carré de culture.',
+  },
+  chr_vale_first_harvest: {
+    name: 'Premiers fruits du val',
+    desc: 'Récoltez votre première culture florissante dans un carré de culture de la vallée d’Eastbrook.',
+  },
+  chr_marsh_first_harvest: {
+    name: 'Pousses dans la tourbe',
+    desc: 'Récoltez votre première culture florissante dans un carré de culture du marais de Mirefen.',
+  },
+  chr_peaks_first_harvest: {
+    name: 'Une récolte entre les crêtes',
+    desc: 'Récoltez votre première culture florissante dans un carré de culture des hauteurs de Thornpeak.',
+  },
+  chr_evergarden_first_harvest: {
+    name: 'Une parcelle au paradis',
+    desc: 'Récoltez votre première culture florissante dans un carré de culture de l’Evergarden.',
+  },
+  col_golden_harvest: {
+    name: 'Récolte dorée',
+    desc: 'Récoltez une récolte dorée et faites-en profiter toute la zone.',
+  },
+  prog_farming_100: {
+    name: 'Maître des récoltes',
+    desc: 'Atteignez 100 points de maîtrise en Culture.',
+    title: 'Maître des récoltes',
+  },
+  col_farm_roster: {
+    name: 'Chaque sillon rempli',
+    desc: 'Récoltez toutes les cultures produites par les quatre jardins.',
+  },
+  prog_field_to_feast: {
+    name: 'Du champ au festin',
+    desc: 'Cuisinez un festin d’apogée, le repas dont tout un raid peut manger.',
+  },
+  prog_legendmaker: {
+    name: 'Faiseur de légendes',
+    desc: 'Élevez une œuvre perfectionnée au rang de légende avec un acte de création, puis donnez-lui un nom unique.',
+  },
+  hid_forgebreaker: {
+    name: 'Une source déchaînée',
+    desc: 'Façonnez vous-même Brise-forge et rapportez le marteau terminé à Maelin.',
   },
 };
 

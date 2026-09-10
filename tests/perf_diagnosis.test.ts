@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { PerfSnapshot } from '../src/game/perf';
 import { diagnosePerfSnapshot, formatPerfDiagnosisMarkdown } from '../src/game/perf_diagnosis_core';
+import { shaderWarmAuditSnapshot } from '../src/render/shader_warm_audit';
+import { shaderWarmSnapshot } from '../src/render/shader_warm_client';
 
 function digest(value = 0) {
   return { count: 600, avg: value, p95: value, max: value };
@@ -64,6 +66,11 @@ function baseSnapshot(): PerfSnapshot {
       renderScale: 1,
       effectiveRenderScale: 1,
       shadowCadenceHalfRate: false,
+      shadowExtentStep: 0,
+      shadowExtentScale: 1,
+      shadowExtentHalf: 105,
+      terrainDetailLevel: 1,
+      postShedRung: 'full',
       renderBudget: {
         enabled: true,
         mode: 'stable',
@@ -78,7 +85,7 @@ function baseSnapshot(): PerfSnapshot {
         stallHoldSeconds: 0,
         stableSeconds: 20,
         cooldownSeconds: 0,
-        levels: { grass: 1, foliage: 1, vfx: 1, lighting: 1, resolution: 1 },
+        levels: { grass: 1, foliage: 1, vfx: 1, lighting: 1, resolution: 1, detail: 1, post: 1 },
         caps: {
           targetCalls: 620,
           urgentCalls: 860,
@@ -95,6 +102,13 @@ function baseSnapshot(): PerfSnapshot {
       pixelRatio: 1.5,
       width: 1440,
       height: 900,
+      drawingBuffer: {
+        width: 1728,
+        height: 1080,
+        cssWidth: 1440,
+        cssHeight: 900,
+        dynamicResolution: false,
+      },
       calls: 300,
       triangles: 1_000_000,
       geometries: 200,
@@ -115,9 +129,22 @@ function baseSnapshot(): PerfSnapshot {
         submit: digest(4),
         total: digest(9),
       },
+      nameplates: { paints: 0, paintsSkipped: 0 },
       renderDiagnostics: {} as never,
       nightAmount: 0,
       prewarm: null,
+      castVfx: { ready: true, refused: 0, pending: 0, forced: false },
+      entryDetailHorizon: {
+        active: false,
+        cap: 700,
+        sceneryCap: null,
+        targetFar: 700,
+        nextCap: null,
+        stableFrames: 0,
+        armedAtMs: null,
+        holdReason: 'inactive',
+        transitions: [],
+      },
       gpuQueue: {
         units: 0,
         totalSyncMs: 0,
@@ -134,6 +161,7 @@ function baseSnapshot(): PerfSnapshot {
         stalls: [],
         worstWaitMs: 0,
         longestWaits: [],
+        admission: { enabled: false, deferred: 0, parks: 0 },
         recent: {
           windowMs: 30000,
           units: 0,
@@ -145,6 +173,63 @@ function baseSnapshot(): PerfSnapshot {
           lanes: [],
         },
       },
+      gpuPrep: {
+        budget: {
+          frameEmaMs: 16.7,
+          headroomMs: 1.5,
+          spentThisFrameMs: 0,
+          legacy: false,
+          degrading: false,
+          kinds: [],
+          decisions: {
+            'actionable-floor': 0,
+            fits: 0,
+            progress: 0,
+            starvation: 0,
+            legacy: 0,
+            'first-sample': 0,
+            cover: 0,
+            'no-headroom': 0,
+            'unknown-cap': 0,
+            pressure: 0,
+            'cover-not-arrival': 0,
+          },
+        },
+        events: {
+          total: 0,
+          dropped: 0,
+          counts: {
+            'reveal-watchdog': 0,
+            'reveal-soft-deadline': 0,
+            'attach-watchdog': 0,
+            'gate-timeout': 0,
+            'submit-stop': 0,
+            'live-program': 0,
+            arrival: 0,
+            'touch-unproven': 0,
+          },
+          events: [],
+          reveal: {
+            keysHeld: 0,
+            rootsHeld: 0,
+            rootsPiecewise: 0,
+            rootsReach: 0,
+            rootsAtWatchdog: 0,
+            imminentHolds: 0,
+          },
+          gates: { spiritSpawnsRefused: 0 },
+          portraits: {
+            transferCaptures: 0,
+            readbackCaptures: 0,
+            canvasCaptures: 0,
+            transferLatches: 0,
+            readbackLatches: 0,
+          },
+        },
+      },
+      buildLedger: { kinds: {}, worstFrame: { ms: 0, count: 0, atMs: 0 }, slowest: [] },
+      lookPieces: { pending: 0, completedPieces: 0, bandsRun: 0, deferred: 0, attached: 0 },
+      zoneStreaming: { prepared: 1, pending: 0, last: null },
     },
     hud: { hotDomWrites: 10, hotDomSkippedWrites: 90, hotDomSkipRate: 0.9 },
     assets: {
@@ -156,6 +241,9 @@ function baseSnapshot(): PerfSnapshot {
     netPipeline: null,
     heapSawtooth: null,
     hitchForensics: [],
+    postRevealLinks: null,
+    shaderWarmAudit: shaderWarmAuditSnapshot(),
+    shaderWarm: shaderWarmSnapshot(),
     input: {
       intents: 20,
       lastKind: 'move',
@@ -249,7 +337,15 @@ describe('diagnosePerfSnapshot', () => {
     snapshot.hitches = {
       frames: 600,
       hitches: 6,
-      byCause: { 'shader-compile': 3, 'texture-upload': 1, 'view-create': 2, other: 0 },
+      byCause: {
+        'shader-compile': 3,
+        'texture-upload': 1,
+        'zone-build': 0,
+        'view-create': 2,
+        gc: 0,
+        'off-frame': 0,
+        other: 0,
+      },
       programGrowthFrames: 3,
       programsAdded: 8,
       recent: [],
@@ -269,7 +365,15 @@ describe('diagnosePerfSnapshot', () => {
     snapshot.hitches = {
       frames: 600,
       hitches: 80,
-      byCause: { 'shader-compile': 0, 'texture-upload': 0, 'view-create': 0, other: 80 },
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 0,
+        gc: 0,
+        'off-frame': 0,
+        other: 80,
+      },
       programGrowthFrames: 0,
       programsAdded: 0,
       recent: [],
@@ -285,12 +389,186 @@ describe('diagnosePerfSnapshot', () => {
       diagnosePerfSnapshot(snapshot).findings.some((finding) => finding.id === 'hitch-other'),
     ).toBe(true);
   });
+  it('caps the three unattributed hitch families at one shared score deduction', () => {
+    // gc, off-frame and other were ONE bucket before the tracker learned to
+    // separate them, and one capture can trip all three off the same long
+    // frames. Ungrouped that is three criticals, 105 points, and the score a
+    // player reads collapses to zero on a single diagnostic refinement.
+    const snapshot = baseSnapshot();
+    makeSlow(snapshot);
+    snapshot.hitches = {
+      frames: 600,
+      hitches: 12,
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 0,
+        gc: 4,
+        'off-frame': 4,
+        other: 4,
+      },
+      programGrowthFrames: 0,
+      programsAdded: 0,
+      recent: [],
+    };
+
+    const diagnosis = diagnosePerfSnapshot(snapshot);
+    const unattributed = ['hitch-gc', 'hitch-off-frame', 'hitch-other'];
+    // All three findings are still FILED: only the arithmetic is grouped.
+    expect(diagnosis.findings.map((finding) => finding.id).sort()).toEqual(
+      [...unattributed].sort(),
+    );
+    for (const id of unattributed) {
+      expect(diagnosis.findings.find((finding) => finding.id === id)?.severity).toBe('critical');
+    }
+    expect(diagnosis.status).toBe('critical');
+    // One critical deduction between them, exactly what the single bucket cost.
+    expect(diagnosis.score).toBe(65);
+
+    // A NAMED family is not in the group, so it still deducts on its own: the
+    // cap is a shared bucket, never a blanket discount on hitch findings.
+    snapshot.hitches.byCause['zone-build'] = 4;
+    snapshot.hitches.hitches = 16;
+    const withNamed = diagnosePerfSnapshot(snapshot);
+    expect(withNamed.findings.some((finding) => finding.id === 'hitch-zone-build')).toBe(true);
+    expect(withNamed.score).toBe(30);
+  });
+
+  it('scores a healthy capture at 100 and a single unattributed family at 65', () => {
+    // The healthy end of the same pin: nothing fires, nothing is deducted.
+    expect(diagnosePerfSnapshot(baseSnapshot()).score).toBe(100);
+
+    const snapshot = baseSnapshot();
+    makeSlow(snapshot);
+    snapshot.hitches = {
+      frames: 600,
+      hitches: 4,
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 0,
+        gc: 0,
+        'off-frame': 0,
+        other: 4,
+      },
+      programGrowthFrames: 0,
+      programsAdded: 0,
+      recent: [],
+    };
+    // One family alone reaches the cap, so the group's cap changes nothing here.
+    expect(diagnosePerfSnapshot(snapshot).score).toBe(65);
+  });
+
+  it('names zone streaming builds with the renderer streaming sources', () => {
+    const snapshot = baseSnapshot();
+    snapshot.hitches = {
+      frames: 600,
+      hitches: 3,
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 3,
+        'view-create': 0,
+        gc: 0,
+        'off-frame': 0,
+        other: 0,
+      },
+      programGrowthFrames: 0,
+      programsAdded: 0,
+      recent: [],
+    };
+    const finding = diagnosePerfSnapshot(snapshot).findings.find(
+      (item) => item.id === 'hitch-zone-build',
+    );
+    expect(finding?.severity).toBe('critical');
+    expect(finding?.confidence).toBe('high');
+    expect(finding?.sourceFiles).toEqual([
+      'src/render/renderer.ts',
+      'src/render/zone_streaming.ts',
+    ]);
+    expect(finding?.title).toBe('Zone streaming builds are causing hitches');
+  });
+
+  it('treats gc hitches like unattributed ones: medium confidence, only while the recent window is slow', () => {
+    const snapshot = baseSnapshot();
+    snapshot.hitches = {
+      frames: 600,
+      hitches: 4,
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 0,
+        gc: 4,
+        'off-frame': 0,
+        other: 0,
+      },
+      programGrowthFrames: 0,
+      programsAdded: 0,
+      recent: [],
+    };
+    // Scavenges coincide with long frames on every capture: a healthy window
+    // files nothing.
+    expect(diagnosePerfSnapshot(snapshot).findings.some((item) => item.id === 'hitch-gc')).toBe(
+      false,
+    );
+    makeSlow(snapshot);
+    const finding = diagnosePerfSnapshot(snapshot).findings.find((item) => item.id === 'hitch-gc');
+    expect(finding?.severity).toBe('critical');
+    expect(finding?.confidence).toBe('medium');
+    expect(finding?.title).toBe('Garbage collections are running inside long frames');
+    expect(finding?.sourceFiles).toEqual([
+      'src/render/renderer.ts',
+      'src/render/characters/visual.ts',
+    ]);
+  });
+
+  it('treats off-frame hitches like unattributed ones: only while the recent window is slow', () => {
+    const snapshot = baseSnapshot();
+    snapshot.hitches = {
+      frames: 600,
+      hitches: 5,
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 0,
+        gc: 0,
+        'off-frame': 5,
+        other: 0,
+      },
+      programGrowthFrames: 0,
+      programsAdded: 0,
+      recent: [],
+    };
+    expect(
+      diagnosePerfSnapshot(snapshot).findings.some((item) => item.id === 'hitch-off-frame'),
+    ).toBe(false);
+    makeSlow(snapshot);
+    const finding = diagnosePerfSnapshot(snapshot).findings.find(
+      (item) => item.id === 'hitch-off-frame',
+    );
+    expect(finding?.confidence).toBe('medium');
+    expect(finding?.title).toBe('Long frames come from work outside the render callback');
+    expect(finding?.sourceFiles).toEqual(['src/game/perf.ts', 'src/main.ts']);
+  });
+
   it('requires a recurring or materially long view-create event before assigning blame', () => {
     const snapshot = baseSnapshot();
     snapshot.hitches = {
       frames: 600,
       hitches: 1,
-      byCause: { 'shader-compile': 0, 'texture-upload': 0, 'view-create': 1, other: 0 },
+      byCause: {
+        'shader-compile': 0,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 1,
+        gc: 0,
+        'off-frame': 0,
+        other: 0,
+      },
       programGrowthFrames: 0,
       programsAdded: 0,
       recent: [
@@ -301,6 +579,10 @@ describe('diagnosePerfSnapshot', () => {
           programDelta: 0,
           textureDelta: 0,
           createdViews: 1,
+          zoneBuildMs: 0,
+          viewBuildMs: 0,
+          rendererMs: 30,
+          heapDropMb: 0,
           cause: 'view-create',
         },
       ],
@@ -442,7 +724,15 @@ describe('diagnosePerfSnapshot', () => {
     snapshot.hitches = {
       frames: 600,
       hitches: 1,
-      byCause: { 'shader-compile': 1, 'texture-upload': 0, 'view-create': 0, other: 0 },
+      byCause: {
+        'shader-compile': 1,
+        'texture-upload': 0,
+        'zone-build': 0,
+        'view-create': 0,
+        gc: 0,
+        'off-frame': 0,
+        other: 0,
+      },
       programGrowthFrames: 1,
       programsAdded: 2,
       recent: [],

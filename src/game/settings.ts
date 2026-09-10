@@ -44,10 +44,18 @@ export const SETTING_RANGES = {
   // still means Low and a stored 1 still means High.
   terrainDetail: { min: 0, max: 2, def: 1 },
   foliageDensity: { min: 0, max: 2, def: 1 },
+  // The shader warm-up worker (src/game/shader_warm_setting.ts): 0 auto
+  // (follows the GPU backend), 1 off, 2 on. Read at the next start.
+  shaderWarm: { min: 0, max: 2, def: 0 },
+  // The desktop shell's graphics backend on Linux
+  // (src/game/desktop_gpu_backend_sync.ts): 0 auto (one Vulkan trial),
+  // 1 Vulkan, 2 OpenGL. Mirrors the shell prefs store; next launch.
+  gpuBackend: { min: 0, max: 2, def: 0 },
   effectsQuality: { min: 0, max: 1, def: 1 },
-  // Capped at High (the 4096 map): the retired Insane rung's 8192x8192 shadow
-  // target was a ~256 MB-class GPU allocation redrawn every frame. A stored
-  // historical 2 clamps to 1 on load, and gfx.ts maps it to the High base too.
+  // Capped at High (the 4096 map, above the High tier's own 2560 base): the
+  // retired Insane rung's 8192x8192 shadow target was a ~256 MB-class GPU
+  // allocation redrawn every frame. A stored historical 2 clamps to 1 on
+  // load, and gfx.ts maps it to the same top rung.
   shadowQuality: { min: 0, max: 1, def: 1 },
   // The worn-surface triplanar layer dial (0 Off, 0.5 Basic, 1 Full, 2
   // Insane), new in round 10: the town-street frame-cost dial.
@@ -127,8 +135,17 @@ export const SETTING_RANGES = {
   gamepadStickDeadzone: { min: 0.05, max: 0.4, def: 0.18 },
   // Right-stick camera turn/pitch rate, in radians/sec at full deflection.
   gamepadCameraSpeed: { min: 0.5, max: 5, def: 2.4 },
+  // Left-stick ground-reticle movement multiplier while placing an ability.
+  gamepadReticleSpeed: { min: 0.5, max: 2, def: 1 },
   // Rumble intensity (0 silences haptics without disabling the pad entirely).
   gamepadVibration: { min: 0, max: 1, def: 1 },
+  // Printed controller glyph family: 0 Auto, 1 Xbox, 2 PlayStation, 3 Nintendo.
+  // Auto follows Gamepad.id detection and retains generic labels when anonymized.
+  gamepadGlyphStyle: { min: 0, max: 3, def: 0 },
+  // How much of itself the cross hotbar shows: 0 full (framed, both halves
+  // labelled), 1 compact (no frame, labels only on the armed half), 2 minimal
+  // (nothing until a trigger is held). A taste call, so it is a setting.
+  gamepadCrossHotbarDisplay: { min: 0, max: 2, def: 0 },
 
   // --- Interface & Comfort pack: presentational HUD tuning, applied via CSS
   // custom properties in main.ts. All default to 1.0 (unchanged look) and are
@@ -136,14 +153,25 @@ export const SETTING_RANGES = {
   // Scales the hover tooltip's text so small-screen / low-vision players can
   // read item & ability tooltips without squinting.
   tooltipScale: { min: 0.85, max: 1.5, def: 1 },
-  // Scales the combat-log / chat text independently of tooltips.
-  chatFontScale: { min: 0.85, max: 1.4, def: 1 },
+  // Scales the combat-log / chat text independently of tooltips. The ceiling
+  // is 2.5 (not the 1.4 the other comfort scales stop near) because chat is
+  // 11px at stock: on a 4K display at 100% OS scaling, 1.4 still leaves it
+  // unreadable, and 2.0 is what restores 1080p-equivalent size. 2.5 leaves
+  // headroom for low-vision players and TV distances.
+  chatFontScale: { min: 0.85, max: 2.5, def: 1 },
   // Dims the chat frame's backdrop so it obscures less of the world (1 = the
   // classic opaque frame, lower = more see-through).
   chatOpacity: { min: 0.3, max: 1, def: 1 },
   // Scales floating combat text (the damage/heal numbers over units). Bigger
   // for readability on a TV; smaller to declutter a busy fight.
   fctScale: { min: 0.7, max: 1.8, def: 1 },
+  // How large the nameplate dot row draws, 100% to 300% of the plate-native
+  // size. Plate space is small and the row's countdown is a number a player
+  // reads mid-fight, so 100% is deliberately the FLOOR rather than the middle:
+  // the slider only ever makes it bigger. Defaults to 150% because the native
+  // size measured too small to read at a glance (owner feedback). The renderer
+  // sees this multiplied by the showNameplateDots toggle, so 0 means off.
+  nameplateDotScale: { min: 1, max: 3, def: 1.5 },
   // Fades the HUD panels & windows as a whole; lets players see more of the
   // world behind their frames without hiding them entirely.
   hudOpacity: { min: 0.5, max: 1, def: 1 },
@@ -160,22 +188,68 @@ export const SETTING_RANGES = {
   // The target frame's twin of playerFrameScale, via --target-frame-scale.
   // Same children-zoom trick (the frame itself is drag-positioned). 1.0 = stock.
   targetFrameScale: { min: 0.7, max: 1.15, def: 1 },
+  // Real-dimension sizing for the player/target unit frames, the raid-frame
+  // model: the interface editor's edge drags write these settings, so the
+  // bars RE-LAY-OUT at their crisp text size instead of transform-stretching.
+  // playerFrameWidth is the frame's full row width (--player-frame-width;
+  // stock 612 = the 520px bars panel plus 92px of portrait chrome), while
+  // targetFrameWidth is that frame's bars-panel width (--target-frame-width,
+  // stock 190). The two heights are the hp/resource BAR thickness in px
+  // (--player-frame-height / --target-frame-height, stock 15).
+  playerFrameWidth: { min: 300, max: 900, def: 612 },
+  playerFrameHeight: { min: 8, max: 30, def: 15 },
+  targetFrameWidth: { min: 100, max: 320, def: 190 },
+  targetFrameHeight: { min: 8, max: 30, def: 15 },
+  // Health text on the player frame and on the target (plus target-of-target)
+  // frame, same mode table as partyFrameHealthText below; both default to the
+  // historical always-on "current / max".
+  playerFrameHealthText: { min: 0, max: 4, def: 3 },
+  targetFrameHealthText: { min: 0, max: 4, def: 3 },
   // WoW-style party/raid frame profile. Width/height are CSS pixels before the
   // independent scale; columns and spacing let raids grow across rather than
   // covering the whole left edge. style: 0 automatic, 1 classic, 2 raid frames.
-  // healthTextMode: 0 none, 1 percent, 2 current, 3 current/max.
+  // healthTextMode (party, player and target frames alike): 0 none, 1 percent,
+  // 2 current, 3 current/max, 4 current/max (percent).
   // partyFrameSort: 0 group, 1 role, 2 name.
   partyFrameStyle: { min: 0, max: 2, def: 0 },
   partyFrameScale: { min: 0.7, max: 1.4, def: 1 },
-  partyFrameWidth: { min: 120, max: 260, def: 170 },
-  partyFrameHeight: { min: 30, max: 72, def: 42 },
+  partyFrameWidth: { min: 80, max: 260, def: 170 },
+  partyFrameHeight: { min: 20, max: 72, def: 42 },
   partyFrameSpacing: { min: 0, max: 12, def: 4 },
   partyFrameColumns: { min: 1, max: 5, def: 1 },
-  partyFrameHealthText: { min: 0, max: 3, def: 1 },
+  partyFrameHealthText: { min: 0, max: 4, def: 1 },
   partyFrameSort: { min: 0, max: 2, def: 0 },
 } as const;
 
 export const BOOL_SETTINGS = {
+  // Icon flow of the standalone buff/debuff rows (the Frames Settings menu in
+  // edit mode). Off = the stock right-to-left growth (the rows anchor beside
+  // the minimap and fill toward the screen centre); on = left to right, via
+  // --buff-bar-direction / --debuff-bar-direction in main.ts.
+  buffsLeftToRight: { def: false },
+  debuffsLeftToRight: { def: false },
+  // Orientation flips (the Frames Settings menu): lay a desktop action bar
+  // out as a COLUMN instead of a row, PER BAR so split bars mix freely
+  // (owner request); the combined block follows bar 1's orientation and the
+  // menu shows one toggle that drives all three while combined. The corner
+  // menu rail flips to a ROW instead of its stock two stacked columns. Pure
+  // CSS via element/body classes in main.ts.
+  actionBar1Vertical: { def: false },
+  actionBar2Vertical: { def: false },
+  actionBar3Vertical: { def: false },
+  menuRailHorizontal: { def: false },
+  // Arrange-mode drag snapping (the editor's Snap to Grid toggle): dragged
+  // frames land on the shared FRAME_SNAP_GRID so layouts align without
+  // pixel hunting. Off by default: snapping surprises a player who wants
+  // pixel placement, and the toggle lives beside the gesture it changes.
+  frameSnapToGrid: { def: false },
+  // Glue the player frame to the TOP of the action bars (the Frames Settings
+  // menu): the frame gives up its own dragged spot (kept in storage for
+  // switching back) and re-docks over the bars, riding along when the
+  // combined block is moved and when bar 2 or 3 is added or removed. While
+  // on, the frame itself is not individually movable. Hud.
+  // setLockPlayerFrameToActionBar owns the mechanics.
+  lockPlayerFrameToActionBar: { def: false },
   mouseCamera: { def: false },
   // on by default: while a camera drag is active, pointer-lock the canvas so the
   // OS cursor cannot leave the window during rotation (otherwise it hits the
@@ -187,6 +261,13 @@ export const BOOL_SETTINGS = {
   // off by default: invert the vertical axis of the right-stick camera, the
   // classic console/flight-sim preference. Independent of mouse/touch invert.
   gamepadInvertY: { def: false },
+  // on by default: the trigger-modifier cross hotbar. Holding a trigger lights
+  // eight action-bar slots on the d-pad and face diamonds. Off restores the flat
+  // one-action-per-button pad layout, triggers included.
+  gamepadCrossHotbar: { def: true },
+  // on by default: tapping the opposite trigger while holding swaps the cross
+  // hotbar to its second set. Off pins it to the first sixteen slots.
+  gamepadCrossHotbarExpand: { def: true },
   // off by default: mirrors the touch layout so the movement joystick sits on
   // the right and the camera joystick on the left, for left-thumb-dominant
   // players. CSS-only swap gated on body.mobile-left-handed; ignored on desktop.
@@ -196,6 +277,17 @@ export const BOOL_SETTINGS = {
   // gameplay space is the primary camera path; this is an opt-in alternative for
   // players who prefer a dedicated stick. Gated on body.mobile-camera-joystick-on.
   mobileCameraJoystick: { def: false },
+  // on by default: touch position abilities enter ground aim before casting.
+  // Turning it off casts immediately at the smart seed point instead.
+  touchPreciseGroundAim: { def: true },
+  // off by default: replaces every touch gesture menu (the action radial, the
+  // consumables row, the menu control) with a tap-only flow. Opening a menu casts
+  // nothing, a second tap on the control runs its default action, and a tap
+  // outside dismisses. This is what closes WCAG 2.5.1 (Pointer Gestures) for the
+  // touch HUD: without it the 16 directional actions are reachable only by a
+  // path-based flick, and it is also the answer for players who cannot hold and
+  // drag reliably.
+  touchTapMenus: { def: false },
   // on by default: mask configured swear words in chat with ****. Purely a
   // local display choice; the server sends raw text and each client decides.
   // (Slurs are blocked server-side regardless and never reach here.)
@@ -243,12 +335,29 @@ export const BOOL_SETTINGS = {
   groundReticle: { def: true },
   // off by default: anchor the player's own BUFF row to the movable player
   // frame instead of the classic top-right corner. hud.ts reparents the buff
-  // bar into #player-frame (above it while docked over the action bars, below
-  // it once the frame is moved), so it follows the frame's spot and scale; the
+  // bar into #player-frame, where it sits above the frame by default; the
   // debuff row stays put in the DOM and slides up beside the minimap (the
   // vacated top spot) so incoming debuffs keep one glanceable classic corner.
   // Desktop only; the mobile layout keeps its own aura placement.
   aurasOnPlayerFrame: { def: false },
+  // off by default (buffs sit above the frame): flips the anchored buff row to
+  // below the frame instead. Only visible when aurasOnPlayerFrame is on. Purely
+  // presentational (main.ts toggles body.auras-below-frame; hud.css keys off
+  // it), so it is a deliberate player choice, independent of whether the frame
+  // has been moved: the row used to flip above/below based on the frame's
+  // dragged (pf-detached) state, which meant moving the frame even once
+  // silently and permanently relocated the buffs with no way back short of a
+  // full frame reset. See hud.css #player-frame > #buff-bar.
+  auraBarBelowFrame: { def: false },
+  // off by default: bypass the low graphics preset's buff-icon cap
+  // (AURA_VISIBLE_CAP_LOW, src/game/ui_tier_knobs.ts) so every active buff
+  // always renders in #buff-bar, at the cap's per-frame cost. The cap itself
+  // stays the sane default for the weak-device population Low targets; this is
+  // an explicit opt-in for a player who would rather pay that cost than ever
+  // lose a buff icon to it (player feedback on PR #3668). Read by
+  // AurasPainter's getFxTier closure (hud.ts), never by ui_tier_knobs.ts
+  // itself, so no OTHER low-tier knob is affected.
+  alwaysShowAllBuffs: { def: false },
   // on by default: Clique-style mouseover casting. Pressing an action-bar key
   // for a friendly (heal/buff) ability while the cursor is over a party frame
   // casts it on the hovered member without touching the current target (read
@@ -311,6 +420,36 @@ export const BOOL_SETTINGS = {
   // decluttering crowded hubs on short mobile viewports. Purely a local display
   // preference; mob nameplates and unit frames are unaffected.
   showPlayerNameplates: { def: true },
+  // on by default: draw the LOCAL player's own debuffs as a small icon row on an
+  // enemy's overhead nameplate, between the name row and the health bar, each with
+  // a cooldown swipe and a countdown. Only YOUR debuffs, on mobs only; the group's
+  // stay on the target frame strip, which is the clutter this row exists to avoid.
+  // Class-agnostic (ownership plus isDebuffAura, never an ability list) and never
+  // graphics-tier gated: these are timers a player acts on.
+  showNameplateDots: { def: true },
+  // on by default: the Target dots frame (#target-dots), the multi-target tracker
+  // listing every debuff YOU have out across every enemy in interest range, one
+  // bar row each with a live countdown. Hidden entirely while you have no dots
+  // out, so the default costs a player who never uses it nothing.
+  showTargetDots: { def: true },
+  // The six aura tracks (src/ui/hud/aura_tracks/): bars listing the player's OWN
+  // beneficial auras, one frame per question. ALL OFF BY DEFAULT and opted into
+  // individually: six frames on at once would put roughly twenty rows on screen
+  // for a healer in a raid, on a first login, for a player who asked for none of
+  // it. The options panel is the discovery surface. None is graphics-tier gated:
+  // these are timers a player acts on, so the setting is the only switch.
+  showDefensivesTrack: { def: false },
+  showSelfBuffTrack: { def: false },
+  showOffensiveTrack: { def: false },
+  showUtilityTrack: { def: false },
+  showFriendlyTrack: { def: false },
+  showShieldTrack: { def: false },
+  // A sub-option of the Movement and Stealth track, the only track that carries
+  // MODE rows: the utility modes (stealth, travel form, Ghost Wolf) are steady
+  // chips rather than timers, so a player who wants Dash timed may not want a
+  // permanent stealth row parked in the bar. It is a plain row in the Combat
+  // tab (not nested); it simply has no effect while that track is off.
+  showUtilityModes: { def: true },
   // off by default: invert the vertical axis of mouselook (push mouse forward
   // to look down), the classic flight-sim preference.
   invertLookY: { def: false },
@@ -356,6 +495,12 @@ export const BOOL_SETTINGS = {
   // collapsed to just its header. Toggled by clicking the tracker header (the
   // quest-tracker convention); kept here so the choice persists.
   reliquaryTrackerCollapsed: { def: false },
+  // on by default: the on-screen Reliquary tracker (pinned pages, or the
+  // nearly-complete default before any pin) is shown at all. The master
+  // switch above the collapse: off removes the strip entirely. Flipped from
+  // The Reliquary window's eye toggle and the Interface options row; pinning
+  // a page while it is off turns it back on.
+  showReliquaryTracker: { def: true },
   // off by default: append an "Item Level N" (plus power score) line to every item
   // tooltip. Purely a display preference read live by the HUD; off keeps the
   // classic stat-only tooltip. See src/sim/item_level.ts for the derivation.
@@ -369,6 +514,11 @@ export const BOOL_SETTINGS = {
   // 23..33). main.ts enforces that this row can only remain enabled while the
   // secondary row is visible. Mobile exposes the same slots through ring pages.
   showThirdActionBar: { def: false },
+  // off by default: merges the three desktop action bar rows into ONE movable
+  // frame (#actionbar-group) instead of three independent ones, so the whole
+  // block is placed as a single piece under the "Unlock interface" option.
+  // Purely a layout preference; every slot keeps its keybind either way.
+  combineActionBars: { def: false },
   // off by default (the classic look, unchanged out of the box): strips the black
   // background, border, and keybind label from desktop action-bar slots that hold
   // no ability or item, via a body class main.ts toggles (issue 2429). The fixed
@@ -390,6 +540,12 @@ export const BOOL_SETTINGS = {
   // preference read by the HUD's target-frame update; the id it reads already rides
   // the wire, and the frame hides itself when the target-of-target is unknown.
   showTargetOfTarget: { def: false },
+  // off by default: the target and target-of-target's own melee/ranged swing
+  // timer bars, under the target frame. Purely a display preference read by
+  // the HUD's per-frame update; the swingTimer/autoAttack data already rides
+  // the wire (server/game.ts dynamicFields), and both bars hide themselves
+  // when the target (or its own target) is unknown or not auto-attacking.
+  showTargetSwingTimer: { def: false },
   // on by default: the pet health strip under the player frame (hunter / warlock /
   // mage). It paints only while the player actually HAS a pet, so the six petless
   // classes never see it and the default costs them nothing. Purely a display
@@ -399,6 +555,13 @@ export const BOOL_SETTINGS = {
   // on by default: keep the Daily Rewards chest launcher visible on the HUD. Hiding
   // it only removes the shortcut; rewards, eligibility, and the panel remain available.
   showDailyRewardsChest: { def: true },
+  // on by default (the safety net from the enchanted-offhand-vanishes report,
+  // #3547): a vendor sale of anything beyond true junk (see vendorSellIsInstant
+  // in bags_view.ts) opens a confirm prompt first, since an unhinted bag stack
+  // can shift position between clicks. Off restores the classic one-click
+  // instant sale for every item, for a player who would rather trade that
+  // safety net for speed.
+  confirmVendorSell: { def: true },
   // on by default (today's behavior, unchanged out of the box): mirrors the desktop
   // shell's GPU preference store, whose stored field is the INVERSE opt-out. The
   // shell asks the OS for the dedicated gaming GPU at launch; a MUXless laptop panel
@@ -482,6 +645,13 @@ export function clickMoveButtonLabel(value: number): string {
   return normalizeClickMoveButton(value) === 2 ? 'Right Click' : 'Left Click';
 }
 
+/**
+ * Fired on `window` after any settings write is persisted. It exists for readers
+ * that would otherwise rebuild the whole store to answer one question on a hot
+ * path (`tapMenusEnabled`), so they can cache and invalidate instead.
+ */
+export const SETTINGS_CHANGE_EVENT = 'woc:settingschange';
+
 export class Settings {
   private values: GameSettings;
 
@@ -510,6 +680,16 @@ export class Settings {
     } catch {
       /* storage unavailable */
     }
+    // Every consumer here holds its OWN Settings instance (the options panel
+    // writes through one, main.ts through another), so a live reader that caches
+    // a value cannot see the write any other way. One broadcast per persisted
+    // write, which is a player action, never a frame.
+    // Guarded on the METHOD, not on `window`: several Node suites stub a partial
+    // window global, and a settings write must never throw on a host that has no
+    // event target to broadcast into.
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new Event(SETTINGS_CHANGE_EVENT));
+    }
   }
 
   get<K extends keyof GameSettings>(key: K): GameSettings[K] {
@@ -518,6 +698,16 @@ export class Settings {
 
   all(): GameSettings {
     return { ...this.values };
+  }
+
+  /**
+   * The nameplate dot row's drawn SIZE for the renderer: the scale slider gated
+   * by the show toggle, so 0 means "draw no row at all". The two settings fold
+   * here rather than at each of main.ts's three apply sites, so the toggle and
+   * the slider can never disagree about whether the row is on.
+   */
+  nameplateDotRenderScale(): number {
+    return this.values.showNameplateDots ? this.values.nameplateDotScale : 0;
   }
 
   /** Validate every value, apply the whole patch, then persist the settings blob once. */

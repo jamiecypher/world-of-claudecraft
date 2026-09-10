@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_GAMEPAD_BINDINGS } from '../src/game/gamepad_map';
+import { CROSS_HOTBAR_SLOTS_PER_SET, seedCrossHotbarLayout } from '../src/game/cross_hotbar';
 import { abilitiesKnownAt } from '../src/sim/content/classes';
 import { computeTalentModifiers } from '../src/sim/content/talents';
 import type { PlayerClass } from '../src/sim/types';
@@ -20,6 +20,7 @@ import {
   loadoutKnownAbilityIds,
 } from '../src/ui/hud/action_bar/hotbar';
 import {
+  MOBILE_ACTION_BUTTONS,
   MOBILE_ACTION_PAGE_COUNT,
   MOBILE_ACTIONS_PER_PAGE,
   mobileButtonHasSourceSlot,
@@ -30,6 +31,7 @@ import {
   ownedDruidFormDefaultAbilityIds,
   shouldSeedOwnedSpecDefault,
 } from '../src/ui/hud/action_bar/owned_class_spec_defaults';
+import { RADIAL_DIRECTIONS } from '../src/ui/hud/action_bar/radial_action_core';
 
 const EXPECTED = {
   'hunter/beast_mastery': [
@@ -149,6 +151,7 @@ const EXPECTED = {
     'lesser_heal',
     'mind_flay',
     'power_word_fortitude',
+    'prayer_of_returning',
   ],
   'priest/holy': [
     'seraphic_vigil',
@@ -166,6 +169,7 @@ const EXPECTED = {
     'shadow_word_pain',
     'mind_flay',
     'power_word_fortitude',
+    'prayer_of_returning',
   ],
   'priest/shadow': [
     'shadow_word_pain',
@@ -215,6 +219,7 @@ const EXPECTED = {
     'regrowth',
     'healing_touch',
     'swiftmend',
+    'wildwake',
     'barkskin',
     'entangling_roots',
     'moonfire',
@@ -222,6 +227,7 @@ const EXPECTED = {
     'mark_of_the_wild',
     'thorns',
     'travel_form',
+    'grove_awakening',
   ],
 } as const;
 
@@ -271,7 +277,6 @@ function controllerFor(
     talentSpec: () => spec,
     knownAbilityIds: () => [...known],
     hasAura: () => false,
-    isInSportMatch: () => false,
     showAttackButton: () => true,
   });
 }
@@ -375,16 +380,23 @@ describe('owned class level 20 default action bars', () => {
     for (const { key, playerClass, spec, expected, known } of ownedSpecEntries()) {
       const source = new MemoryStorage();
       seedOwnedSpecBar(source, playerClass, spec, known);
-      const layout = captureActionBarLayout(source, playerClass, 'OwnedDefaultTester');
+      const layout = captureActionBarLayout(source, playerClass, 'OwnedDefaultTester', 'desktop');
 
       const destination = new MemoryStorage();
-      const restore = planActionBarRestore({ source: 'server', layout }, () => ({
-        v: 1,
-        forms: {},
-      }));
+      const restore = planActionBarRestore(
+        { source: 'server', profiles: { v: 2, profiles: { desktop: layout } } },
+        'desktop',
+        () => ({ v: 1, forms: {} }),
+      );
       expect(restore.action, key).toBe('apply-server');
       if (restore.action !== 'apply-server') throw new Error(`${key} did not restore from server`);
-      applyActionBarLayout(destination, playerClass, 'OwnedDefaultTester', restore.layout);
+      applyActionBarLayout(
+        destination,
+        playerClass,
+        'OwnedDefaultTester',
+        'desktop',
+        restore.layout,
+      );
 
       const imported = controllerFor(destination, playerClass, spec, known);
       imported.init();
@@ -392,8 +404,8 @@ describe('owned class level 20 default action bars', () => {
       const expectedBar = buildDefaultFormBar(expected, ACTION_BAR_ABILITY_SLOTS);
       expect(imported.actions, key).toEqual(expectedBar);
 
-      const reconnect = planActionBarRestore({ source: 'noop' }, () =>
-        captureActionBarLayout(destination, playerClass, 'OwnedDefaultTester'),
+      const reconnect = planActionBarRestore({ source: 'noop' }, 'desktop', (profile) =>
+        captureActionBarLayout(destination, playerClass, 'OwnedDefaultTester', profile),
       );
       expect(reconnect, key).toEqual({ action: 'none' });
       const reconnected = controllerFor(destination, playerClass, spec, known);
@@ -417,9 +429,22 @@ describe('owned class level 20 default action bars', () => {
   });
 
   it('keeps core actions visible and controller-bound, with every action reachable on mobile', () => {
-    const controllerActions = new Set(Object.values(DEFAULT_GAMEPAD_BINDINGS));
     for (const { key, expected } of ownedSpecEntries()) {
       const actions = buildDefaultFormBar(expected, ACTION_BAR_ABILITY_SLOTS);
+      // Controller reachability is the CROSS HOTBAR's now, not a flat slotN button
+      // binding: a pad reaches abilities by holding a trigger, and the bar is seeded
+      // from this same default loadout. Pinned as the exact per-set slices, in order:
+      // an empty-extras seed copies the bar, so merely asserting the bar's actions are
+      // somewhere in the layout cannot fail for any class content, while this catches a
+      // reordered seed, a narrower set, and a kit whose later actions stop landing on
+      // the second set (the only two sets a pad can reach).
+      const layout = seedCrossHotbarLayout(actions, []);
+      expect(layout[0], `${key} cross hotbar first set`).toEqual(
+        actions.slice(0, CROSS_HOTBAR_SLOTS_PER_SET),
+      );
+      expect(layout[1], `${key} cross hotbar second set`).toEqual(
+        actions.slice(CROSS_HOTBAR_SLOTS_PER_SET, CROSS_HOTBAR_SLOTS_PER_SET * 2),
+      );
       for (let index = 0; index < actions.length; index++) {
         if (!actions[index]) continue;
         const sourceSlot = index + 1;
@@ -428,20 +453,23 @@ describe('owned class level 20 default action bars', () => {
         if (index < 11) {
           expect(desktopRow, `${key} visible desktop slot ${sourceSlot}`).toBe(1);
         }
-        if (index < 8) {
-          expect(controllerActions, `${key} default controller slot ${sourceSlot}`).toContain(
-            `slot${sourceSlot}`,
-          );
-        }
+        // The touch ring reaches a slot as a (page, button, direction) triple:
+        // direction-major means a page's 20 slots are 4 buttons x 5 directions,
+        // with the direction index changing every MOBILE_ACTION_BUTTONS slots.
         const page = Math.floor(index / MOBILE_ACTIONS_PER_PAGE);
-        const button = index % MOBILE_ACTIONS_PER_PAGE;
+        const withinPage = index % MOBILE_ACTIONS_PER_PAGE;
+        const button = withinPage % MOBILE_ACTION_BUTTONS;
+        const direction = RADIAL_DIRECTIONS[Math.floor(withinPage / MOBILE_ACTION_BUTTONS)];
         expect(page, `${key} mobile slot ${sourceSlot}`).toBeLessThan(MOBILE_ACTION_PAGE_COUNT);
-        expect(mobileButtonHasSourceSlot(page, button), `${key} mobile slot ${sourceSlot}`).toBe(
-          true,
-        );
-        expect(sourceSlotForMobileButton(page, button), `${key} mobile slot ${sourceSlot}`).toBe(
-          sourceSlot,
-        );
+        expect(button, `${key} mobile slot ${sourceSlot}`).toBeLessThan(MOBILE_ACTION_BUTTONS);
+        expect(
+          mobileButtonHasSourceSlot(page, button, undefined, direction),
+          `${key} mobile slot ${sourceSlot}`,
+        ).toBe(true);
+        expect(
+          sourceSlotForMobileButton(page, button, direction),
+          `${key} mobile slot ${sourceSlot}`,
+        ).toBe(sourceSlot);
       }
     }
   });

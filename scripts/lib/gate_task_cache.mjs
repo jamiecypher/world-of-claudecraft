@@ -43,13 +43,34 @@ export const GATE_NON_CACHEABLE_TASKS = Object.freeze([
 export const GATE_CACHE_TASK_INVENTORY = Object.freeze({
   'i18n:gen': {
     inputs: [
+      // The resolved tables embed quest and NPC prose bundled from the sim
+      // and server sources, so those trees are cache-key inputs: without
+      // them a warm cache restores stale artifacts over a sim-prose change
+      // and the gate fails its own freshness diff (the harbor-town move,
+      // 2026-08-19).
+      'src/sim/**',
+      'server/**',
       'src/ui/i18n.catalog/**',
       'src/ui/i18n.locales/**',
       'src/ui/i18n.ts',
+      // The matcher DICT sources and the entity-name tables the scan bundles
+      // (scripts/i18n_scan.mjs loadSources): a sim/server DICT row, a talent or
+      // world-entity registration must move the cache key, or a warm gate
+      // restores a stale i18n.status.json over a fresh one. The globs cover
+      // both the base and .newlocales arms of each table; src/sim/** is already
+      // an input above, for the sim-prose reason recorded there.
+      'src/ui/sim_i18n*.ts',
+      'src/ui/server_i18n*.ts',
+      'src/ui/talent_i18n*.ts',
+      'src/ui/world_entity_i18n.ts',
+      // Transitively imported by the sim/server DICTs (tEntity), so its edits
+      // change scan output; a warm cache must not survive them.
+      'src/ui/entity_i18n.ts',
       'src/admin/i18n.en.ts',
       'src/admin/i18n.locales/**',
       'src/admin/i18n.ts',
       'scripts/i18n_*.mjs',
+      'scripts/lib/write_module_dir.mjs',
       'package.json',
     ],
     outputs: [
@@ -65,6 +86,14 @@ export const GATE_CACHE_TASK_INVENTORY = Object.freeze({
       'src/sim/**',
       'src/render/characters/manifest.ts',
       'src/ui/deed_image_ids.ts',
+      // Declared by the 11d QA close (b15964b1e5, "declare the catalog modules
+      // wiki:content actually reads"): the generator imports the i18n catalog,
+      // so a catalog edit must bust the cache. turbo.json gained the path then
+      // and this inventory did not, which left the pin red on the branch until
+      // Phase 11e's full-suite run surfaced it. The direction is
+      // inventory-follows-turbo: the declaration is correct and it is the pin
+      // that was stale, so removing the path would re-open a real cache hole.
+      'src/ui/i18n.catalog/**',
       'scripts/wiki/**',
       'package.json',
     ],
@@ -124,6 +153,13 @@ export const GATE_CACHE_TASK_INVENTORY = Object.freeze({
       'editor.html',
       'vite.config.ts',
       'tsconfig.json',
+      // Every script the build:bundle command line runs is an input, the pregen
+      // orchestrator included: it decides WHICH generators run before vite
+      // build, so an edit to it must bust the warm dist cache exactly as an
+      // edit to one of the generators does. tests/gate_task_cache.test.ts
+      // derives this obligation from the package.json command and
+      // PREGEN_STEPS, so a new pregen step cannot land undeclared.
+      'scripts/build_bundle_pregen.mjs',
       'scripts/build_sitemap.mjs',
       'scripts/build_sfx_manifest.mjs',
       'scripts/build_media_manifest.mjs',
@@ -155,7 +191,8 @@ export function turboRunArgs(tasks) {
 }
 
 /**
- * True when a gate step invokes turbo through npx for cacheable pure artifacts.
+ * True when a gate step invokes the node_modules/.bin/turbo binary for
+ * cacheable pure artifacts.
  * @param {string} cmd
  * @param {ReadonlyArray<string>} args
  */

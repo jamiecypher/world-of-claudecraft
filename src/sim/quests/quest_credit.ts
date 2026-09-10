@@ -6,7 +6,10 @@
 // through the seam; the foreign callers (handleDeath, the addItem/removeItem/buyBackItem
 // inventory hub, finalizeQuestAccept, interactNpcForQuests, and the N1 crypt
 // interactObjectForQuests) invoke them via ctx.onMobKilledForQuests /
-// ctx.onInventoryChangedForQuests / ctx.checkQuestReady.
+// ctx.onInventoryChangedForQuests / ctx.checkQuestReady. The farming action arm
+// (onCropFarmedForQuests) rides the seam too since the masterwrought Phase 18
+// fold: professions/farming.ts calls ctx.onCropFarmedForQuests beside its
+// sibling crediters (bound in buildSimContext like the rest).
 //
 // src/sim-pure: imports only sibling sim types + the QUESTS data table (no render/ui/
 // game/net/DOM/Three, no Math.random/Date.now), so it runs unchanged in Node, the
@@ -23,8 +26,16 @@ import {
   type QuestProgress,
   questObjectiveRequired,
 } from '../types';
+import { completeForgebreakerCraftQuest } from './forgebreaker_ember';
+import { ownedItemCount } from './quest_owned_count';
 
-function emitQuestProgress(
+/** The one questProgress emit: `${label}: ${cur}/${req}` text (matched by the
+ *  client i18n re-localizer, so every credit path must go through here rather
+ *  than hand-rolling the string) plus the wire fields the HUD tracker reads.
+ *  Exported for the island's sentinel-objective credit modules
+ *  (tutorial/gauntlet_run.ts, tutorial/signpost_read.ts), which bump their
+ *  count outside the discrete-objective walk below. */
+export function emitQuestProgress(
   ctx: SimContext,
   meta: PlayerMeta,
   qp: QuestProgress,
@@ -84,6 +95,7 @@ export function onRecipeCraftedForQuests(
     meta,
     (objective) => objective.type === 'craft' && objective.recipeId === recipeId,
   );
+  completeForgebreakerCraftQuest(ctx, recipeId, meta);
 }
 
 /** Credit a gather objective only after the node's authoritative grant succeeds. */
@@ -109,6 +121,30 @@ export function onNodeGatheredForQuests(
   });
 }
 
+/** Credit a farm objective only after the plant or harvest ACTION commits
+ *  (src/sim/professions/farming.ts plantCrop after the plot write and
+ *  harvestCrop after the grant, on EVERY harvest outcome, withered included:
+ *  the visit is the deed). The gather precedent: inventory cannot prove the
+ *  deed (produce is a fungible material and the seed is spent), so this arm
+ *  never reads bags. `cropId` narrows to one crop when the objective names
+ *  one; `patchId` is marker guidance only (quest_targets.ts) and never gates
+ *  the credit. Draws NO rng. */
+export function onCropFarmedForQuests(
+  ctx: SimContext,
+  action: 'plant' | 'harvest',
+  cropId: string,
+  meta: PlayerMeta,
+): void {
+  creditDiscreteQuestObjectives(
+    ctx,
+    meta,
+    (objective) =>
+      objective.type === 'farm' &&
+      objective.action === action &&
+      (objective.cropId === undefined || objective.cropId === cropId),
+  );
+}
+
 export function onInventoryChangedForQuests(ctx: SimContext, meta: PlayerMeta): void {
   // Inventory mutated (add/remove/sell/buyback all route through here): flag
   // the player's wire state dirty so hosts re-send bags + derived quest state.
@@ -126,9 +162,13 @@ export function onInventoryChangedForQuests(ctx: SimContext, meta: PlayerMeta): 
         // "Copper Ore delivered" objective sit at 0 while their bags filled
         // with fine copper ore, since eastbrook_vale is all tier-1 nodes and
         // the plain grade stops dropping for them entirely.
+        const carried = countAcrossGrades(obj.itemId, (id) => ctx.countItem(id, meta.entityId));
+        // An ownership objective (QuestDef.keepsCollectedItems) also counts
+        // worn equipment and bag sockets, so equipping the quest's item
+        // cannot un-complete it.
         const have = Math.min(
           required,
-          countAcrossGrades(obj.itemId, (id) => ctx.countItem(id, meta.entityId)),
+          quest.keepsCollectedItems ? ownedItemCount(carried, meta, obj.itemId) : carried,
         );
         if (have !== qp.counts[i]) {
           if (have > qp.counts[i]) meta.counters.questProgress += have - qp.counts[i];

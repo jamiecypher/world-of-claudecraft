@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RIFT_ESSENCE_ITEM_ID, RIFT_GEM_IDS } from '../src/sim/content/rift/items';
 import { ITEMS } from '../src/sim/data';
 import type { MarketCollection } from '../src/sim/market';
 import { MARKET_PLAYER_LISTING_ID_BASE } from '../src/sim/market_listing_ids';
@@ -273,7 +274,9 @@ describe('the World Market: the Merchant', () => {
       'linen_pouch',
     ]);
 
-    // gravewoven_bag is the 12-slot bag; the 6-slot Linen Pouch must drop out.
+    // gravewoven_bag is a 12-slot bag (duskweave_bag matches too since phase 05;
+    // this arm builds its own two-row book, so only the label matters); the
+    // 6-slot Linen Pouch must drop out.
     sim.marketSearch(q('', { itemType: 'bag', subtype: '12' }), viewer);
     expect(sim.marketInfoFor(viewer)?.listings.map((listing) => listing.itemId)).toEqual([
       'gravewoven_bag',
@@ -287,33 +290,50 @@ describe('the World Market: the Merchant', () => {
     // A fresh world must not answer the new Bags category with an empty list.
     sim.marketSearch(q('', { itemType: 'bag' }), viewer);
     const listings = sim.marketInfoFor(viewer)?.listings ?? [];
+    // Browse order, which is the book's name-then-price sort (Market.sortedBook), NOT
+    // the seed-array order: Burlap, Linen, Traveler's. The seed array's own tail-append
+    // ordering is what the listing-id case below pins.
     expect(listings.map((listing) => listing.itemId)).toEqual([
+      'burlap_reagent_pouch',
       'linen_pouch',
       'travelers_knapsack',
     ]);
     // At the vendor price, not an invented one: a house row cheaper than buyValue would
     // undercut the vendor selling the same bag, and house rows never deplete.
     expect(listings.map((listing) => listing.price)).toEqual([
+      ITEMS.burlap_reagent_pouch?.buyValue,
       ITEMS.linen_pouch?.buyValue,
       ITEMS.travelers_knapsack?.buyValue,
     ]);
     expect(ITEMS.linen_pouch?.buyValue).toBeGreaterThan(0);
+    // Only the VENDOR-sold bags are seeded. The crafted and drop-only bags phase 05
+    // added have no counter price to anchor a house row against, so they stay
+    // player-listed; this arm is what keeps a future bag from drifting into the seed.
+    expect(ITEMS.burlap_reagent_pouch?.buyValue).toBeGreaterThan(0);
   });
 
   // House ids come off one counter in stock-array order, house rows are reseeded every
   // boot and never persisted, and market_buy carries only the listing id. So a row added
   // anywhere but the END renumbers every row after it, and a client holding a browse list
   // across a server restart could click Buy on an id that now means a different item.
-  // This pins the two new bags as the LAST house rows, which is what makes that safe.
+  // This pins the bag rows as the LAST house rows, which is what makes that safe.
+  // Phase 05 of the bank-storage packet appended a third (burlap_reagent_pouch) behind
+  // the original two, so the block grew at the tail exactly as the rule requires.
   it('appends new standing stock so existing house listing ids keep their goods', () => {
     const sim = makeWorld();
     const house = sim.market.marketListings.filter((listing) => listing.house);
+    const BAG_STOCK = ['linen_pouch', 'travelers_knapsack', 'burlap_reagent_pouch'];
     const bagIds = house
-      .filter(
-        (listing) => listing.itemId === 'linen_pouch' || listing.itemId === 'travelers_knapsack',
-      )
+      .filter((listing) => BAG_STOCK.includes(listing.itemId))
       .map((listing) => listing.id);
-    expect(bagIds).toHaveLength(2);
+    expect(bagIds).toHaveLength(3);
+    // The tail order matters, not just the membership: the newest row must carry the
+    // highest id, or an older client's cached listing id would resolve to a new item.
+    expect(
+      house
+        .filter((listing) => BAG_STOCK.includes(listing.itemId))
+        .map((listing) => listing.itemId),
+    ).toEqual(BAG_STOCK);
     // Non-vacuity: there is a substantial block of older stock they must sit behind.
     expect(house.length).toBeGreaterThan(10);
     const olderIds = house.filter((listing) => !bagIds.includes(listing.id)).map((l) => l.id);
@@ -491,6 +511,34 @@ describe('the World Market: the Merchant', () => {
       expect(info.collectionSalesOmitted).toBe(0);
     });
 
+    it("stamps the sold copy's CHOSEN name, and nothing for a plain copy", () => {
+      // The listing row is spliced away the line after the ledger write, so
+      // the sale is the last moment anything knows what the copy was called.
+      // Without the stamp a seller with two listings of one id reads two
+      // identical Collect rows.
+      const { sim, seller, buyer } = world();
+      const named = { name: 'Dawn Oath' } as never;
+      sim.addItemInstance('wolf_fang', named, seller, 1, { silent: true });
+      sim.marketListInstance('wolf_fang', 1000, named, seller);
+      sim.marketBuy(
+        listingBy(
+          sim,
+          (l) => l.sellerKey === marketSellerKey(seller) && l.itemId === 'wolf_fang',
+          'named wolf_fang listing',
+        ).id,
+        buyer,
+      );
+      expect(marketInfo(sim, seller).collectionSales[0]).toMatchObject({
+        itemId: 'wolf_fang',
+        itemName: 'Dawn Oath',
+      });
+
+      // A PLAIN copy stamps nothing, so the field costs the common case zero
+      // bytes in the blob and on the wire.
+      const plain = sellOne(sim, seller, buyer, 'bone_fragments', 1, 500);
+      expect(plain.collectionSales[1].itemName).toBeUndefined();
+    });
+
     it('lists one row per sale, oldest first, and the rows sum to the proceeds', () => {
       const { sim, seller, buyer } = world();
 
@@ -558,7 +606,9 @@ describe('the World Market: the Merchant', () => {
       expect(copperOf(sim, seller)).toBe(950); // gold always lands
       expect(after.collectionCopper).toBe(0);
       expect(after.collectionSales).toEqual([]); // and its ledger left with it
-      expect(after.collectionItems).toEqual([{ itemId: 'bone_fragments', count: 1 }]);
+      expect(after.collectionItems).toEqual([
+        { itemId: 'bone_fragments', count: 1, materialSources: [{ source: {}, count: 1 }] },
+      ]);
     });
 
     // A 1-copper listing nets floor(1 * 0.95) = 0, so the sale leaves a row and no
@@ -621,6 +671,33 @@ describe('the World Market: the Merchant', () => {
         { itemId: 'wolf_fang', count: 2, price: 1000, proceeds: 950, buyerName: 'Buyer' },
       ]);
       expect(reloaded?.sales.omitted).toBe(0);
+    });
+
+    it("the sold copy's chosen name survives the round-trip too", () => {
+      // The arm above sells a PLAIN copy, so it could never see the name: the
+      // load path rebuilt each row from itemId/count/price/proceeds/buyerName
+      // and silently dropped itemName, which is exactly the logout the stamp
+      // exists to survive.
+      const { sim, seller, buyer } = world();
+      const named = { name: 'Dawn Oath' } as never;
+      sim.addItemInstance('wolf_fang', named, seller, 1, { silent: true });
+      sim.marketListInstance('wolf_fang', 1000, named, seller);
+      sim.marketBuy(
+        listingBy(
+          sim,
+          (l) => l.sellerKey === marketSellerKey(seller) && l.itemId === 'wolf_fang',
+          'named wolf_fang listing',
+        ).id,
+        buyer,
+      );
+      expect(marketInfo(sim, seller).collectionSales[0].itemName).toBe('Dawn Oath');
+
+      const sim2 = makeWorld();
+      sim2.loadMarket(sim.serializeMarket());
+      const reloaded = (
+        sim2.market as unknown as { marketCollections: Map<string, MarketCollection> }
+      ).marketCollections.get(marketSellerKey(seller));
+      expect(reloaded?.sales.entries[0].itemName).toBe('Dawn Oath');
     });
 
     it('writes no sales key for a collection holding only returns (old blobs unchanged)', () => {
@@ -764,7 +841,9 @@ describe('the World Market: the Merchant', () => {
     standAtMerchant(sim, seller);
     sim.addItemInstance('wolf_fang', { signer: 'Seller' }, seller, 1);
     sim.marketListInstance('wolf_fang', 500, { signer: 'Seller' }, seller);
-    const listing = listingBy(sim, (l) => !!l.instance, 'instanced listing');
+    // wolf_fang is a material: its legacy signer rides the listing's
+    // `materialSources` composition, not `instance`.
+    const listing = listingBy(sim, (l) => !!l.materialSources, 'instanced listing');
     listing.sellerKey = 'Seller';
     listing.sellerName = 'Seller';
     const internals = sim.market as unknown as {
@@ -780,7 +859,7 @@ describe('the World Market: the Merchant', () => {
     });
 
     expect(sim.rekeyMarketSeller(77, 'Seller', 'Renamed')).toBe(true);
-    expect(listing.instance?.signer).toBe('Renamed');
+    expect(listing.materialSources?.[0]?.source.signer).toBe('Renamed');
     expect(internals.marketCollections.get('77')?.items[0].instance?.signer).toBe('Renamed');
   });
 
@@ -793,12 +872,12 @@ describe('the World Market: the Merchant', () => {
     standAtMerchant(sim, seller);
     sim.addItemInstance('wolf_fang', { signer: 'Seller' }, seller, 1);
     sim.marketListInstance('wolf_fang', 500, { signer: 'Seller' }, seller);
-    const listing = listingBy(sim, (l) => !!l.instance, 'instanced listing');
+    const listing = listingBy(sim, (l) => !!l.materialSources, 'instanced listing');
     listing.sellerKey = 'somebody-else';
     listing.sellerName = 'Somebody Else';
 
     sim.rekeyMarketSeller(77, 'Seller', 'Renamed');
-    expect(listing.instance?.signer).toBe('Seller');
+    expect(listing.materialSources?.[0]?.source.signer).toBe('Seller');
   });
 
   it('rejects a purchase the buyer cannot afford', () => {
@@ -852,7 +931,9 @@ describe('the World Market: the Merchant', () => {
 
     expect(sim.marketListings.some((l) => l.id === listing.id)).toBe(false);
     const info = marketInfo(sim, seller);
-    expect(info.collectionItems).toEqual([{ itemId: 'wolf_fang', count: 1 }]);
+    expect(info.collectionItems).toEqual([
+      { itemId: 'wolf_fang', count: 1, materialSources: [{ source: {}, count: 1 }] },
+    ]);
   });
 
   it('refuses to deal with anyone who is not standing at the Merchant', () => {
@@ -909,6 +990,41 @@ describe('the World Market: the Merchant', () => {
     expect(errorsSince(sim).join(' ')).toMatch(/cannot be listed on the World Market/i);
     expect(sim.countItem('alien_armor_plate', seller)).toBe(1);
     expect(sim.marketListings.some((l) => l.sellerKey === marketSellerKey(seller))).toBe(false);
+  });
+
+  it('lists Rift Essence and Rift Gems: forge currency, not the personal rift gear it is spent on', () => {
+    const sim = makeWorld();
+    const seller = sim.addPlayer('warrior', 'Seller');
+    standAtMerchant(sim, seller);
+    sim.addItem(RIFT_ESSENCE_ITEM_ID, 5, seller);
+    for (const gemId of RIFT_GEM_IDS) sim.addItem(gemId, 5, seller);
+    sim.events.length = 0;
+
+    sim.marketList(RIFT_ESSENCE_ITEM_ID, 5, 100, seller);
+    for (const gemId of RIFT_GEM_IDS) sim.marketList(gemId, 5, 100, seller);
+
+    expect(errorsSince(sim)).toEqual([]);
+    expect(sim.countItem(RIFT_ESSENCE_ITEM_ID, seller)).toBe(0);
+    expect(
+      sim.marketListings.some(
+        (l) => l.itemId === RIFT_ESSENCE_ITEM_ID && l.sellerKey === marketSellerKey(seller),
+      ),
+    ).toBe(true);
+    for (const gemId of RIFT_GEM_IDS) {
+      expect(sim.countItem(gemId, seller)).toBe(0);
+      expect(
+        sim.marketListings.some(
+          (l) => l.itemId === gemId && l.sellerKey === marketSellerKey(seller),
+        ),
+      ).toBe(true);
+    }
+
+    // Mirror host: the personal rift rings (RIFT_GEAR_ITEM_IDS) stay blocked,
+    // unlike the currency above; the fix must not loosen that def-level rule.
+    sim.addItem('riftbound_band_of_might', 1, seller);
+    sim.events.length = 0;
+    sim.marketList('riftbound_band_of_might', 1, 100, seller);
+    expect(errorsSince(sim).join(' ')).toMatch(/cannot be listed on the World Market/i);
   });
 
   it('caps how many listings one seller may keep', () => {

@@ -150,4 +150,32 @@ export const table: ReliquaryLocaleTable = {
     name: 'Revringar',
     desc: 'De personliga revringarna, präglade åt varje mästare i gruppen som vinner första klarningen av en rankad Reva. En rollperson kan bara äga sin egen.',
   },
+  conquerors_ignivar: {
+    name: 'Degeln vid Sistakällan',
+    desc: 'Episkt byte från Ignivar, den sista lågans härold.',
+  },
+  conquerors_ignivar_heroic: {
+    name: 'Heroisk: Degeln vid Sistakällan',
+    desc: 'Vapen enbart från heroiskt läge, från Ignivar, den sista lågans härold.',
+  },
+  conquerors_varkhul: {
+    name: 'Den inre Smältdegeln',
+    desc: 'Episkt byte från Varkhul, den sista lågans smedjefader.',
+  },
+  conquerors_varkhul_heroic: {
+    name: 'Heroisk: Den inre Smältdegeln',
+    desc: 'Sköldar och vapen enbart från heroiskt läge, från Varkhul, den sista lågans smedjefader.',
+  },
+  conquerors_set_bramblehide: {
+    name: "Roots' Törnehud",
+    desc: 'Hela läderfamiljen Roots’ Törnehud.',
+  },
+  professions_crucible: {
+    desc: 'Elva raidtillverkade samlingar, var och en med en bröst-, midje- och fotdel. Manualer och formler är kunskap, inte reliker.',
+    name: 'Degelns hantverk',
+  },
+  professions_forgebreaker: {
+    name: 'Forgebrytaren',
+    desc: 'Sistakällans röst, befriad från smedjan och buren i en hammare du själv har skapat.',
+  },
 };

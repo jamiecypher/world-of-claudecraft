@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { PALADIN_BASTION_SWEEP_IMPACT_TIME } from '../src/render/characters/paladin_bastion_sweep_clip';
 import { MOBS } from '../src/sim/data';
 import { createMob } from '../src/sim/entity';
+import { VARKHUL_BOSS_ID } from '../src/sim/ignivar_raid_ids';
 import { activateDivineAscension, grantDevotion } from '../src/sim/paladin_devotion';
 import { Sim } from '../src/sim/sim';
-import type { Entity, SimEvent } from '../src/sim/types';
+import { type Entity, IGNIVAR_BOSS_ID, type SimEvent } from '../src/sim/types';
 import { groundHeight } from '../src/sim/world';
+import { WORLD_WITHOUT_HUB_YARD } from './helpers/hub_yard';
 
 type TestSim = Sim & {
   nextId: number;
@@ -23,7 +25,12 @@ type TestSim = Sim & {
 const OPEN_GROUND = { x: -60, z: -2 } as const;
 
 function makeProtection(): TestSim {
-  const sim = new Sim({ seed: 7176, playerClass: 'paladin', autoEquip: true }) as TestSim;
+  const sim = new Sim({
+    seed: 7176,
+    playerClass: 'paladin',
+    autoEquip: true,
+    world: WORLD_WITHOUT_HUB_YARD,
+  }) as TestSim;
   sim.setPlayerLevel(20);
   expect(sim.setSpec('protection')).toBe(true);
   sim.addItem('eastbrook_buckler', 1);
@@ -269,6 +276,29 @@ describe('Paladin Protection abilities', () => {
     expect(target.pos.x).toBe(before.x);
     expect(target.pos.z).toBe(before.z);
   });
+
+  it.each([IGNIVAR_BOSS_ID, VARKHUL_BOSS_ID])(
+    'does not bind raid boss %s with Oath Chain, but still enters combat with it',
+    (templateId) => {
+      const sim = makeProtection();
+      stageInField(sim);
+      const target = createMob(sim.nextId++, MOBS[templateId], 20, {
+        x: sim.player.pos.x,
+        y: sim.player.pos.y,
+        z: sim.player.pos.z + 18,
+      });
+      target.hostile = true;
+      target.aiState = 'idle';
+      sim.addEntity(target);
+      sim.targetEntity(target.id);
+
+      sim.castAbility('oath_chain');
+
+      expect(target.auras.some((aura) => aura.kind === 'forced_move')).toBe(false);
+      expect(target.inCombat).toBe(true);
+      expect(sim.player.inCombat).toBe(true);
+    },
+  );
 
   it('reindexes an Oath Chain target while it travels instead of teleporting for an immediate sweep', () => {
     const sim = makeProtection();
@@ -650,7 +680,12 @@ describe('Paladin Protection abilities', () => {
     sim.ctx.dealDamage(attacker, sim.player, 100, false, 'holy', 'Test', 'hit');
     expect(insideHp - sim.player.hp).toBe(100);
 
-    const retribution = new Sim({ seed: 7172, playerClass: 'paladin', autoEquip: true }) as TestSim;
+    const retribution = new Sim({
+      seed: 7172,
+      playerClass: 'paladin',
+      autoEquip: true,
+      world: WORLD_WITHOUT_HUB_YARD,
+    }) as TestSim;
     retribution.setPlayerLevel(20);
     retribution.setSpec('retribution');
     const retAttacker = targetAt(retribution, 2);

@@ -110,8 +110,8 @@ const PROVEN_SAFE_BASES: ProvenSafeBase[] = [
     file: 'src/render/ability_vfx/rings.ts',
     base: '1.0 - uProgress',
     sites: 1,
-    anchor: /uniforms\.uProgress\.value = easeOutQuart\(/,
-    why: 'uProgress is written from JS as easeOutQuart(min(1, age / dur)), never above 1',
+    anchor: /slot\.progress = easeOutQuart\(t\)/,
+    why: 'uProgress is written from JS from slot.progress, which is easeOutQuart(min(1, age / dur)), never above 1',
   },
 ];
 
@@ -129,8 +129,14 @@ const POW_SITES_PER_FILE: Record<string, number> = {
   'src/render/characters/armor_dye.ts': 2,
   'src/render/dungeon.ts': 1,
   'src/render/foliage_shader_core.ts': 1,
+  'src/render/ignivar_fire_vfx.ts': 10,
+  'src/render/ignivar_model_vfx.ts': 1,
+  'src/render/nythraxis_soft_fire.ts': 1,
   'src/render/pbr_fragment_shader.ts': 1,
   'src/render/post_output_grade.ts': 1,
+  // the monument's beam falloff, lantern-halo core and ember climb/core
+  // (bases clamped with clamp(x, 0, 1) or max(x, 0))
+  'src/render/realm_builder_monument_fx.ts': 5,
   'src/render/sky.ts': 1,
   'src/render/water.ts': 1,
   'src/render/weapon_vfx.ts': 4,

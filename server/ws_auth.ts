@@ -17,6 +17,7 @@ import type * as http from 'node:http';
 import type { WebSocket, WebSocketServer } from 'ws';
 import {
   type BankBonusSource,
+  DUNGEON_ENTRY_FACING_WIRE_VERSION,
   ONLINE_WORLD_AUTH_TYPE,
   ONLINE_WORLD_INCOMPATIBLE_MESSAGE,
   PET_SPECIAL_WIRE_VERSION,
@@ -31,6 +32,9 @@ import type {
   TokenScope,
 } from './db';
 import type { GameServer } from './game';
+import { noteClientFrame } from './keepalive_sweep';
+import { negotiateMovementWireVersion } from './movement_wire_version';
+import { kickStoragePurchaseRecovery } from './storage_purchases';
 import type { HandshakeFlushMode } from './ws_buffer';
 
 // The {t:'error', error} rejection strings, by the exact value the client reads
@@ -249,14 +253,16 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
     raw: string,
     req: http.IncomingMessage,
   ): Promise<void> {
-    let msg: any;
+    let parsed: unknown;
     try {
-      msg = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch (err) {
       console.error('ws auth: malformed first frame, rejecting handshake', err);
       rejectHandshake(ws, WS_AUTH_ERROR.badAuthMessage);
       return;
     }
+    const msg =
+      parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
     if (msg?.t !== ONLINE_WORLD_AUTH_TYPE) {
       const authType = msg?.t;
       const isWorldAuthAttempt =
@@ -279,6 +285,11 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
       msg.timerWire === STABLE_TIMER_WIRE_VERSION ? STABLE_TIMER_WIRE_VERSION : 1;
     const petSpecialWireVersion: 0 | typeof PET_SPECIAL_WIRE_VERSION =
       msg.petSpecialWire === PET_SPECIAL_WIRE_VERSION ? PET_SPECIAL_WIRE_VERSION : 0;
+    const movementWireVersion = negotiateMovementWireVersion(msg.movementWire);
+    const dungeonEntryFacingWireVersion: 0 | typeof DUNGEON_ENTRY_FACING_WIRE_VERSION =
+      msg.dungeonEntryFacingWire === DUNGEON_ENTRY_FACING_WIRE_VERSION
+        ? DUNGEON_ENTRY_FACING_WIRE_VERSION
+        : 0;
     const account = await accountAndScopeForToken(token);
     if (account === null || account.scope !== 'full' || !Number.isFinite(characterId)) {
       rejectHandshake(ws, WS_AUTH_ERROR.notAuthenticated);
@@ -289,6 +300,12 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
     // notification received during later handshake awaits overrides this query's
     // stale value at the synchronous game.join boundary, with no second DB read.
     const generalChatRateLimitHydration = game.beginGeneralChatRateLimitHydration(accountId);
+    // Same capture-before-the-read contract as above, for the sibling
+    // mute/reason/strikes snapshot: see chat_mod_live.ts for why this fence
+    // exists (a live push landing on this same still-linkdead session during
+    // the reads below must never be discarded by the stale snapshot they'd
+    // otherwise resolve to).
+    const chatModerationHydration = game.beginChatModerationHydration(accountId);
     try {
       const status = await moderationStatusForAccount(accountId);
       if (status.locked) {
@@ -305,6 +322,17 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
         return;
       }
       const chatMute = await chatMuteStatusForAccount(accountId);
+      // Resolved at each game.join call below, not here: like
+      // generalChatRateLimitHydration, resolving early would leave every
+      // await between here and the synchronous join boundary (adminRolesForAccount,
+      // loadAccountCosmetics, and on the fresh arm bankBonusForAccount, the lease
+      // acquire, and the character reload) unfenced against a live push landing
+      // in that window.
+      const freshModeration = {
+        mutedUntil: status.chatMutedUntil ?? chatMute.mutedUntil,
+        reason: chatMute.reason,
+        strikes: status.chatStrikes,
+      };
       // Hard per-IP WS connection limit. The soft threshold (composite score evidence)
       // is handled inside game.join(); this guard blocks egregious bot farms before
       // they consume a session slot.
@@ -329,15 +357,14 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
         ...meta,
         ...metaRequestUserData(req, meta),
         sourceUrl: metaEventSourceUrl(req),
-        mutedUntil: status.chatMutedUntil ?? chatMute.mutedUntil,
-        reason: chatMute.reason,
-        chatStrikes: status.chatStrikes,
         accountCosmetics,
         isAdmin,
         adminPermissions,
         clientSeed,
+        dungeonEntryFacingWireVersion,
         timerWireVersion,
         petSpecialWireVersion,
+        movementWireVersion,
         // The character's stored action-bar layout, sent once to the owning client
         // so it restores at login on any device (game.join re-validates it).
         hotbarLayout: character.hotbar_layout ?? null,
@@ -374,6 +401,7 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
           // resumes and keeps its nonce; a live duplicate is rejected) and never
           // re-stamp the row with a fresh acquire that a doomed handshake could
           // leave mismatched.
+          const moderation = chatModerationHydration.resolve(freshModeration);
           result = game.join(
             ws,
             accountId,
@@ -384,6 +412,9 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
             character.is_gm,
             {
               ...joinMeta,
+              mutedUntil: moderation.mutedUntil,
+              reason: moderation.reason,
+              chatStrikes: moderation.strikes,
               generalChatRateLimit: generalChatRateLimitHydration.resolve(
                 status.generalChatRateLimit ?? null,
               ),
@@ -445,6 +476,16 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
             // when this lease lands first, the migration sees it and refuses apply.
             // If the reload fails, release the lease before propagating/rejecting so
             // an unavailable row cannot strand the character until lease expiry.
+            //
+            // The previous session's last action-bar save may still be on its way
+            // to the row (HotbarLayoutStore holds it as pending until the write
+            // settles). Capture it BEFORE the reload below, so the join seeds from
+            // the newer of the two whichever side of that read the commit lands
+            // on: a document captured here is at least as new as any row this
+            // handshake can read, and once it settles the reload returns the same
+            // layout. Read after the reload it would race the settle and hand
+            // game.join the stale copy from the ownership read.
+            const queuedHotbarLayout = game.hotbarLayouts.pending(character.id);
             try {
               const refreshedCharacter = await getCharacter(accountId, character.id);
               if (!refreshedCharacter) {
@@ -471,6 +512,7 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
               leaseNonce = undefined;
               throw err;
             }
+            const moderation = chatModerationHydration.resolve(freshModeration);
             result = game.join(
               ws,
               accountId,
@@ -481,8 +523,15 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
               admittedCharacter.is_gm,
               {
                 ...joinMeta,
+                // The fresh arm re-read the row after the lease: that copy, or
+                // the still-queued document captured before it, supersedes the
+                // ownership-read copy joinMeta carries (game.join re-validates).
+                hotbarLayout: queuedHotbarLayout ?? admittedCharacter.hotbar_layout ?? null,
                 leaseNonce,
                 bankBonus,
+                mutedUntil: moderation.mutedUntil,
+                reason: moderation.reason,
+                chatStrikes: moderation.strikes,
                 generalChatRateLimit: generalChatRateLimitHydration.resolve(
                   status.generalChatRateLimit ?? null,
                 ),
@@ -514,7 +563,20 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
         console.log(
           `+ ${admittedCharacter.name} (${admittedCharacter.class}) joined, ${game.clients.size} online`,
         );
+        // Bank Storage phase 11: settle any pending Claudium storage purchase
+        // against the freshly loaded state (fire-and-forget; never gates the
+        // join). A join that internally resumed a linkdead session is safe
+        // here too: an in-flight purchase still holds the per-character mutex
+        // and the recovery yields to it immediately.
+        kickStoragePurchaseRecovery(session.characterId);
+        // Every processed frame (input here, pong below) stamps the socket's
+        // liveness clock for the sweep's hard silence deadline
+        // (server/keepalive_sweep.ts socketSilentPastDeadline); the handshake
+        // itself counts as the first frame so a fresh socket is never judged
+        // against a clock it has not started.
+        noteClientFrame(ws);
         ws.on('message', (data) => {
+          noteClientFrame(ws);
           game.handleMessage(session, String(data));
         });
         // A dropped socket starts the linkdead grace instead of logging the
@@ -535,6 +597,7 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
         // on socket identity so a late pong from a pre-resume socket cannot mask
         // a black-holed replacement.
         ws.on('pong', () => {
+          noteClientFrame(ws);
           if (session.ws === ws) session.awaitingPong = false;
         });
         // The socket can die DURING the handshake's awaits, before the close
@@ -572,6 +635,7 @@ export function createWsAuth(deps: WsAuthDeps): WsAuthHandlers {
       }
     } finally {
       generalChatRateLimitHydration.release();
+      chatModerationHydration.release();
     }
   }
 

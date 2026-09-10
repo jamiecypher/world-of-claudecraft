@@ -1,5 +1,5 @@
 import { delveAt, dungeonAt, isBgPos, isDelvePos, type ZoneDef } from '../sim/data';
-import { isAtSowfield } from '../sim/vale_cup_layout';
+import { type CrucibleFloor, crucibleFloorForDungeon } from './crucible_music';
 import {
   type MusicZone,
   musicZoneForLocation,
@@ -14,16 +14,6 @@ export interface InstanceMusicEntity {
   aggroTargetId: number | null;
 }
 
-export interface InstanceMusicMatch {
-  phase: string;
-  origin: { x: number; z: number };
-}
-
-export interface InstanceMusicCupInfo {
-  match: InstanceMusicMatch | null;
-  spectate: InstanceMusicMatch | null;
-}
-
 // The slice of RiftFloorView the soundtrack needs: the floor's environment
 // archetype plus enough identity to key per-floor phrasing resets.
 export interface InstanceMusicRiftFloor {
@@ -36,12 +26,16 @@ export interface InstanceMusicInput {
   now: number;
   lastCombatEventAt: number;
   lastBossCombatEventAt: number;
+  // The world's own in-combat flag (IWorld player.inCombat): the sim's engaged
+  // pass offline, the server's mirrored `cbt` bit online. Authoritative, so it
+  // alone puts the player in combat; the aggro-target and recent-event arms
+  // below stay as the fallback that bridges a snapshot in flight.
+  inCombat: boolean;
   playerId: number;
   playerPos: { x: number; z: number };
   zone: Pick<ZoneDef, 'id' | 'biome' | 'hub'>;
   inDungeon: boolean;
   entities: Iterable<InstanceMusicEntity>;
-  cupInfo: InstanceMusicCupInfo | null;
   // The active procedural Rift floor (null outside a rift). A rift floor scores
   // by its RiftTheme, not the dungeon fallback, and each floor counts as its own
   // instance entry so the crawl cue re-phrases from the top even when two floors
@@ -55,17 +49,15 @@ export interface InstanceMusicDecision {
   musicCombat: boolean;
   bossEngaged: boolean;
   instanceId: string | null;
-  atSowfield: boolean;
-  sowfieldTrack: 'match' | 'waiting' | null;
+  crucibleFloor: CrucibleFloor | null;
 }
 
 export interface InstanceMusicPort {
   // A procedural Rift floor has no DUNGEON_MUSIC row (its cue follows the
   // floor's RiftTheme), so the resolved zone rides along explicitly.
   resetForDungeonEntry(dungeonId: string | null, zone?: MusicZone): void;
-  update(zone: MusicZone, inCombat: boolean): void;
+  update(zone: MusicZone, inCombat: boolean, crucibleFloor?: CrucibleFloor | null): void;
   setBossCombat(active: boolean): void;
-  setSowfieldTrack(track: 'match' | 'waiting' | null): void;
 }
 
 const RAID_ARENA_ID = 'nythraxis_boss_arena';
@@ -88,7 +80,8 @@ export function instanceMusicDecision(input: InstanceMusicInput): InstanceMusicD
   // Thornhollow Fields battleground: the whole match rides the existing battle track
   // (the raid-arena musicCombat treatment; no dedicated audio asset).
   const inBattleground = isBgPos(input.playerPos.x);
-  const inCombat = aggroed || input.now - input.lastCombatEventAt < RECENT_COMBAT_MS;
+  const inCombat =
+    input.inCombat || aggroed || input.now - input.lastCombatEventAt < RECENT_COMBAT_MS;
   bossEngaged =
     bossEngaged || inRaidArena || input.now - input.lastBossCombatEventAt < RECENT_BOSS_COMBAT_MS;
 
@@ -99,41 +92,36 @@ export function instanceMusicDecision(input: InstanceMusicInput): InstanceMusicD
   const instanceId = isDelvePos(input.playerPos.x)
     ? (delveAt(input.playerPos.x)?.id ?? FALLBACK_DELVE_ID)
     : (dungeon?.id ?? null);
-  const atSowfield = !input.inDungeon && isAtSowfield(input.playerPos.x, input.playerPos.z);
+  // The Forge-Lift shares the approach's score (one shaft, one theme).
+  // Aliased here in the decision layer, zone selection only (the reset key
+  // keeps the real id), because music.ts sits at its monolith ceiling.
+  const scoredInstanceId =
+    instanceId === 'ignivar_forge_lift' ? 'ignivar_forge_approach' : instanceId;
   const riftFloor = input.riftFloor;
-  const zone = atSowfield
-    ? 'vale_cup'
-    : riftFloor
-      ? riftMusicZoneForTheme(riftFloor.themeName)
-      : musicZoneForLocation(
-          input.zone.id,
-          input.zone.biome,
-          inHub,
-          input.inDungeon || inRaidArena,
-          instanceId,
-        );
+  const crucibleFloor = input.inDungeon && !riftFloor ? crucibleFloorForDungeon(instanceId) : null;
+  const zone = riftFloor
+    ? riftMusicZoneForTheme(riftFloor.themeName)
+    : musicZoneForLocation(
+        input.zone.id,
+        input.zone.biome,
+        inHub,
+        input.inDungeon || inRaidArena,
+        scoredInstanceId,
+      );
   const musicInstanceId = riftFloor
     ? `rift:${riftFloor.instanceId}:${riftFloor.floorIndex}`
     : input.inDungeon || inRaidArena
       ? instanceId
       : null;
 
-  const cupMatchView = input.cupInfo?.match ?? input.cupInfo?.spectate ?? null;
-  const cupKickedOff =
-    cupMatchView?.phase === 'active' ||
-    cupMatchView?.phase === 'goal' ||
-    cupMatchView?.phase === 'golden';
-  const ownMatch = input.cupInfo?.match;
-  const inPracticeMatch = !!ownMatch && (ownMatch.origin.x !== 0 || ownMatch.origin.z !== 0);
-
   return {
     zone,
     inCombat,
-    musicCombat: inCombat || inRaidArena || inBattleground,
-    bossEngaged,
+    // The complete room score owns the mix through pulls and boss fights.
+    musicCombat: crucibleFloor === null && (inCombat || inRaidArena || inBattleground),
+    bossEngaged: crucibleFloor === null && bossEngaged,
+    crucibleFloor,
     instanceId: musicInstanceId,
-    atSowfield,
-    sowfieldTrack: atSowfield || inPracticeMatch ? (cupKickedOff ? 'match' : 'waiting') : null,
   };
 }
 
@@ -148,9 +136,12 @@ export class InstanceMusicController {
       this.music.resetForDungeonEntry(decision.instanceId, decision.zone);
     }
     this.lastInstanceId = decision.instanceId;
-    this.music.update(decision.zone, decision.musicCombat);
+    if (decision.crucibleFloor !== null) {
+      this.music.update(decision.zone, decision.musicCombat, decision.crucibleFloor);
+    } else {
+      this.music.update(decision.zone, decision.musicCombat);
+    }
     this.music.setBossCombat(decision.bossEngaged);
-    this.music.setSowfieldTrack(decision.sowfieldTrack);
     return decision;
   }
 }

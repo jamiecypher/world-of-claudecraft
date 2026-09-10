@@ -31,11 +31,14 @@ import {
   restoreMatchPet,
   snapshotMatchPet,
 } from '../pet/pet_match_return';
+import { releaseCorpseHarvest } from '../professions/corpse_harvest_session';
+import { removeMatchFeasts } from '../professions/feast_lifecycle';
 import { awardFiestaCompletionHonor, awardRankedArenaResultHonor, honorTeamIdentity } from '../pvp';
 import { aurasSurvivingCleanSlate, SICKNESS_AURA_IDS, UNSTUCK_SICKNESS_ID } from '../resurrection';
 import type { ArenaMatch, ArenaQueueUnit, ArenaReturnPools, PlayerMeta } from '../sim';
 import type { SimContext } from '../sim_context';
 import { applyResurrectionSickness, applyUnstuckSickness } from '../spirit';
+import { settleTeleportArrival } from '../teleport_arrival';
 import {
   type ArenaCombatant,
   type ArenaFormat,
@@ -170,10 +173,6 @@ export function arenaQueueJoin(
     ctx.error(id, 'You are already in an arena match.');
     return;
   }
-  if (ctx.vcupSeatedOrQueued(id)) {
-    ctx.error(id, 'You are already in an arena match.');
-    return;
-  }
   if (r.e.dead) {
     ctx.error(id, 'You cannot queue for the arena while dead.');
     return;
@@ -261,10 +260,6 @@ export function arenaQueueJoin(
         ctx.error(id, `${mMeta.name} is already in the arena queue.`);
         return;
       }
-      if (ctx.vcupSeatedOrQueued(mPid)) {
-        ctx.error(id, `${mMeta.name} is already in an arena match.`);
-        return;
-      }
       if (duelFor(ctx, mPid) !== null) {
         ctx.error(id, `${mMeta.name} cannot queue while dueling.`);
         return;
@@ -336,10 +331,6 @@ export function arenaQueueJoin(
     }
     if (isArenaQueued(ctx, mPid)) {
       ctx.error(id, `${mMeta.name} is already in the arena queue.`);
-      return;
-    }
-    if (ctx.vcupSeatedOrQueued(mPid)) {
-      ctx.error(id, `${mMeta.name} is already in an arena match.`);
       return;
     }
     if (duelFor(ctx, mPid) !== null) {
@@ -515,7 +506,7 @@ export function freeArenaSlot(ctx: SimContext, format?: ArenaFormat): number | n
   return null;
 }
 
-export function arenaTeamOf(ctx: SimContext, match: ArenaMatch, pid: number): 'A' | 'B' | null {
+export function arenaTeamOf(_ctx: SimContext, match: ArenaMatch, pid: number): 'A' | 'B' | null {
   if (match.teamA.includes(pid)) return 'A';
   if (match.teamB.includes(pid)) return 'B';
   return null;
@@ -658,9 +649,10 @@ export function updateArena(ctx: SimContext): void {
       if (match.timer <= 0) returnFromArena(ctx, match);
       continue;
     }
-    const fighters = arenaAllPids(match)
-      .map((pid) => ctx.entities.get(pid)!)
-      .filter(Boolean);
+    const fighters = arenaAllPids(match).flatMap((pid) => {
+      const e = ctx.entities.get(pid);
+      return e ? [e] : [];
+    });
     if (match.state === 'countdown') {
       const before = Math.ceil(match.timer);
       match.timer -= DT;
@@ -688,12 +680,14 @@ export function updateArena(ctx: SimContext): void {
         }
         if (match.fiesta) {
           for (const mPid of arenaAllPids(match)) {
+            const team = arenaTeamOf(ctx, match, mPid);
+            if (team === null) continue;
             ctx.emit({
               type: 'fiestaScore',
               a: 0,
               b: 0,
               limit: match.fiesta.scoreLimit,
-              team: arenaTeamOf(ctx, match, mPid)!,
+              team,
               pid: mPid,
             });
           }
@@ -733,12 +727,7 @@ export function matchmakeArena1v1(ctx: SimContext): void {
       // a Vale Cup match/queue after joining here (arenaQueueJoin already blocks
       // this at entry; this is the defense-in-depth re-check for paths that seat
       // a player into Vale Cup without going through that guard, e.g. practice).
-      const keep =
-        !!e &&
-        !e.dead &&
-        !ctx.arenaMatches.has(id) &&
-        e.pos.x <= DUNGEON_X_THRESHOLD &&
-        !ctx.vcupSeatedOrQueued(id);
+      const keep = !!e && !e.dead && !ctx.arenaMatches.has(id) && e.pos.x <= DUNGEON_X_THRESHOLD;
       // Only a still-connected player needs the notice below (a disconnected
       // one has no session left to receive it).
       if (!keep && e) pruned.push(id);
@@ -785,13 +774,7 @@ export function pruneTeamQueue(ctx: SimContext, fmt: '2v2' | 'fiesta'): void {
       // queued: the bout would return them inside fully restored (issue #1600).
       // Also drop the unit if a member slipped into a Vale Cup match/queue
       // after joining here (see matchmakeArena1v1's matching comment).
-      return (
-        !!e &&
-        !e.dead &&
-        !ctx.arenaMatches.has(id) &&
-        e.pos.x <= DUNGEON_X_THRESHOLD &&
-        !ctx.vcupSeatedOrQueued(id)
-      );
+      return !!e && !e.dead && !ctx.arenaMatches.has(id) && e.pos.x <= DUNGEON_X_THRESHOLD;
     });
   const queue = fmt === 'fiesta' ? ctx.arenaQueueFiesta : ctx.arenaQueue2v2;
   const pruned: ArenaQueueUnit[] = [];
@@ -947,7 +930,8 @@ export function startArenaMatch(
   // alive, so a normalized bout never costs a hunter their companion.
   const preMatchPets = new Map<number, MatchPetSnapshot>();
   for (let i = 0; i < allPids.length; i++) {
-    const e = entities[i]!;
+    const e = entities[i];
+    if (!e) continue;
     returns.set(allPids[i], { x: e.pos.x, z: e.pos.z, facing: e.facing });
     preMatchPools.set(allPids[i], snapshotArenaReturnPools(e));
     const pet = snapshotMatchPet(ctx, allPids[i]);
@@ -980,8 +964,9 @@ export function startArenaMatch(
   // Spawns come from the slot's fixed map (parity-selected, never rng).
   const map = arenaMapForSlot(slot);
   if (format === '1v1') {
-    placeInArena(ctx, entities[0]!, origin, map.spawnA);
-    placeInArena(ctx, entities[1]!, origin, map.spawnB);
+    const [first, second] = entities;
+    if (first) placeInArena(ctx, first, origin, map.spawnA);
+    if (second) placeInArena(ctx, second, origin, map.spawnB);
   } else {
     placeTeamInArena(ctx, teamA, origin, map.spawnsA2v2);
     placeTeamInArena(ctx, teamB, origin, map.spawnsB2v2);
@@ -995,7 +980,7 @@ export function startArenaMatch(
       if (m && e) ctx.fiestaStandardize(m, e);
     }
   }
-  for (const e of entities) resetForArena(ctx, e!);
+  for (const e of entities) if (e) resetForArena(ctx, e);
   emitArenaFound(ctx, match);
   // Each map gets its own bout-start line (both literals stay verbatim here
   // so the client's exact-match localizer keeps re-localizing them).
@@ -1017,7 +1002,8 @@ export function startArenaMatch(
 
 export function emitArenaFound(ctx: SimContext, match: ArenaMatch): void {
   for (const pid of arenaAllPids(match)) {
-    const myTeam = arenaTeamOf(ctx, match, pid)!;
+    const myTeam = arenaTeamOf(ctx, match, pid);
+    if (myTeam === null) continue;
     const allyPids = (myTeam === 'A' ? match.teamA : match.teamB).filter((p) => p !== pid);
     const enemyPids = myTeam === 'A' ? match.teamB : match.teamA;
     const allies = arenaCombatants(ctx, allyPids);
@@ -1048,6 +1034,7 @@ export function placeInArena(
   e.facing = spawn.facing;
   e.prevFacing = spawn.facing;
   ctx.rebucket(e);
+  settleTeleportArrival(e);
 }
 
 export function placeTeamInArena(
@@ -1115,7 +1102,15 @@ export function readyArenaFighter(
   delete e.queuedOnSwingCostMultiplier;
   e.queuedCastAbility = null;
   e.queuedCastAim = null;
+  e.queuedCastTargetId = null;
   emitRainOfFireStop(ctx, e);
+  // An in-flight corpse-harvest cast owns a reservation + a frozen session
+  // beyond `castingAbility` itself (professions/corpse_harvest_session.ts);
+  // blanking the cast flag alone would strand both. Explicit, idempotent
+  // release here, the same shape the damage/death hub uses, rather than the
+  // general `cancelCast` (which would also fire ability-specific interrupt
+  // side effects unrelated to an ordinary arena/Fiesta seat reset).
+  releaseCorpseHarvest(ctx, e.id);
   e.castingAbility = null;
   e.castRemaining = 0;
   e.castTargetId = null;
@@ -1287,6 +1282,7 @@ export function endArenaMatch(
 // Teleport all fighters back to where they queued, fully cleansed, and
 // release the instance slot.
 export function returnFromArena(ctx: SimContext, match: ArenaMatch): void {
+  removeMatchFeasts(ctx, 'arena', match.id);
   for (const pid of arenaAllPids(match)) ctx.arenaMatches.delete(pid);
   // Slot numbers collide across pools (pit slot 2 vs maze slot 2), so a yumi
   // match MUST free the maze pool, never the pit's; it also drops its cats.

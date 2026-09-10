@@ -3,7 +3,8 @@ import {
   GRAPHICS_REBUILD_KEYS,
   normalizeGraphicsSettingsSnapshot,
 } from '../src/game/graphics_rebuild_core';
-import { SETTING_RANGES } from '../src/game/settings';
+import { BOOL_SETTINGS, SETTING_RANGES } from '../src/game/settings';
+import { AURA_TRACKS } from '../src/ui/hud/aura_tracks';
 import {
   boolToggleNextValue,
   buildAudioControls,
@@ -199,6 +200,8 @@ describe('options_view: graphics dispatch matrix (cluster 3)', () => {
       // System card (full width).
       'browserEffects',
       'note:hudChrome.options.browserEffectsNote',
+      'shaderWarm',
+      'note:hudChrome.options.shaderWarmNote',
       'interfaceMode',
       'note:hudChrome.options.interfaceModeNote',
     ]);
@@ -253,8 +256,9 @@ describe('options_view: graphics dispatch matrix (cluster 3)', () => {
         ).toEqual([0, 0.5, 1, 2]);
     }
     // Effects & Lighting stops at High (the full high-tier post stack), and
-    // so does Shadow Quality (High is the 4096 map; the 8192 Insane rung is
-    // retired, so the dial no longer offers it).
+    // so does Shadow Quality (High is the dial's 4096 map, above the High
+    // tier's own 2560 base; the 8192 Insane rung is retired, so the dial no
+    // longer offers it).
     for (const key of ['effectsQuality', 'shadowQuality']) {
       const dial = find(controls, key);
       if (dial?.control === 'choice')
@@ -299,6 +303,220 @@ describe('options_view: graphics dispatch matrix (cluster 3)', () => {
     // no-op instruction.
     expect(keysOf(controls)).toContain('note:hudChrome.options.gfxCustomNote');
     expect(keysOf(stored)).not.toContain('note:hudChrome.options.gfxCustomNote');
+  });
+
+  it('puts the graphics backend row + note in the System card, under the shader worker, ONLY with its capability', () => {
+    // The capability is the bridge methods AND the shell's platform answer,
+    // folded into one env flag by the options window; the GPU preference
+    // flag never stands in for it (Windows and macOS shells have the first
+    // and not the second).
+    const system = (env: OptionsEnv) =>
+      buildGraphicsSections(makeSource({ graphicsPreset: 4 }), env).find(
+        (section) => section.titleKey === 'hudChrome.options.gfxSectionSystem',
+      );
+    const withBackend = system({ ...WEB_ENV, desktopGpuBackend: true });
+    expect(withBackend).toBeTruthy();
+    const keys = keysOf(withBackend?.controls ?? []);
+    expect(keys.slice(keys.indexOf('shaderWarm'), keys.indexOf('shaderWarm') + 5)).toEqual([
+      'shaderWarm',
+      'note:hudChrome.options.shaderWarmNote',
+      'gpuBackend',
+      'note:hudChrome.options.gpuBackendNote',
+      'interfaceMode',
+    ]);
+    expect(find(withBackend?.controls ?? [], 'gpuBackend')?.control).toBe('choice');
+    // Its keys are not rebuild keys: the row writes live, never through Apply.
+    expect(GRAPHICS_REBUILD_KEYS).not.toContain('gpuBackend');
+    for (const env of [WEB_ENV, DESKTOP_ENV, { touch: true, nativeShell: true }]) {
+      expect(find(system(env)?.controls ?? [], 'gpuBackend')).toBeUndefined();
+    }
+  });
+
+  it('shows the rung the launch is really on, under the buttons, once the shell has judged', () => {
+    // The point of the row on a machine where the choice did not take: a player
+    // who picked Vulkan must not read "Vulkan" while playing on OpenGL.
+    const system = (env: OptionsEnv) =>
+      buildGraphicsSections(makeSource({ graphicsPreset: 4 }), env).find(
+        (section) => section.titleKey === 'hudChrome.options.gfxSectionSystem',
+      );
+    const backendRow = (active: OptionsEnv['desktopGpuBackendActive']) =>
+      find(
+        system({ ...WEB_ENV, desktopGpuBackend: true, desktopGpuBackendActive: active })
+          ?.controls ?? [],
+        'gpuBackend',
+      );
+
+    // The reading rides INSIDE the row, never as a note beside it: the wide
+    // graphics cards flow their children two-up (control, note, control, note),
+    // so a third child for one control shifts every row after it by a cell.
+    // That is a real layout break, not a nicety.
+    const running = system({
+      ...WEB_ENV,
+      desktopGpuBackend: true,
+      desktopGpuBackendActive: { active: 'vulkan-parallel-compile', requestedUnavailable: false },
+    });
+    const keys = keysOf(running?.controls ?? []);
+    expect(keys.slice(keys.indexOf('gpuBackend'), keys.indexOf('gpuBackend') + 2)).toEqual([
+      'gpuBackend',
+      'note:hudChrome.options.gpuBackendNote',
+    ]);
+    const row = find(running?.controls ?? [], 'gpuBackend');
+    expect(row?.control === 'choice' && row.statusKey).toBe('hudChrome.options.gpuBackendActive');
+    // The name is a placeholder KEY the painter resolves, never a concatenation
+    // and never a raw rung: both Vulkan rungs read as the one name the picker
+    // offered.
+    expect(row?.control === 'choice' && row.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendActiveNameVulkan',
+    });
+
+    const plain = backendRow({ active: 'vulkan-plain', requestedUnavailable: false });
+    expect(plain?.control === 'choice' && plain.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendActiveNameVulkan',
+    });
+
+    // Fell short of the setting: its own sentence, and the OpenGL name.
+    const fallen = backendRow({ active: 'opengl', requestedUnavailable: true });
+    expect(fallen?.control === 'choice' && fallen.statusKey).toBe(
+      'hudChrome.options.gpuBackendActiveUnavailable',
+    );
+    expect(fallen?.control === 'choice' && fallen.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendActiveNameOpenGL',
+    });
+
+    // Only the verdict that says the choice did not take is an alert: the row
+    // is a live region either way, but a plain reading is information, not a
+    // failure a player has to act on.
+    expect(fallen?.control === 'choice' && fallen.statusAlert).toBe(true);
+    expect(row?.control === 'choice' && row.statusAlert).toBeUndefined();
+
+    // Auto held at OpenGL by the shell's GPU policy: its own sentence (why the
+    // player is not on Vulkan, and that it is theirs to pick), the OpenGL name.
+    const capped = backendRow({ active: 'opengl', requestedUnavailable: false, autoCapped: true });
+    expect(capped?.control === 'choice' && capped.statusKey).toBe(
+      'hudChrome.options.gpuBackendActiveAutoCapped',
+    );
+    expect(capped?.control === 'choice' && capped.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendActiveNameOpenGL',
+    });
+    // A choice that fell short wins over the cap (the two never both hold; the
+    // order is pinned so a future shell cannot make the row say the wrong thing).
+    const both = backendRow({ active: 'opengl', requestedUnavailable: true, autoCapped: true });
+    expect(both?.control === 'choice' && both.statusKey).toBe(
+      'hudChrome.options.gpuBackendActiveUnavailable',
+    );
+
+    // Nothing to say yet: no reading at all rather than a guessed one, and the
+    // row keeps its description and its single note.
+    for (const active of [null, undefined]) {
+      const quiet = backendRow(active);
+      expect(quiet?.control === 'choice' && quiet.statusKey).toBeUndefined();
+      expect(quiet?.control === 'choice' && quiet.statusValueKeys).toBeUndefined();
+      const quietKeys = keysOf(
+        system({ ...WEB_ENV, desktopGpuBackend: true, desktopGpuBackendActive: active })
+          ?.controls ?? [],
+      );
+      expect(quietKeys).toContain('note:hudChrome.options.gpuBackendNote');
+    }
+  });
+
+  it('says the write did not save, over the rung this launch is on', () => {
+    // The shell refused the write, so the STORED choice never moved and the
+    // next start keeps it. A row that went on reporting the running rung would
+    // let a player leave believing their pick took.
+    const system = (env: OptionsEnv, gpuBackend: number) =>
+      buildGraphicsSections(makeSource({ graphicsPreset: 4, gpuBackend }), env).find(
+        (section) => section.titleKey === 'hudChrome.options.gfxSectionSystem',
+      );
+    const backendRow = (env: OptionsEnv, gpuBackend: number) =>
+      find(system(env, gpuBackend)?.controls ?? [], 'gpuBackend');
+
+    const failedEnv: OptionsEnv = {
+      ...WEB_ENV,
+      desktopGpuBackend: true,
+      desktopGpuBackendWriteFailed: true,
+      // The launch is running Vulkan and says so; the refusal outranks it.
+      desktopGpuBackendActive: { active: 'vulkan-parallel-compile', requestedUnavailable: false },
+    };
+    const failed = backendRow(failedEnv, 2);
+    expect(failed?.control === 'choice' && failed.statusKey).toBe(
+      'hudChrome.options.gpuBackendSaveFailed',
+    );
+    // The name is the STORED choice's (the apply arm has already put the local
+    // value back on it), and the active-reading name, never the picker's
+    // "OpenGL (slow)".
+    expect(failed?.control === 'choice' && failed.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendActiveNameOpenGL',
+    });
+    // A verdict a player must act on: an assertive live region, not a polite one.
+    expect(failed?.control === 'choice' && failed.statusAlert).toBe(true);
+
+    const vulkanStored = backendRow(failedEnv, 1);
+    expect(vulkanStored?.control === 'choice' && vulkanStored.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendActiveNameVulkan',
+    });
+    // Auto is a stored choice too, and keeps the picker's own Auto label.
+    const autoStored = backendRow(failedEnv, 0);
+    expect(autoStored?.control === 'choice' && autoStored.statusValueKeys).toEqual({
+      backend: 'hudChrome.options.gpuBackendAuto',
+    });
+
+    // Flag down: the active reading again, unchanged.
+    const settled = backendRow({ ...failedEnv, desktopGpuBackendWriteFailed: false }, 2);
+    expect(settled?.control === 'choice' && settled.statusKey).toBe(
+      'hudChrome.options.gpuBackendActive',
+    );
+    expect(settled?.control === 'choice' && settled.statusAlert).toBeUndefined();
+  });
+
+  it('drops the shader warm-up worker row and its note where the worker is forced off', () => {
+    // iOS resolves the worker to off whatever the setting says
+    // (shaderWarmModeFor), so the row would change nothing under a note
+    // promising On is forced everywhere.
+    const system = (env: OptionsEnv) =>
+      buildGraphicsSections(makeSource({ graphicsPreset: 4 }), env).find(
+        (section) => section.titleKey === 'hudChrome.options.gfxSectionSystem',
+      );
+    const withoutChoice = keysOf(system({ ...WEB_ENV, shaderWarmChoice: false })?.controls ?? []);
+    expect(withoutChoice.length).toBeGreaterThan(0);
+    expect(withoutChoice).not.toContain('shaderWarm');
+    expect(withoutChoice).not.toContain('note:hudChrome.options.shaderWarmNote');
+    // The card keeps everything else it had, in order (the pair leaves together).
+    expect(withoutChoice).toEqual(
+      keysOf(system(WEB_ENV)?.controls ?? []).filter(
+        (key) => key !== 'shaderWarm' && key !== 'note:hudChrome.options.shaderWarmNote',
+      ),
+    );
+    // Absent means yes, and so does true: every non-iOS caller keeps the pair.
+    for (const env of [WEB_ENV, { ...WEB_ENV, shaderWarmChoice: true }]) {
+      const keys = keysOf(system(env)?.controls ?? []);
+      expect(keys.slice(keys.indexOf('shaderWarm'), keys.indexOf('shaderWarm') + 2)).toEqual([
+        'shaderWarm',
+        'note:hudChrome.options.shaderWarmNote',
+      ]);
+    }
+  });
+
+  it('keeps every wide-card control paired with exactly one note', () => {
+    // The wide graphics cards lay their children out two-up, control then note,
+    // so the whole card depends on that alternation: one extra note for one row
+    // pushes every row after it into the wrong cell (seen in the System card
+    // when the backend reading was first added as a note of its own).
+    const env = { ...WEB_ENV, desktopGpuBackend: true, desktopDisplayMode: true };
+    for (const section of buildGraphicsSections(makeSource({ graphicsPreset: 4 }), env)) {
+      if (section.column !== 'full') continue;
+      let noteRun = 0;
+      for (const control of section.controls) {
+        if (control.control === 'note') {
+          noteRun += 1;
+          expect(
+            noteRun,
+            `${section.titleKey} has two notes in a row, which shifts the card's grid`,
+          ).toBeLessThan(2);
+        } else {
+          noteRun = 0;
+        }
+      }
+    }
   });
 
   it('groups the panel into titled two-column cards whose flatten IS the control list', () => {
@@ -381,16 +599,18 @@ describe('options_view: graphics dispatch matrix (cluster 3)', () => {
     expect(keys).toContain('touchInvertLook');
     expect(keys).toContain('mobileCameraJoystick');
     expect(keys).toContain('leftHandedTouch');
+    expect(keys).toContain('touchPreciseGroundAim');
     // touchLookSpeed sits right after cameraSpeed
     expect(keys[keys.indexOf('cameraSpeed') + 1]).toBe('touchLookSpeed');
-    // mobileCameraJoystick and leftHandedTouch are the last two touch-only rows,
-    // right after touchInvertLook, in that order.
+    // The boolean touch rows follow touchInvertLook in their rendered order.
     const touchInvertIdx = keys.indexOf('touchInvertLook');
     expect(keys[touchInvertIdx + 1]).toBe('mobileCameraJoystick');
     expect(keys[touchInvertIdx + 2]).toBe('leftHandedTouch');
+    expect(keys[touchInvertIdx + 3]).toBe('touchPreciseGroundAim');
+    expect(keys[touchInvertIdx + 4]).toBe('note:hudChrome.options.touchPreciseAimNote');
   });
 
-  it('hides mobileCameraJoystick and leftHandedTouch on a desktop interface', () => {
+  it('hides mobile touch toggles on a desktop interface', () => {
     const controls = buildGraphicsControls(makeSource({ graphicsPreset: 4 }), {
       touch: false,
       nativeShell: false,
@@ -398,13 +618,18 @@ describe('options_view: graphics dispatch matrix (cluster 3)', () => {
     const keys = keysOf(controls);
     expect(keys).not.toContain('mobileCameraJoystick');
     expect(keys).not.toContain('leftHandedTouch');
+    expect(keys).not.toContain('touchPreciseGroundAim');
+    expect(keys).not.toContain('note:hudChrome.options.touchPreciseAimNote');
   });
 
-  it('gives mobileCameraJoystick and leftHandedTouch their correct i18n keys', () => {
-    const controls = buildGraphicsControls(makeSource({ graphicsPreset: 4 }), {
-      touch: true,
-      nativeShell: false,
-    });
+  it('gives mobile touch toggles their correct i18n keys', () => {
+    const controls = buildGraphicsControls(
+      makeSource({ graphicsPreset: 4 }, { touchPreciseGroundAim: true }),
+      {
+        touch: true,
+        nativeShell: false,
+      },
+    );
     expect(find(controls, 'mobileCameraJoystick')).toMatchObject({
       control: 'boolToggle',
       labelKey: 'hudChrome.options.mobileCameraJoystick',
@@ -412,6 +637,11 @@ describe('options_view: graphics dispatch matrix (cluster 3)', () => {
     expect(find(controls, 'leftHandedTouch')).toMatchObject({
       control: 'boolToggle',
       labelKey: 'hudChrome.options.mobileLeftHanded',
+    });
+    expect(find(controls, 'touchPreciseGroundAim')).toMatchObject({
+      control: 'boolToggle',
+      labelKey: 'hudChrome.options.touchPreciseAim',
+      on: true,
     });
   });
 });
@@ -441,18 +671,37 @@ describe('options_view: audio dispatch matrix (cluster 4)', () => {
 // Cluster 5: controller + the remaining interface toggles
 // ---------------------------------------------------------------------------
 describe('options_view: controller dispatch matrix (cluster 5)', () => {
-  it('lists the enable/invert toggles then the three controller sliders', () => {
+  it('lists the glyph family, enable, cross hotbar and invert controls then the sliders', () => {
     const controls = buildControllerControls(makeSource());
     expect(keysOf(controls)).toEqual([
+      'gamepadGlyphStyle',
       'gamepadEnabled',
+      'gamepadCrossHotbar',
+      'gamepadCrossHotbarExpand',
       'gamepadInvertY',
       'gamepadStickDeadzone',
       'gamepadCameraSpeed',
+      'gamepadReticleSpeed',
       'gamepadVibration',
     ]);
+    expect(find(controls, 'gamepadGlyphStyle')).toMatchObject({
+      control: 'choice',
+      current: 0,
+      rerender: false,
+      options: [
+        { value: 0, labelKey: 'hudChrome.controller.glyphStyleAuto' },
+        { value: 1, labelKey: 'hudChrome.controller.glyphStyleXbox' },
+        { value: 2, labelKey: 'hudChrome.controller.glyphStylePlayStation' },
+        { value: 3, labelKey: 'hudChrome.controller.glyphStyleNintendo' },
+      ],
+    });
     expect(find(controls, 'gamepadEnabled')).toMatchObject({ control: 'boolToggle' });
     // camera speed renders with a one-decimal readout, not a percent
     expect(find(controls, 'gamepadCameraSpeed')).toMatchObject({
+      control: 'slider',
+      fmt: 'oneDecimal',
+    });
+    expect(find(controls, 'gamepadReticleSpeed')).toMatchObject({
       control: 'slider',
       fmt: 'oneDecimal',
     });
@@ -468,10 +717,14 @@ describe('options_view: optionsControlKeys (issue 2341 scoped reset)', () => {
   it('extracts the setting key from every keyed control, in order, deduped', () => {
     const controls = buildControllerControls(makeSource());
     expect(optionsControlKeys(controls)).toEqual([
+      'gamepadGlyphStyle',
       'gamepadEnabled',
+      'gamepadCrossHotbar',
+      'gamepadCrossHotbarExpand',
       'gamepadInvertY',
       'gamepadStickDeadzone',
       'gamepadCameraSpeed',
+      'gamepadReticleSpeed',
       'gamepadVibration',
     ]);
   });
@@ -506,7 +759,6 @@ describe('options_view: optionsControlKeys (issue 2341 scoped reset)', () => {
 // interfaceControlsForTab(all, tab) must return exactly these, in order; the
 // concatenation (in INTERFACE_TAB_ORDER) is the whole deduped list.
 const GENERAL_KEYS = [
-  'uiScale',
   'hudOpacity',
   'tooltipScale',
   'frostedPanels',
@@ -520,18 +772,17 @@ const GENERAL_KEYS = [
   'showPlaytime',
   'showDailyRewardsChest',
   'showItemLevel',
+  'showReliquaryTracker',
   'showOwnNameplate',
   'showPlayerNameplates',
+  'confirmVendorSell',
+  'note:hudChrome.options.confirmVendorSellNote',
 ];
 const FRAMES_KEYS = [
-  'playerFrameScale',
-  'targetFrameScale',
   'partyFrameStyle',
-  'partyFrameScale',
-  'partyFrameWidth',
-  'partyFrameHeight',
-  'partyFrameSpacing',
-  'partyFrameColumns',
+  // partyFrameWidth/Height have no rows (Edit Frames drags them directly);
+  // partyFrameColumns and partyFrameSpacing moved into the in-editor Frames
+  // Settings dropdown.
   'partyFrameHealthText',
   'partyFrameSort',
   'partyFrameShowResource',
@@ -539,24 +790,38 @@ const FRAMES_KEYS = [
   'partyFrameShowAuras',
   'partyFrameShowPets',
   'partyFrameShowSelf',
+  'playerFrameHealthText',
+  'targetFrameHealthText',
   'aurasOnPlayerFrame',
+  'auraBarBelowFrame',
+  'alwaysShowAllBuffs',
   'showTargetOfTarget',
+  'showTargetSwingTimer',
   'showPetFrame',
 ];
-const CHAT_KEYS = ['chatFontScale', 'chatOpacity', 'compactChat'];
+const CHAT_KEYS = ['chatFontScale', 'chatOpacity', 'compactChat', 'filterProfanity'];
 const COMBAT_KEYS = [
   'startAttackOnAbilityUse',
   'stopAutoAttackOnTargetSwitch',
   'showAttackButton',
   'walkByAutoloot',
   'groundReticle',
-  'mouseoverCast',
   'stickyTarget',
+  // The two dot-tracking surfaces, with the nameplate row's size slider pinned
+  // directly under the toggle it sizes.
+  'showNameplateDots',
+  'nameplateDotScale',
+  'showTargetDots',
+  // The six aura tracks, in the order the descriptor table declares them, plus
+  // the mode sub-option that rides with the utility track.
+  'showDefensivesTrack',
+  'showSelfBuffTrack',
+  'showOffensiveTrack',
+  'showUtilityTrack',
+  'showUtilityModes',
+  'showFriendlyTrack',
+  'showShieldTrack',
   'fctScale',
-  'showSecondaryActionBar',
-  'showThirdActionBar',
-  'hideUnusedActionSlots',
-  'lockActionBars',
 ];
 const INTERFACE_KEYS_BY_TAB: Record<InterfaceTab, string[]> = {
   general: GENERAL_KEYS,
@@ -612,6 +877,38 @@ describe('options_view: interface dispatch matrix (cluster 5)', () => {
     });
   });
 
+  it('renders one Combat toggle per aura track, each labelled by its own key', () => {
+    // Six frames need six independent opt-ins: a single "show aura tracks"
+    // switch would put roughly twenty rows on a healer at once, which is the
+    // thing the per-track defaults exist to prevent. Pinned by KEY rather than
+    // by count so a track that loses its row fails here, and pinned against the
+    // descriptor table so the two can never drift.
+    const controls = buildInterfaceControls(makeSource());
+    for (const track of AURA_TRACKS) {
+      expect(find(controls, track.settingKey)).toMatchObject({
+        control: 'boolToggle',
+        category: 'combat',
+        labelKey: `hudChrome.options.${track.settingKey}`,
+      });
+    }
+    // Every track is OFF until asked for, and the mode sub-option rides on.
+    for (const track of AURA_TRACKS) {
+      expect(BOOL_SETTINGS[track.settingKey as keyof typeof BOOL_SETTINGS]).toEqual({
+        def: false,
+      });
+    }
+    expect(BOOL_SETTINGS.showUtilityModes).toEqual({ def: true });
+  });
+
+  it('renders NO menu rows for the optional action bars (the on-bar toggle owns them)', () => {
+    // The plus/minus buttons on the primary action bar are the one control for
+    // the secondary/third rows; duplicate checkboxes here would fight them.
+    // The settings and the main.ts dependency resolver are unchanged.
+    const all = buildInterfaceControls(makeSource());
+    expect(find(all, 'showSecondaryActionBar')).toBeUndefined();
+    expect(find(all, 'showThirdActionBar')).toBeUndefined();
+  });
+
   it('appends the desktop GPU row + note ONLY with the bridge capability', () => {
     // With the capability: the row and its next-launch note close the General
     // tab, leaving every other row exactly where it was.
@@ -628,11 +925,14 @@ describe('options_view: interface dispatch matrix (cluster 5)', () => {
       labelKey: 'hudChrome.options.forceHighPerfGpu',
     });
     expect(desktop.filter((c) => c.control === 'note')).toEqual([
+      { control: 'note', textKey: 'hudChrome.options.confirmVendorSellNote', category: 'general' },
       { control: 'note', textKey: 'hudChrome.options.forceHighPerfGpuNote', category: 'general' },
     ]);
 
-    // Without it: the exact pre-existing list, with no row and no note at all.
-    // A plain browser and a mobile Capacitor shell both land here.
+    // Without it: the exact pre-existing list, with no GPU-preference row or
+    // note (the keysOf equality below already pins the whole set exactly,
+    // confirmVendorSellNote included since it is unconditional). A plain
+    // browser and a mobile Capacitor shell both land here.
     for (const env of [undefined, WEB_ENV, { touch: true, nativeShell: true }]) {
       const withoutCapability = buildInterfaceControls(makeSource(), env);
       expect(keysOf(withoutCapability)).toEqual([
@@ -643,7 +943,6 @@ describe('options_view: interface dispatch matrix (cluster 5)', () => {
       ]);
       expect(find(withoutCapability, 'forceHighPerfGpu')).toBeUndefined();
       expect(find(withoutCapability, 'discordPresence')).toBeUndefined();
-      expect(withoutCapability.some((c) => c.control === 'note')).toBe(false);
     }
 
     // nativeShell alone never reveals it, and the capability alone always does:
@@ -660,6 +959,32 @@ describe('options_view: interface dispatch matrix (cluster 5)', () => {
         'forceHighPerfGpu',
       ),
     ).toBeUndefined();
+  });
+
+  it('keeps the graphics backend row OUT of the Interface panel (it lives under Graphics)', () => {
+    // A player looks for the backend next to the shader warm-up worker, in
+    // the Graphics panel's System card; the Interface tail keeps only the GPU
+    // preference and Discord, even when the shell has the backend capability.
+    const allKeys = keysOf(
+      buildInterfaceControls(makeSource(), {
+        ...WEB_ENV,
+        desktopGpuPref: true,
+        desktopGpuBackend: true,
+        desktopDiscordPresence: true,
+      }),
+    );
+    expect(allKeys).not.toContain('gpuBackend');
+    expect(allKeys).not.toContain('note:hudChrome.options.gpuBackendNote');
+    const tail = allKeys.slice(
+      allKeys.indexOf('forceHighPerfGpu'),
+      allKeys.indexOf('forceHighPerfGpu') + 4,
+    );
+    expect(tail).toEqual([
+      'forceHighPerfGpu',
+      'note:hudChrome.options.forceHighPerfGpuNote',
+      'discordPresence',
+      'note:hudChrome.options.discordPresenceNote',
+    ]);
   });
 
   it('appends the Discord presence row + note ONLY with its own bridge capability', () => {
@@ -752,27 +1077,47 @@ describe('options_view: interface dispatch matrix (cluster 5)', () => {
     expect(find(off, 'forceHighPerfGpu')).toMatchObject({ control: 'boolToggle', on: false });
   });
 
-  it('enables the third action-bar toggle only while the secondary row is visible', () => {
+  // Regression pin for the buff-placement bug (issue: buffs on the player
+  // frame flip above/below unpredictably): the above/below choice is now the
+  // player's OWN setting (auraBarBelowFrame), gated on aurasOnPlayerFrame the
+  // same way a dependent BoolToggleControl always gates on its parent
+  // (disabled until the parent is on, rebuilt immediately via rerender: true
+  // so the disabled state never goes stale).
+  it('enables the below-frame buff placement toggle only while buffs anchor to the player frame', () => {
     const hidden = buildInterfaceControls(makeSource());
-    expect(find(hidden, 'showSecondaryActionBar')).toMatchObject({
+    expect(find(hidden, 'aurasOnPlayerFrame')).toMatchObject({
       control: 'boolToggle',
       rerender: true,
     });
-    expect(find(hidden, 'showThirdActionBar')).toMatchObject({
+    expect(find(hidden, 'auraBarBelowFrame')).toMatchObject({
       control: 'boolToggle',
       disabled: true,
     });
 
-    const visible = buildInterfaceControls(makeSource({}, { showSecondaryActionBar: true }));
-    expect(find(visible, 'showThirdActionBar')).toMatchObject({ disabled: false });
+    const visible = buildInterfaceControls(makeSource({}, { aurasOnPlayerFrame: true }));
+    expect(find(visible, 'auraBarBelowFrame')).toMatchObject({ disabled: false });
   });
 
-  it('marks only uiScale as commit-on-release; the other comfort sliders stay live (#1558)', () => {
+  it('reads the stored buff-placement choice straight through, independent of aurasOnPlayerFrame', () => {
+    const on = buildInterfaceControls(
+      makeSource({}, { aurasOnPlayerFrame: true, auraBarBelowFrame: true }),
+    );
+    expect(find(on, 'auraBarBelowFrame')).toMatchObject({ control: 'boolToggle', on: true });
+
+    const off = buildInterfaceControls(
+      makeSource({}, { aurasOnPlayerFrame: true, auraBarBelowFrame: false }),
+    );
+    expect(find(off, 'auraBarBelowFrame')).toMatchObject({ control: 'boolToggle', on: false });
+  });
+
+  it('renders NO uiScale row (owner request); the comfort sliders stay live', () => {
     const controls = buildInterfaceControls(makeSource());
-    // uiScale rescales the whole UI (window included), so it must apply on release.
-    expect(find(controls, 'uiScale')).toMatchObject({ control: 'slider', commitOnChange: true });
+    // The UI Scale slider is retired from the menu: the stored setting still
+    // applies at boot and the General tab's Reset to Defaults still clears it
+    // (renderInterface's off-menu key list).
+    expect(find(controls, 'uiScale')).toBeUndefined();
     // Sibling sliders keep their live preview (no commitOnChange flag).
-    expect(find(controls, 'playerFrameScale')).not.toHaveProperty('commitOnChange');
+    expect(find(controls, 'chatFontScale')).not.toHaveProperty('commitOnChange');
     expect(find(controls, 'tooltipScale')).not.toHaveProperty('commitOnChange');
     expect(find(controls, 'fctScale')).not.toHaveProperty('commitOnChange');
   });
@@ -865,28 +1210,24 @@ describe('options_view: interface tab taxonomy', () => {
     });
   });
 
-  it('keeps the dependent action-bar toggles together in the combat tab', () => {
-    // showThirdActionBar's disabled state depends on showSecondaryActionBar, so
-    // both must sit in the same tab or the dependency would span a tab boundary.
+  it('renders NO menu rows for the settings the Frames Settings dropdown owns', () => {
+    // combineActionBars / hideUnusedActionSlots / mouseoverCast /
+    // lockActionBars moved into the edit mode's Frames Settings dropdown
+    // (interface_unlock.ts settingToggles); a duplicate row here would drift
+    // out of sync with it. The frame-scale sliders are likewise gone: Edit
+    // Frames resizes each frame directly. The settings keys all remain.
     const all = buildInterfaceControls(makeSource());
-    expect(find(all, 'showSecondaryActionBar')?.category).toBe('combat');
-    expect(find(all, 'showThirdActionBar')?.category).toBe('combat');
-  });
-
-  // Issue 2429: the "Hide Unused Action Slots" toggle sits in the combat tab
-  // alongside the other action-bar controls, unconditionally enabled (unlike
-  // showThirdActionBar it has no dependency on another toggle).
-  it('renders the hide-unused-action-slots toggle in the combat tab, reflecting the stored value', () => {
-    const off = buildInterfaceControls(makeSource());
-    expect(find(off, 'hideUnusedActionSlots')).toMatchObject({
-      control: 'boolToggle',
-      category: 'combat',
-      labelKey: 'hudChrome.options.hideUnusedActionSlots',
-      on: false,
-    });
-
-    const on = buildInterfaceControls(makeSource({}, { hideUnusedActionSlots: true }));
-    expect(find(on, 'hideUnusedActionSlots')).toMatchObject({ on: true });
+    for (const key of [
+      'combineActionBars',
+      'hideUnusedActionSlots',
+      'mouseoverCast',
+      'lockActionBars',
+      'playerFrameScale',
+      'targetFrameScale',
+      'partyFrameScale',
+    ]) {
+      expect(find(all, key), `${key} should have no options row`).toBeUndefined();
+    }
   });
 });
 
@@ -904,6 +1245,7 @@ describe('options_view: main menu routing', () => {
       'hudChrome.auraOverlay.title',
       'hud.options.audio',
       'hudChrome.perf.title',
+      'hudChrome.fullTransfer.menu',
       'nav.wiki',
       'hudChrome.unstuck.menuButton',
       'hud.options.logout',
@@ -925,6 +1267,11 @@ describe('options_view: main menu routing', () => {
     const wikiRows = offline.filter((e) => e.labelKey === 'nav.wiki');
     expect(wikiRows).toHaveLength(1);
     expect(wikiRows[0].action).toEqual({ kind: 'wiki' });
+    // The full-settings Import / Export row routes to its own sub-view.
+    expect(offline.find((e) => e.labelKey === 'hudChrome.fullTransfer.menu')?.action).toEqual({
+      kind: 'goto',
+      view: 'transfer',
+    });
   });
 
   it('adds the online-only Report a Bug row when bug reporting is available', () => {

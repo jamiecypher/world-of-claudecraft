@@ -21,7 +21,11 @@ import {
   EXPIRING_BLINK_SEC,
   isAuraDebuff,
   isAuraExpiring,
+  isShortDurationBuff,
+  SHORT_BUFF_PRIORITY_SEC,
 } from '../src/ui/auras_view';
+import { setLanguage } from '../src/ui/i18n';
+import { localizeSimAuraName } from '../src/ui/sim_i18n';
 import { assertAllocationStable } from './util/alloc_probe';
 
 // The "local player" id the isOwn dep compares against (the real host compares
@@ -71,6 +75,21 @@ describe('isAuraDebuff: the allowlist classification (lifted into the core)', ()
     expect(isAuraDebuff(aura({ id: 'x', kind: 'buff_int', value: -20 }))).toBe(true);
   });
 
+  it('id-styled override: Stormsurge Ready reads as a debuff despite its shared internal_cd kind', () => {
+    // Player feedback on PR #3668: Stormsurge's "cannot proc again until
+    // Ancestral Strike is back on cooldown" marker should read as a debuff
+    // (red border, debuff bar), not a buff.
+    expect(
+      isAuraDebuff(aura({ id: 'shaman_stormsurge_ready', kind: 'internal_cd', value: 1 })),
+    ).toBe(true);
+    // The override is per-id, not per-kind: every OTHER internal_cd marker
+    // (Heating Up, Convergence Mark, Warspirit Cadence, ...) stays a buff.
+    expect(isAuraDebuff(aura({ id: 'heating_up', kind: 'internal_cd', value: 1 }))).toBe(false);
+    expect(
+      isAuraDebuff(aura({ id: 'shaman_warspirit_cadence', kind: 'internal_cd', value: 0 })),
+    ).toBe(false);
+  });
+
   // The view re-exports the shared sim classification set. Pin its exact contents
   // so an accidental removal changes every consumer loudly.
   it('matches the exact shared set of harmful kinds', () => {
@@ -78,7 +97,6 @@ describe('isAuraDebuff: the allowlist classification (lifted into the core)', ()
       [
         'affliction_eye',
         'affliction_eye_secondary',
-        'affliction_fate_threads',
         'affliction_violence',
         'attackspeed',
         'blind',
@@ -101,6 +119,7 @@ describe('isAuraDebuff: the allowlist classification (lifted into the core)', ()
         'hex',
         'incapacitate',
         'lockout',
+        'melting_acid',
         'mortal_wound',
         'necromancy_harvest_mark',
         'polymorph',
@@ -114,6 +133,7 @@ describe('isAuraDebuff: the allowlist classification (lifted into the core)', ()
         'sun_verdict',
         'sunder',
         'tongues',
+        'vuln_source',
         'vulnerability',
       ].sort(),
     );
@@ -413,10 +433,10 @@ describe('createAurasView: derivation per mode', () => {
     expect(text(Number.POSITIVE_INFINITY)).toBe(''); // truly permanent: no label
   });
 
-  it('hides the countdown under toggle auras (stealth / forms / stance / Ghost Wolf)', () => {
+  it('hides the countdown under toggle auras (stealth / forms / stance / Shadewolf)', () => {
     const v = createAurasView('all', deps());
     // The sim backs each toggle with a long finite duration (3600s), but a mode
-    // shows no countdown (WoW parity): stealth by kind, Ghost Wolf by id (its
+    // shows no countdown (WoW parity): stealth by kind, Shadewolf by id (its
     // aura rides the generic buff_speed kind that Sprint also uses).
     expect(
       v.tick(entity([aura({ id: 'stealth', kind: 'stealth', remaining: 3600 })])).slots[0]
@@ -564,6 +584,29 @@ describe('isAuraExpiring + the expiring slot flag (the QoL blink threshold)', ()
       entity([aura({ id: 'rend', kind: 'dot', remaining: 12, duration: 12 })]),
     );
     expect(refreshed.slots[0].expiring).toBe(false);
+  });
+});
+
+describe('isShortDurationBuff + slot.shortDuration (the low-tier buff-cap priority rule)', () => {
+  it('is short at or under SHORT_BUFF_PRIORITY_SEC, and never on missing/zero/permanent duration', () => {
+    expect(isShortDurationBuff(6)).toBe(true); // Raised Guard's active-mitigation window
+    expect(isShortDurationBuff(SHORT_BUFF_PRIORITY_SEC)).toBe(true); // boundary: inclusive
+    expect(isShortDurationBuff(SHORT_BUFF_PRIORITY_SEC + 1)).toBe(false);
+    expect(isShortDurationBuff(1800)).toBe(false); // a raid buff
+    expect(isShortDurationBuff(undefined)).toBe(false); // an old server's mirror
+    expect(isShortDurationBuff(0)).toBe(false);
+  });
+
+  it('sets slot.shortDuration from the aura duration, for every mode', () => {
+    const view = createAurasView('all', deps());
+    const state = view.tick(
+      entity([
+        aura({ id: 'raised_guard_dr', kind: 'buff_dr_phys', remaining: 6, duration: 6 }),
+        aura({ id: 'might', kind: 'buff_ap', remaining: 1800, duration: 1800 }),
+        aura({ id: 'foreign_dot', kind: 'dot', remaining: 6, duration: 6 }),
+      ]),
+    );
+    expect(state.slots.map((s) => s.shortDuration)).toEqual([true, false, true]);
   });
 });
 
@@ -808,6 +851,44 @@ describe('auras_view: the carried-flag buff', () => {
 });
 
 // ---------------------------------------------------------------------------
+// The well-fed food buff. Every buff food mints the ONE unified 'well_fed'
+// aura id (Masterwrought 11c: last eaten wins across the whole family; an
+// elixir coexists because the ids can never collide). On the buff bar it is
+// an ordinary timed buff: its display name rides the AURA_NAME_KEY matcher
+// exactly like the elixir auras, and it is NOT a toggle, so
+// compactAuraDuration applies and the remaining time shows.
+// ---------------------------------------------------------------------------
+describe('auras_view: the well-fed food buff', () => {
+  const wellFed = (): AuraInput => ({
+    id: 'well_fed',
+    name: 'Well Fed',
+    kind: 'buff_sta',
+    value: 2,
+    remaining: 600,
+    duration: 600,
+  });
+
+  it('resolves its display name through the AURA_NAME_KEY row, like the elixirs', () => {
+    // Non-null proves the matcher ROW exists (a missing row returns null and
+    // the buff bar would fall back to the raw sim string in every locale);
+    // the en identity round-trip proves the row's EN value matches the aura
+    // string the dishes actually mint.
+    setLanguage('en');
+    expect(localizeSimAuraName('Well Fed')).not.toBeNull();
+    expect(localizeSimAuraName('Well Fed')).toBe('Well Fed');
+  });
+
+  it('shows its remaining time: a real timed buff, never a toggle', () => {
+    const slot = createAurasView('buffs', deps()).tick(entity([wellFed()])).slots[0];
+    expect(slot.key).toBe('well_fed');
+    expect(slot.toggle).toBe(false);
+    expect(slot.durationText).toBe('10m'); // compactAuraDuration: 600s reads 10m
+    expect(slot.isDebuff).toBe(false);
+    expect(slot.expiring).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The HUD half of the touch confirm. The buff-bar cancel listener lives inside the
 // Hud class (no seam a Node test can drive), so the DECISION is pinned above as a
 // pure predicate and the WIRING is pinned here against the real source, which is
@@ -840,5 +921,167 @@ describe('hud.ts: the buff-bar cancel routes a flag drop through the touch confi
     const gate = handler.indexOf('auraCancelNeedsConfirm');
     const instant = handler.lastIndexOf('this.sim.cancelAura(auraId);');
     expect(instant).toBeGreaterThan(gate);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Urgency ordering on the player's own strips (opts.orderByUrgency). The band
+// resolver itself is unit-tested in tests/aura_strip_order_core.test.ts; what matters
+// here is that the view turns bands into SLOT ORDER, leaves every other view's
+// order exactly as it was, and does not break the reused-pool allocation contract.
+// ---------------------------------------------------------------------------
+describe('auras view: urgency ordering', () => {
+  // Deliberately built in the WRONG reading order: long raid buffs applied first
+  // (as they are in a real pull), the cooldowns you actually time applied last.
+  const raidBuffed = (): AuraInput[] => [
+    aura({ id: 'bl_might', remaining: 1800, duration: 1800 }),
+    aura({ id: 'arcane_int', kind: 'buff_int', remaining: 1800, duration: 1800 }),
+    aura({ id: 'well_fed', kind: 'buff_sta', remaining: 900, duration: 900 }),
+    aura({ id: 'battle_shout', remaining: 120, duration: 120 }),
+    aura({ id: 'sprint', kind: 'buff_speed', remaining: 9, duration: 15 }),
+    aura({ id: 'heroism', kind: 'buff_haste', remaining: 34, duration: 40 }),
+  ];
+  const keys = (s: { slots: { key: string }[]; count: number }) =>
+    s.slots.slice(0, s.count).map((x) => x.key);
+
+  it('puts the soonest-to-expire band nearest the anchor and upkeep at the far end', () => {
+    const view = createAurasView('buffs', deps(), { orderByUrgency: true });
+    expect(keys(view.tick(entity(raidBuffed())))).toEqual([
+      // band 0 (under a minute), then 1 (under five), then 2 (under thirty), then upkeep
+      'sprint',
+      'heroism',
+      'battle_shout',
+      'well_fed',
+      'bl_might',
+      'arcane_int',
+    ]);
+  });
+
+  it('orders BOTH player-strip modes by default, with no option passed', () => {
+    // The default is what hud.ts actually constructs, so a regression that only shows up
+    // without the explicit flag would otherwise ship unseen.
+    expect(keys(createAurasView('buffs', deps()).tick(entity(raidBuffed())))).toEqual([
+      'sprint',
+      'heroism',
+      'battle_shout',
+      'well_fed',
+      'bl_might',
+      'arcane_int',
+    ]);
+    const debuffs = [
+      aura({ id: 'curse_weak', kind: 'debuff_ap', remaining: 110, duration: 120 }),
+      aura({ id: 'frostbite', kind: 'slow', remaining: 5, duration: 8 }),
+    ];
+    expect(keys(createAurasView('debuffs', deps()).tick(entity(debuffs)))).toEqual([
+      'frostbite',
+      'curse_weak',
+    ]);
+  });
+
+  it("leaves the SHARED 'all' mode in sim application order by default", () => {
+    // 'all' drives the target strip and the party mini-strips (party_frame_row.ts), which
+    // must not silently pick up the player-strip ordering.
+    expect(keys(createAurasView('all', deps()).tick(entity(raidBuffed())))).toEqual([
+      'bl_might',
+      'arcane_int',
+      'well_fed',
+      'battle_shout',
+      'sprint',
+      'heroism',
+    ]);
+  });
+
+  it('lets an explicit opt-out fall back to sim application order', () => {
+    const view = createAurasView('buffs', deps(), { orderByUrgency: false });
+    expect(keys(view.tick(entity(raidBuffed())))).toEqual([
+      'bl_might',
+      'arcane_int',
+      'well_fed',
+      'battle_shout',
+      'sprint',
+      'heroism',
+    ]);
+  });
+
+  it('keeps sim application order INSIDE a band, so equal-urgency icons never swap', () => {
+    const view = createAurasView('buffs', deps(), { orderByUrgency: true });
+    const same = [
+      aura({ id: 'first', remaining: 20, duration: 30 }),
+      aura({ id: 'second', remaining: 10, duration: 30 }),
+      aura({ id: 'third', remaining: 30, duration: 30 }),
+    ];
+    // All three are band 0. A comparator-based sort would order them 10/20/30; the
+    // banding pass must not, because that is the per-tick reshuffle it exists to avoid.
+    expect(keys(view.tick(entity(same)))).toEqual(['first', 'second', 'third']);
+  });
+
+  it('sends a toggle to the far end even though the sim backs it with a long duration', () => {
+    const view = createAurasView('buffs', deps(), { orderByUrgency: true });
+    const withStance = [
+      aura({ id: 'battle_stance', kind: 'battle_stance', remaining: 3600, duration: 3600 }),
+      aura({ id: 'bl_might', remaining: 1800, duration: 1800 }),
+      aura({ id: 'sprint', kind: 'buff_speed', remaining: 9, duration: 15 }),
+    ];
+    // Not merely "after sprint": the stance must land behind the 30 minute buff too,
+    // which banding by its raw 3600s remaining would also produce by accident.
+    expect(keys(view.tick(entity(withStance)))).toEqual(['sprint', 'bl_might', 'battle_stance']);
+  });
+
+  it('orders the debuff strip on the same rule', () => {
+    const view = createAurasView('debuffs', deps(), { orderByUrgency: true });
+    const debuffs = [
+      aura({ id: 'curse_weak', kind: 'debuff_ap', remaining: 110, duration: 120 }),
+      aura({ id: 'frostbite', kind: 'slow', remaining: 5, duration: 8 }),
+    ];
+    expect(keys(view.tick(entity(debuffs)))).toEqual(['frostbite', 'curse_weak']);
+  });
+
+  it('lets ownFirst win when both are asked for, so the target strip is untouched', () => {
+    const view = createAurasView('all', deps(), { ownFirst: true, orderByUrgency: true });
+    const mixed = [
+      // Someone else's, and the most urgent thing on the target.
+      aura({ id: 'other_dot', kind: 'dot', remaining: 3, duration: 12, sourceId: 99 }),
+      // Yours, and the least urgent.
+      aura({ id: 'my_dot', kind: 'dot', remaining: 900, duration: 900, sourceId: OWN_PLAYER_ID }),
+    ];
+    // Urgency alone would lead with other_dot; ownFirst must still lead with yours.
+    expect(keys(view.tick(entity(mixed)))).toEqual(['my_dot', 'other_dot']);
+  });
+
+  it('an aura crossing a band boundary moves, and nothing else does', () => {
+    const view = createAurasView('buffs', deps(), { orderByUrgency: true });
+    const at = (heroism: number) =>
+      keys(
+        view.tick(
+          entity([
+            aura({ id: 'bl_might', remaining: 1800, duration: 1800 }),
+            aura({ id: 'battle_shout', remaining: 120, duration: 120 }),
+            aura({ id: 'heroism', kind: 'buff_haste', remaining: heroism, duration: 300 }),
+          ]),
+        ),
+      );
+    // Heroism at 90s shares the under-five-minutes band with the shout, and lost the
+    // tie to it on application order.
+    expect(at(90)).toEqual(['battle_shout', 'heroism', 'bl_might']);
+    // Ticking under a minute promotes it a band, and only it moves.
+    expect(at(59)).toEqual(['heroism', 'battle_shout', 'bl_might']);
+  });
+
+  it('keeps the reused-pool allocation contract under the extra passes', () => {
+    const view = createAurasView('buffs', deps(), { orderByUrgency: true });
+    let frame = 0;
+    const tick = () => {
+      frame += 1;
+      // Ticks a buff ACROSS a band boundary during the probe, so the ordering passes
+      // are genuinely re-running rather than settling into one stable answer.
+      return view.tick(
+        entity([
+          aura({ id: 'bl_might', remaining: 1800 - frame, duration: 1800 }),
+          aura({ id: 'heroism', kind: 'buff_haste', remaining: 62 - frame, duration: 300 }),
+        ]),
+      );
+    };
+    expect(() => assertAllocationStable(tick)).not.toThrow();
+    expect(() => assertAllocationStable(() => tick().slots)).not.toThrow();
   });
 });

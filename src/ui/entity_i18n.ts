@@ -1,12 +1,4 @@
-import {
-  GUILD_TREND_LETTERS,
-  HEROIC_MARK_LETTER,
-  type LetterDef,
-  MASTER_TIER_LETTERS,
-  MASTERY_RESET_LETTER,
-  QUEST_LETTERS,
-  WELCOME_LETTER,
-} from '../sim/content/letters';
+import { authoredLettersById, type LetterDef } from '../sim/content/letters';
 import {
   ABILITIES,
   CLASSES,
@@ -200,18 +192,15 @@ const CLASS_DESCRIPTION_KEYS: Record<PlayerClass, string> = {
 const fallbackLog = new Map<string, EntityTranslationFallback>();
 
 // Ravenpost authored letters by letterId (the welcome letter, the Heroic Marks
-// reward letter, the quest thank-you letters, and the Guild trend letters), the
-// canonical English source the 'letter' kind reads.
-const LETTERS_BY_ID: Record<string, LetterDef> = {
-  [WELCOME_LETTER.letterId]: WELCOME_LETTER,
-  [HEROIC_MARK_LETTER.letterId]: HEROIC_MARK_LETTER,
-  [MASTERY_RESET_LETTER.letterId]: MASTERY_RESET_LETTER,
-};
-for (const letter of Object.values(QUEST_LETTERS)) LETTERS_BY_ID[letter.letterId] = letter;
-for (const letter of Object.values(GUILD_TREND_LETTERS)) LETTERS_BY_ID[letter.letterId] = letter;
-for (const byTier of Object.values(MASTER_TIER_LETTERS)) {
-  for (const letter of Object.values(byTier)) LETTERS_BY_ID[letter.letterId] = letter;
-}
+// and Wyrmfall Core reward letters, the mastery reset notice, the quest
+// thank-you letters, the Guild trend letters, the master tier letters, and the
+// $WOC Exchange's three delivery letters), the canonical English source the
+// 'letter' kind reads. Built by the ONE shared builder in
+// src/sim/content/letters.ts, the same map world_entity_i18n.ts derives its key
+// set from, so a letter cannot be registered for translation yet unknown here
+// (the Wyrmfall Core letter was exactly that until this registry stopped
+// hand-seeding its own copy).
+const LETTERS_BY_ID: Record<string, LetterDef> = authoredLettersById();
 
 /** Whether THIS bundle ships the authored letter (stale-client guard, R34):
  *  the mail window falls back to the WIRE-shipped sender/subject/body for an
@@ -257,7 +246,13 @@ function interpolateSource(source: string, values?: InterpolationValues): string
     .replace(/\$p/g, String(values.hostilePvpDuration ?? '$p'))
     .replace(/\$g/g, String(values.groundDuration ?? '$g'))
     .replace(/\$s/g, String(values.selfCooldownRecovery ?? '$s'))
-    .replace(/\$a/g, String(values.allyCooldownRecovery ?? '$a'));
+    .replace(/\$a/g, String(values.allyCooldownRecovery ?? '$a'))
+    // Temporal Echo's resolved base, area, and offensive-driver conversion
+    // percentages. The x/y/z names keep the legacy sim-source placeholder
+    // alphabet compact; translated catalogs use the descriptive brace names.
+    .replace(/\$x/g, String(values.echoSinglePct ?? '$x'))
+    .replace(/\$y/g, String(values.echoAreaPct ?? '$y'))
+    .replace(/\$z/g, String(values.echoDriverPct ?? '$z'));
   return legacy.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) => {
     const value = values[name];
     return value === undefined ? match : String(value);
@@ -507,6 +502,25 @@ export function zoneDisplayName(zoneId: string): string {
 
 export function zonePoiLabel(zoneId: string, poiIndex: number): string {
   return tEntity({ kind: 'zonePoi', zoneId, poiIndex, field: 'label' });
+}
+
+/** Resolve a deed poi:<zoneId>:<poiId> mark (src/sim/deeds.ts markVisited) to
+ *  its localized display name, the one place the mark's stable-id keying
+ *  (deeds.ts) and the map label's positional keying (zonePoiLabel above)
+ *  meet: the sim intentionally keys on poi.id, never array position, so a
+ *  content edit that reorders a zone's pois must not silently mislabel an
+ *  old mark, and this is where that id -> index bridge is pinned instead of
+ *  re-derived ad hoc at each call site. Returns null for a malformed mark, an
+ *  unknown zone, or a poi id no longer in that zone (content can retire one;
+ *  the mark itself stays parked in an old save either way). */
+export function poiMarkLabel(markId: string): string | null {
+  const parts = markId.split(':');
+  if (parts.length !== 3 || parts[0] !== 'poi') return null;
+  const [, zoneId, poiId] = parts;
+  const zone = ZONES.find((z) => z.id === zoneId);
+  const poiIndex = zone?.pois.findIndex((p) => p.id === poiId) ?? -1;
+  if (poiIndex < 0) return null;
+  return zonePoiLabel(zoneId, poiIndex);
 }
 
 export function dungeonDisplayName(dungeonId: string): string {

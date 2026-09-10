@@ -39,7 +39,7 @@ import {
   SUPPORT_OVERLAP,
   supportHeightAt,
 } from '../colliders';
-import { rideSteepnessAt, shoreStepOut, stepWaterLevel } from '../ride_height';
+import { rideSteepnessAt, shoreStepOut, stepWaterLevel, walkedSteepnessAt } from '../ride_height';
 import { groundHeight, terrainDownhill } from '../world';
 import { overlapCollider, SKIN_WIDTH, sweepCollider } from './sweep';
 
@@ -57,6 +57,13 @@ import { overlapCollider, SKIN_WIDTH, sweepCollider } from './sweep';
  * Pinned against the rock size model by tests/physics_character.test.ts.
  */
 export const MAX_STEP_HEIGHT = 0.9;
+
+/** Feet more than this far above the raw ground mean the body stands on a
+ *  collider (a deck, a tread, a crate), not the terrain. The steep-ground
+ *  control strip (player_motion.ts) and the grounded terrain wall gate
+ *  below both yield to a carried body, because neither is judging the
+ *  surface that body actually walks on. */
+export const PLATFORM_CARRY_CLEARANCE = 0.5;
 /** Slide passes per move. Four resolves a corner (two planes) plus slack. */
 const MAX_SLIDE_ITERATIONS = 4;
 /** Depenetration passes when the body starts embedded. */
@@ -331,6 +338,14 @@ export function moveCharacter(
       if (!blocksAt(c, px, pz, feetY, params)) continue;
       physicsStats.sweeps++;
       if (!sweepCollider(c, px, pz, remX, remZ, params.radius, hit)) continue;
+      // A zero-advance contact whose face the motion SEPARATES from is a
+      // graze, not an obstruction: a body resting against a deck plate's
+      // side while walking directly away used to take this as the nearest
+      // hit, fail the step-up (no floor lies away from the plate), and
+      // then discard its whole motion in the slide tail, freezing in place
+      // (the Last Keep mid-landing descent). Leaving a touched face is
+      // always free; real obstacles further along stay in the running.
+      if (hit.t <= 1e-6 && remX * hit.nx + remZ * hit.nz >= 0) continue;
       if (hit.t < bestT) {
         bestT = hit.t;
         bestIndex = i;
@@ -427,11 +442,27 @@ export function moveCharacter(
   let groundEnd = Math.max(rawEnd, wls);
   const run = Math.hypot(dx, dz);
   const airborneClears = !params.grounded && groundEnd <= feetY;
-  if (!params.swimming && !airborneClears && groundEnd > groundStart && run > 1e-5) {
+  // A grounded body CARRIED by a standable platform (feet well above the
+  // raw ground: a fortress floor plate crossing a ramp band's buried edge)
+  // is not walking the heightfield it stands over, so the wall rule yields
+  // whenever the ground ahead still tops out within an ordinary step of
+  // the feet and the vertical pass can simply seat onto it. Ground rising
+  // PAST the feet stays a wall: a carried body never walks into a mass.
+  const carriedClears =
+    params.grounded &&
+    feetY > groundStart + PLATFORM_CARRY_CLEARANCE &&
+    groundEnd <= feetY + MAX_STEP_HEIGHT;
+  if (
+    !params.swimming &&
+    !airborneClears &&
+    !carriedClears &&
+    groundEnd > groundStart &&
+    run > 1e-5
+  ) {
     const rise = groundEnd - groundStart;
     const unwalkable =
       (rise / run > params.maxSlope ||
-        (rawEnd >= wls && rideSteepnessAt(px, pz, params.seed) > params.maxSlope)) &&
+        (rawEnd >= wls && walkedSteepnessAt(px, pz, params.seed, rawEnd) > params.maxSlope)) &&
       !shoreStepOut(x, z, px, pz, params.seed, params.maxSlope);
     // NOTE: step-up deliberately does NOT apply to the heightfield. A per-tick
     // step allowance on terrain is a cliff-climbing ladder: at 20 Hz a body
@@ -476,7 +507,8 @@ export function moveCharacter(
           // step's own slope AND the gradient of the ground it lands on.
           const contourOk =
             (contourRise <= 0 || contourRise / contourRun <= params.maxSlope) &&
-            (contourRaw < contourWls || rideSteepnessAt(cx, cz, params.seed) <= params.maxSlope);
+            (contourRaw < contourWls ||
+              walkedSteepnessAt(cx, cz, params.seed, contourRaw) <= params.maxSlope);
           if (contourOk && isClear(cx, cz, feetY, params)) {
             px = cx;
             pz = cz;

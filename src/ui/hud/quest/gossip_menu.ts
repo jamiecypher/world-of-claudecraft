@@ -21,10 +21,17 @@ export interface GossipMenuContent {
    *  own field here: a flagged NPC with an empty `vendorItems` list would
    *  otherwise read as an empty menu and close itself the moment it opened. */
   hasWarfareVendor: boolean;
+  /** The Crucible Quartermaster's sigil-redemption shop (a #vendor-window
+   *  tenant). A flagged NPC sells nothing through the ordinary grid, so it
+   *  needs its own field for the same reason as hasWarfareVendor above. */
+  hasCrucibleVendor: boolean;
   hasDelveBoard: boolean;
-  hasVcup: boolean;
   hasCardMaster: boolean;
   hasTraining: boolean;
+  /** A farmer NPC's husk-to-compost trade row (the farming go-live, gated on
+   *  the NpcDef farmer flag). Its own field so a farmer with no quest and no
+   *  stock still keeps the dialog open for the trade. */
+  hasFarmer: boolean;
 }
 
 export function gossipMenuIsEmpty(content: GossipMenuContent): boolean {
@@ -35,9 +42,10 @@ export function gossipMenuIsEmpty(content: GossipMenuContent): boolean {
     !content.hasMarket &&
     !content.hasHeroicVendor &&
     !content.hasWarfareVendor &&
+    !content.hasCrucibleVendor &&
     !content.hasDelveBoard &&
-    !content.hasVcup &&
     !content.hasCardMaster &&
-    !content.hasTraining
+    !content.hasTraining &&
+    !content.hasFarmer
   );
 }

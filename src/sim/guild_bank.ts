@@ -23,25 +23,43 @@
 // Date.now (enforced by tests/architecture.test.ts). This module draws NO rng.
 
 import type { GuildBankInfo } from '../world_api';
-import { addStacked, bagCapacity, bagsFullError, instancedCountCap } from './bags';
+import { generalOnlyPools } from './bag_pools';
+import { addStacked, bagPools, bagsFullError, instancedCountCap } from './bags';
 import { moveBetweenContainers, nearBanker } from './bank';
 import { ITEMS } from './data';
 import { formatMoney } from './format_money';
+import {
+  applyGuildMaterialMove,
+  canonicalMaterialSourceLegs,
+  guildMaterialMoveFor,
+  revertGuildMaterialMove,
+} from './guild_bank_material';
 import {
   boundCraftedRecipeIdOnLoad,
   sanitizeItemInstancePayloadOnLoad,
   warnDroppedInstanceKeys,
 } from './item_instance_load';
 import { isTransferLockedInstance, publicInstanceView } from './item_instance_transfer';
+import { materialItemIds } from './material_ids';
+import type { MaterialPayloadIdentity } from './material_payload_identity';
+import {
+  normalizeLoadedMaterialSlot,
+  preservesMaterialCountOnLoad,
+  validateMaterialSlotSourcesOnLoad,
+} from './material_slot_load';
+import {
+  type MaterialSourceTransferSelection,
+  resolveMaterialSourceTransferSelection,
+} from './material_source_transfer_selection';
+import type { MaterialComposition, MaterialSourceDelta } from './material_sources';
 import type { PlayerMeta } from './sim';
 import type { SimContext } from './sim_context';
 import { cloneInvSlot, type InvSlot } from './types';
 
 /** One-time fee the founder pays when a guild is created (1 gold).
- *  RESERVE-AT-GATE (revised by Phase 3 QA): deducted synchronously at the
- *  guild_create dispatch gate BEFORE any DB work and refunded on every
- *  refusal arm; charging after the commit left a deterministic fee-dodge
- *  exploit (see chargeGuildCreationFee below and docs/guild-bank/state.md). */
+ *  The server deducts it at the head of the founder's character-save FIFO and
+ *  persists that exact post-charge purse in the same transaction as the new
+ *  guild, leader, empty bank, and create_fee receipt. */
 export const GUILD_CREATION_FEE_COPPER = 10_000;
 
 /** Slots one treasury-bought expansion (ladder rungs 1 and up) adds. */
@@ -170,6 +188,16 @@ export function createEmptyGuildBankState(): GuildBankState {
  *  as dormant recoverable data for the operator hatch rather than being
  *  destroyed here.
  *
+ *  MATERIAL PROVENANCE is the one thing this path does NOT sanitize away, and it
+ *  does not own the rule either: `material_slot_load.ts` pre-validates each raw
+ *  row BEFORE any legacy coercion and normalizes the cleaned clone after, the
+ *  same pair the carried bags, the personal bank and the vault run. A row whose
+ *  buckets the shared model cannot read THROWS and refuses this book's load,
+ *  rather than being demoted to unrecorded stock: a quiet demotion here would
+ *  launder attribution a character save would have refused outright. A material
+ *  or source-bearing row is also exempt from the instanced count ceiling, so a
+ *  legal legacy over-cap holding keeps every unit its buckets account for.
+ *
  *  `droppedSink` aggregates the drop diagnostics for a caller loading many
  *  books (the boot load); a sink-less call logs one aggregate line per CALL. */
 export function sanitizeGuildBankState(raw: unknown, droppedSink?: string[]): GuildBankState {
@@ -185,8 +213,16 @@ export function sanitizeGuildBankState(raw: unknown, droppedSink?: string[]): Gu
         count?: unknown;
         instance?: unknown;
         craftedRecipeId?: unknown;
+        materialSources?: InvSlot['materialSources'];
+        materialSeparated?: true;
       };
       if (typeof e.itemId !== 'string' || e.itemId === '') continue;
+      // The SHARED pre-validate, ahead of every legacy coercion below, exactly
+      // as the bank and vault arms order it: provenance is judged before a
+      // count clamp or a payload bound can erase it, and a row the shared model
+      // cannot read REFUSES this book's load rather than being quietly demoted
+      // to unrecorded stock. One policy for all four containers.
+      validateMaterialSlotSourcesOnLoad(e);
       const hasInstance = !!e.instance && typeof e.instance === 'object';
       // The shared doctrine helper judges the RAW marker, so a non-string or
       // oversized one is dropped AND reported rather than silently kept.
@@ -196,10 +232,21 @@ export function sanitizeGuildBankState(raw: unknown, droppedSink?: string[]): Gu
       };
       boundCraftedRecipeIdOnLoad(rawMarker, localDrops, 'guildbank');
       const craftedRecipeId = rawMarker.craftedRecipeId as string | undefined;
-      const instanceCap = instancedCountCap(
-        ITEMS[e.itemId],
-        hasInstance ? (e.instance as InvSlot['instance']) : undefined,
-      );
+      // The shared tamper ceiling, with the shared material exemption in front
+      // of it (the bank arm's exact shape): a material or source-bearing row
+      // keeps its stored count, so a LEGAL legacy over-cap holding survives
+      // instead of being clipped back to the stack cap and losing units its
+      // buckets still account for.
+      const instanceCap = preservesMaterialCountOnLoad({
+        itemId: e.itemId,
+        materialSources: e.materialSources,
+        instance: hasInstance ? (e.instance as InvSlot['instance']) : undefined,
+      })
+        ? Number.MAX_SAFE_INTEGER
+        : instancedCountCap(
+            ITEMS[e.itemId],
+            hasInstance ? (e.instance as InvSlot['instance']) : undefined,
+          );
       // Computed from the payload AS STORED, so dropping a junk key below can
       // never widen a tampered stack.
       const count = Math.min(instanceCap, Math.max(1, Math.floor(Number(e.count)) || 1));
@@ -207,6 +254,8 @@ export function sanitizeGuildBankState(raw: unknown, droppedSink?: string[]): Gu
         ? { itemId: e.itemId, count, instance: e.instance as InvSlot['instance'] }
         : { itemId: e.itemId, count };
       if (craftedRecipeId !== undefined) slot.craftedRecipeId = craftedRecipeId;
+      if (e.materialSources !== undefined) slot.materialSources = e.materialSources;
+      if (e.materialSeparated === true) slot.materialSeparated = true;
       const cleaned = cloneInvSlot(slot);
       // Applied to the CLONE, never to the stored row this function does not own.
       if (cleaned.instance) {
@@ -215,7 +264,10 @@ export function sanitizeGuildBankState(raw: unknown, droppedSink?: string[]): Gu
         if (payload) cleaned.instance = payload;
         else delete cleaned.instance;
       }
-      inventory.push(cleaned);
+      // The SHARED normalize, last, on the already-bounded clone: identical to
+      // the bank arm, so a guild book and a personal bank can never read the
+      // same stored row two different ways.
+      inventory.push(normalizeLoadedMaterialSlot(cleaned));
     }
   }
   if (!droppedSink) warnDroppedInstanceKeys('guildbank', localDrops);
@@ -286,15 +338,11 @@ export function guildBankHoldings(
 }
 
 /** Deduct the guild creation fee from the acting player's purse, returning the
- *  copper actually charged. RESERVE-AT-GATE (Phase 3 QA, revising the original
- *  create-then-charge decision): the server charges this SYNCHRONOUSLY at the
- *  guild_create dispatch gate, BEFORE any DB work, and refunds it on every
- *  refusal arm (refundGuildCreationFee below). Charging after the commit left
- *  a deterministic exploit: a client could pipeline guild_create with a spend
- *  (or log out) so the deferred clamped charge collected residue or nothing.
- *  The gate refuses a poor founder first, so the clamp here is defensive
- *  only. Deliberately emits NO player line (the "You found the guild" arm is
- *  the celebration; the purse delta rides the normal self snapshot). */
+ *  copper actually charged. The server invokes this only after the paid create
+ *  reaches the head of the character-save FIFO, immediately before capturing
+ *  the state used by the atomic guild/member/bank/receipt transaction. The
+ *  dispatch check is UX-only; this clamp and the server's observed purse delta
+ *  are the authoritative proof. Deliberately emits no player line. */
 export function chargeGuildCreationFee(ctx: SimContext, pid: number): number {
   const r = resolveActor(ctx, pid);
   if (!r) return 0;
@@ -304,12 +352,11 @@ export function chargeGuildCreationFee(ctx: SimContext, pid: number): number {
   return charged;
 }
 
-/** Return a reserved guild creation fee to the acting player's purse (the
- *  refusal arm of the reserve-at-gate flow above: name invalid or taken,
- *  already in a guild, or the create's DB transaction failed). Clamped so the
- *  purse can never exceed the integer-safe bound; returns the copper actually
- *  refunded. Silent like the charge; refunding an unresolvable pid refunds
- *  nothing (the server logs that arm loudly for operator compensation). */
+/** Return a charged guild creation fee after the database layer proved the
+ *  atomic transaction did not commit. Ambiguous COMMIT outcomes never call
+ *  this: the session is quarantined and reloads durable truth. Clamped so the
+ *  purse can never exceed the integer-safe bound; returns the exact amount
+ *  actually refunded. */
 export function refundGuildCreationFee(ctx: SimContext, pid: number, amount: number): number {
   const r = resolveActor(ctx, pid);
   if (!r) return 0;
@@ -369,6 +416,22 @@ export interface GuildBankOpDelta {
    *  target the forward replay applies, and the compare-and-swap witness the
    *  inverse checks before undoing anything. */
   purchasedSlotsAfter: number;
+  /** The EXACT per-source legs this op moved, signed as the BOOK moved them
+   *  (positive = units the book gained), canonically ordered and coalesced, and
+   *  summing to the op's own signed count. Present only on a MATERIAL item op,
+   *  and optional/additive: absent (or null) is a legacy delta whose provenance
+   *  is the lossless projection of `count` plus the payload's legacy `signer`.
+   *
+   *  This is what makes a one-unit deposit journal as one unit against a mixed
+   *  stack instead of rewriting the whole after-stack, and it is the ONLY way a
+   *  pure re-attribution (`count` 0, one negative leg and one positive leg) can
+   *  be recorded and replayed at all: netting and replay judge such a delta on
+   *  its legs, never on its zero unit total.
+   *
+   *  It is deliberately NOT part of the delta's identity: the legs are what
+   *  MOVED, while the identity a book groups under stays the item id, the
+   *  crafted marker and the payload (see guildBankDeltaIdentityKey). */
+  materialSources?: readonly MaterialSourceDelta[] | null;
 }
 
 /** Why a session's own deltas could NOT be replayed forward onto durable
@@ -379,12 +442,23 @@ export interface GuildBankOpDelta {
  *  durable base and the intended delta, so the server turns a deficit into a
  *  retry and (once it can never resolve) a bank_ledger anomaly row. */
 export interface GuildBankDeltaDeficit {
-  kind: 'treasury_underflow' | 'treasury_overflow' | 'missing_items' | 'ladder_behind';
+  kind:
+    | 'treasury_underflow'
+    | 'treasury_overflow'
+    | 'missing_items'
+    | 'ladder_behind'
+    /** The delta's material provenance, or the base book's own material stock,
+     *  could not be read (a malformed descriptor, legs that disagree with their
+     *  own count, a legacy signer beside explicit legs). NOT a shortfall: it
+     *  refuses the write the same way, because replaying a move whose
+     *  provenance is unreadable would either erase attribution or invent it. */
+    | 'source_unreadable';
   op: GuildBankOpDelta['op'];
   itemId: string | null;
   /** How much of the delta the base could not satisfy: copper for the two
    *  treasury kinds, item copies for missing_items, ladder slots for
-   *  ladder_behind. Always positive. */
+   *  ladder_behind, and the units whose provenance could not be replayed for
+   *  source_unreadable. Always positive. */
   shortfall: number;
   /** The stalled delta's own copper movement, SIGNED as the book would have
    *  moved it (negative = copper that would have LEFT the book). Carried so an
@@ -449,6 +523,21 @@ function sameInstance(
  *  no item half). Shared by both directions so they can never disagree. */
 function deltaCount(d: GuildBankOpDelta): number {
   return Math.max(0, Math.floor(Number(d.count)) || 0);
+}
+
+/** The refusal a delta whose material provenance cannot be read produces. It
+ *  refuses the write exactly like a shortfall does, because the alternative is
+ *  replaying a move that either erases attribution or invents it. The shortfall
+ *  figure names the units whose provenance could not be replayed; a pure
+ *  re-attribution moves no units, so it reports the one bucket swap it is. */
+function sourceUnreadable(d: GuildBankOpDelta): GuildBankDeltaDeficit {
+  return {
+    kind: 'source_unreadable',
+    op: d.op,
+    itemId: d.itemId,
+    shortfall: Math.max(1, deltaCount(d)),
+    copperDelta: 0,
+  };
 }
 
 /** The delta's craft-provenance marker as addStacked wants it. */
@@ -544,7 +633,7 @@ export function applyGuildBankDeltasTo(
       // later rung cannot commit before the rung under it) and would charge
       // the treasury for a grant the inverse then declines to undo, so it is
       // refused too. The save retries once the other officer commits, and is
-      // rolled back if they never can (server/game.ts
+      // rolled back if they never can (server/guild_bank_escrow_refusal.ts
       // handleGuildBankEscrowRefusal).
       if (book.purchasedSlots !== d.purchasedSlotsBefore) {
         return {
@@ -589,6 +678,26 @@ export function applyGuildBankDeltasTo(
       book.treasury = next;
       continue;
     }
+    // MATERIAL item ops resolve through the shared source model: the exact legs
+    // this op moved (or the lossless legacy projection when none were recorded)
+    // are applied to the book's own normalized stock, so a mixed stack can never
+    // be edited by a source-blind slot count and a count-0 re-attribution
+    // replays as the move it really was.
+    const move = guildMaterialMoveFor(d, materialItemIds());
+    if (!move.ok) return sourceUnreadable(d);
+    if (move.value !== null) {
+      const applied = applyGuildMaterialMove(book.inventory, move.value, materialItemIds());
+      if (applied.ok) continue;
+      if (applied.reason === 'unreadable') return sourceUnreadable(d);
+      return {
+        kind: 'missing_items',
+        op: d.op,
+        itemId: d.itemId,
+        shortfall: applied.shortfall,
+        copperDelta: 0,
+      };
+    }
+
     const count = typeof d.itemId === 'string' && d.itemId !== '' ? deltaCount(d) : 0;
     if (count === 0) continue;
     if (d.op === 'deposit') {
@@ -652,6 +761,18 @@ export function revertGuildBankDeltasTo(
       continue;
     }
     if (typeof d.itemId !== 'string' || d.itemId === '') continue;
+    // The material arm's inverse: put back exactly the buckets that left and
+    // take back exactly the ones that arrived, clamping (never refusing) the
+    // same way the legacy arm below does. A delta this arm cannot read is
+    // SKIPPED rather than undone source-blind: the forward replay refused it
+    // too, so there is nothing of its to undo.
+    const move = guildMaterialMoveFor(d, materialItemIds());
+    if (move.ok && move.value !== null) {
+      revertGuildMaterialMove(book.inventory, move.value, materialItemIds());
+      continue;
+    }
+    if (!move.ok) continue;
+
     const count = deltaCount(d);
     if (count === 0) continue;
     if (d.op === 'deposit') removeMatching(book, d, count);
@@ -667,8 +788,21 @@ export function revertGuildBankDeltasTo(
  *  the inverse match on. EXPORTED so the server's log compactor
  *  (server/guild_bank_op_log.ts) nets on exactly this key rather than a second
  *  copy that could disagree about a payload's canonical form. */
-export function guildBankDeltaIdentityKey(d: GuildBankOpDelta): string {
+export function guildBankDeltaIdentityKey(
+  d: Pick<GuildBankOpDelta, 'itemId' | 'instance' | 'craftedRecipeId'>,
+): string {
   return `${d.itemId ?? ''}|${canonicalJson(d.instance ?? null)}|${d.craftedRecipeId ?? ''}`;
+}
+
+/** One payload identity's netted material movement while a log is compacted. */
+interface MaterialNetEntry {
+  readonly identity: MaterialPayloadIdentity;
+  /** The netted unit total, signed as the book moved it. */
+  net: number;
+  /** Every contributing leg, coalesced only at the end. */
+  readonly legs: MaterialSourceDelta[];
+  /** The contributing deltas, kept only for the unreachable overflow arm. */
+  readonly raw: GuildBankOpDelta[];
 }
 
 /** A REPLAY-EQUIVALENT normalization of a delta log: the same final book as
@@ -701,6 +835,12 @@ export function netGuildBankOpLogForReplay(log: readonly GuildBankOpDelta[]): Gu
   const out: GuildBankOpDelta[] = [];
   let copper = 0;
   const items = new Map<string, { sample: GuildBankOpDelta; net: number }>();
+  // Material stock nets on the NORMALIZED payload identity, and on BOTH axes:
+  // the unit total and the per-source legs. A pair that cancels in units but
+  // not in provenance (this officer withdrew A's ore and deposited B's) is a
+  // real move of the book's attribution, so it survives netting as a count-0
+  // delta with nonzero legs rather than vanishing at `net === 0`.
+  const materials = new Map<string, MaterialNetEntry>();
   for (const d of log) {
     if (d.op === 'open_bank' || d.op === 'buy_slots') {
       // buy_slots spent TREASURY copper, so its charge is lifted into the net;
@@ -719,12 +859,60 @@ export function netGuildBankOpLogForReplay(log: readonly GuildBankOpDelta[]): Gu
     // divergence the ordered replay exists to refuse.
     if (d.op !== 'deposit' && d.op !== 'withdraw' && d.op !== 'admin_purge') continue;
     if (typeof d.itemId !== 'string' || d.itemId === '') continue;
+    const move = guildMaterialMoveFor(d, materialItemIds());
+    if (!move.ok) {
+      // Unreadable provenance is carried through VERBATIM and unnetted, so the
+      // netted rescue replay meets exactly the same refusal the ordered one
+      // did. Netting it away would let the rescue write a book whose
+      // attribution nobody could account for.
+      out.push({ ...d });
+      continue;
+    }
+    if (move.value !== null && move.value.kind === 'exact') {
+      const netted = materials.get(move.value.key) ?? {
+        identity: move.value.identity,
+        net: 0,
+        legs: [],
+        raw: [],
+      };
+      netted.net += move.value.signedCount;
+      netted.legs.push(...move.value.legs);
+      netted.raw.push(d);
+      materials.set(move.value.key, netted);
+      continue;
+    }
+    // A LEGACY material delta keeps the count netting below, on its own legacy
+    // identity key: its removal side deliberately has no recorded provenance
+    // (the replay spends in the canonical order), and netting two different
+    // legacy signers under one normalized key would have to pick one of them.
     const count = deltaCount(d);
     if (count === 0) continue;
     const key = guildBankDeltaIdentityKey(d);
     const entry = items.get(key) ?? { sample: d, net: 0 };
     entry.net += d.op === 'deposit' ? count : -count;
     items.set(key, entry);
+  }
+  for (const netted of materials.values()) {
+    const legs = canonicalMaterialSourceLegs(netted.legs);
+    if (!legs.ok) {
+      // Only reachable on a coalesced total outside the safe integer range.
+      // The ordered log is then the only honest answer, so it is carried whole.
+      for (const raw of netted.raw) out.push({ ...raw });
+      continue;
+    }
+    // Kept when EITHER axis moved: a count-0 swap is a real re-attribution.
+    if (netted.net === 0 && legs.value.length === 0) continue;
+    out.push({
+      op: netted.net < 0 ? 'withdraw' : 'deposit',
+      itemId: netted.identity.itemId,
+      count: Math.abs(netted.net),
+      instance: netted.identity.instance ?? null,
+      craftedRecipeId: netted.identity.craftedRecipeId ?? null,
+      materialSources: legs.value,
+      copperDelta: 0,
+      purchasedSlotsBefore: 0,
+      purchasedSlotsAfter: 0,
+    });
   }
   for (const { sample, net } of items.values()) {
     if (net === 0) continue;
@@ -951,6 +1139,7 @@ export function guildBankDeposit(
   slotIndex: number,
   count: number | undefined,
   pid: number,
+  selection?: MaterialSourceTransferSelection,
 ): void {
   const r = resolveActor(ctx, pid);
   if (!r) return;
@@ -969,6 +1158,14 @@ export function guildBankDeposit(
     ctx.error(meta.entityId, refusal);
     return;
   }
+  let selectedSources: MaterialComposition | undefined;
+  if (selection !== undefined) {
+    if (selection.itemId !== slot.itemId || selection.target.slotIndex !== slotIndex) return;
+    const resolved = resolveMaterialSourceTransferSelection(meta.inventory, selection);
+    if (!resolved.ok || (count ?? resolved.value.count) !== resolved.value.count) return;
+    selectedSources = resolved.value.sources;
+    count = resolved.value.count;
+  }
   // Captured before the move: a whole-stack success splices the source slot out.
   const itemName = ITEMS[slot.itemId]?.name ?? slot.itemId;
   const result = moveBetweenContainers(
@@ -976,9 +1173,22 @@ export function guildBankDeposit(
     slotIndex,
     count,
     book.inventory,
-    guildBankCapacity(book),
+    generalOnlyPools(guildBankCapacity(book)),
+    selectedSources,
   );
   if (result.refusal === 'no_fit') {
+    // The personal-bank deposit arm's discrimination, mirrored
+    // (MoveResult.noFitCause): 'instanced_units' means free slots EXIST and
+    // only the payload's indivisibility refused, so "full" would lie; it
+    // gets its own line (re-localized via src/ui/sim_i18n.ts, every sim
+    // literal's rule).
+    if (result.noFitCause === 'instanced_units') {
+      ctx.error(
+        meta.entityId,
+        'That stack cannot be split to fit the space left in the guild bank.',
+      );
+      return;
+    }
     ctx.error(meta.entityId, 'The guild bank is full.');
     return;
   }
@@ -996,6 +1206,7 @@ export function guildBankWithdraw(
   slotIndex: number,
   count: number | undefined,
   pid: number,
+  selection?: MaterialSourceTransferSelection,
 ): void {
   const r = resolveActor(ctx, pid);
   if (!r) return;
@@ -1021,6 +1232,15 @@ export function guildBankWithdraw(
     ctx.error(meta.entityId, refusal);
     return;
   }
+  let selectedSources: MaterialComposition | undefined;
+  if (selection !== undefined) {
+    const slot = book.inventory[slotIndex];
+    if (selection.itemId !== slot.itemId || selection.target.slotIndex !== slotIndex) return;
+    const resolved = resolveMaterialSourceTransferSelection(book.inventory, selection);
+    if (!resolved.ok || (count ?? resolved.value.count) !== resolved.value.count) return;
+    selectedSources = resolved.value.sources;
+    count = resolved.value.count;
+  }
   // Captured before the move: a whole-stack success splices the source slot out.
   const itemName =
     ITEMS[book.inventory[slotIndex].itemId]?.name ?? book.inventory[slotIndex].itemId;
@@ -1029,9 +1249,17 @@ export function guildBankWithdraw(
     slotIndex,
     count,
     meta.inventory,
-    bagCapacity(meta.bags),
+    bagPools(meta.bags),
+    selectedSources,
   );
   if (result.refusal === 'no_fit') {
+    // The same granularity discrimination as the deposit arm above, into the
+    // bags direction: the honest line for an indivisible stack is shared
+    // with bankWithdraw (same destination, same literal, one EXACT row).
+    if (result.noFitCause === 'instanced_units') {
+      ctx.error(meta.entityId, 'That stack cannot be split to fit the space left in your bags.');
+      return;
+    }
     bagsFullError(ctx, meta.entityId);
     return;
   }

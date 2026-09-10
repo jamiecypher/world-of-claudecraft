@@ -17,7 +17,13 @@
 // pins every gate and the day math without a DOM or a real clock.
 
 import { CLASSES } from '../sim/data';
-import type { EquipSlot, ItemDef, PlayerClass, SkinCatalog } from '../sim/types';
+import type {
+  EquipSlot,
+  ItemDef,
+  ItemInstancePayload,
+  PlayerClass,
+  SkinCatalog,
+} from '../sim/types';
 import { buildPaperdollView, type PaperdollView } from './char_view';
 import { borderAccent, deedBorderSlug } from './deed_border_view';
 
@@ -38,6 +44,10 @@ export interface InspectBorderModel {
   frame: string;
   edge: string;
   glow: string;
+  motif: import('./deed_border_view').BorderMotifKind;
+  motifPath: string;
+  /** Existing localized name of the deed that granted this heraldry. */
+  deedName: string;
 }
 
 /** The compact inspect header: name, the optional active-deed title, level, the
@@ -139,6 +149,8 @@ export interface InspectInput {
   /** The active Book of Deeds BORDER as a deed ID (the raw wire value, never a
    *  slug and never display text); null for a borderless player. */
   border: string | null;
+  /** Existing localized name for `border`, resolved by the painter. */
+  borderDeedName: string;
   /** Server-computed Curator rank: 0 unranked, 1-5 Apprentice…Eternal Curator. */
   curatorRank: number;
   /** Character-scoped relics owned / total behind that rank, both null when the
@@ -163,6 +175,14 @@ export interface InspectInput {
    */
   selfStanding?: { curatorRank: number; owned: number; total: number } | null;
   equippedItems: Partial<Record<EquipSlot, string>>;
+  /** The worn per-copy payloads keyed by slot: the entity's eqi mirror for a
+   *  peer; for the VIEWER, Hud.openInspect hands IWorld.equipmentInstances
+   *  (the full self mirror) so both hosts agree, since the ONLINE self
+   *  entity's mirror is eqi-shaped and would drop the Unique-Equipped tag.
+   *  Threaded into buildPaperdollView, which projects each through
+   *  wornTooltipInstance, so the equipment row describes the worn COPY (a
+   *  promoted legendary's chosen name and color) exactly as on the sheet. */
+  equippedInstances?: Partial<Record<EquipSlot, ItemInstancePayload>>;
   holderTier: number;
   holderBalance: number | null;
   discordTier: number;
@@ -206,7 +226,15 @@ export function buildInspectView(
     cls: input.cls,
     classColor: classColorCss(input.cls),
     border: accent
-      ? { slug: borderSlug, frame: accent.frame, edge: accent.edge, glow: accent.glow }
+      ? {
+          slug: borderSlug,
+          frame: accent.frame,
+          edge: accent.edge,
+          glow: accent.glow,
+          motif: accent.motif,
+          motifPath: accent.motifPath,
+          deedName: input.borderDeedName,
+        }
       : null,
   };
 
@@ -264,7 +292,7 @@ export function buildInspectView(
     header,
     badges: { holder, discord, dev, curator: curatorBadge },
     curator,
-    gear: buildPaperdollView(input.equippedItems, items),
+    gear: buildPaperdollView(input.equippedItems, items, input.equippedInstances),
     skin: input.skin,
     skinCatalog: input.skinCatalog,
   };

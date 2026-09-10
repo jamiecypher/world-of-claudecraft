@@ -9,6 +9,12 @@
 // two dungeons are measured on one ruler): level-20 prot warrior in the
 // max-armor kit (full heroic plate + shield, prot mastery), 2861 armor / 2762
 // hp, in Defensive Stance (takes 10% less).
+// Provenance (qr-19-ref-armor-calibration-constant, 2026-09-01): 2861 is a
+// PINNED constant, not a live measurement of the catalog. The committed
+// max-armour kit pins at 4085 (tests/heroic_difficulty_floors.test.ts), and
+// whether 2861 was ever the raw kit armour or a prot-mastery-folded reading is
+// UNSETTLED, so it is not re-based here and rides the packet's R5 re-measure.
+// The Sanctum ruler this suite shares carries the same unsettled basis.
 //
 // Two departures from the Sanctum table, both forced by this roster:
 //  - a third band at 150 for the rare ccImmune beastmaster, which spawns twice
@@ -234,7 +240,9 @@ describe('normal Wildheart Basin ranged floors', () => {
     expect(enterDungeon(sim.ctx, BASIN, pid)).toBe(true);
     const instance = sim.instances.find((c) => c.dungeonId === BASIN && c.partyKey !== null);
     if (!instance) throw new Error('basin instance was not claimed');
-    const player = sim.entities.get(sim.players.get(pid)!.entityId);
+    const playerAccount = sim.players.get(pid);
+    if (!playerAccount) throw new Error('player account missing');
+    const player = sim.entities.get(playerAccount.entityId);
     const hexcaller = instance.mobIds
       .map((id) => sim.entities.get(id))
       .find((e) => e?.templateId === 'wildheart_hexcaller');
@@ -267,7 +275,9 @@ describe('normal Wildheart Basin ranged floors', () => {
     expect(hits.length, 'the caster never landed a hex').toBeGreaterThan(0);
     // Every landed hex clears the ranged floor, and the whole observed band sits
     // far above the unscaled 45-63 the same spell rolls at 1x.
-    const mult = basinTuning().rangedDamageMultiplierByMob!.wildheart_hexcaller;
+    const rangedMultipliers = basinTuning().rangedDamageMultiplierByMob;
+    if (!rangedMultipliers) throw new Error('basin ranged tuning missing');
+    const mult = rangedMultipliers.wildheart_hexcaller;
     expect(Math.min(...hits)).toBeGreaterThanOrEqual(RANGED_FLOOR);
     expect(Math.min(...hits)).toBeGreaterThan(spell.max + 20 * 1.1); // above the 1x CEILING
     expect(Math.max(...hits)).toBeLessThanOrEqual(
@@ -411,8 +421,8 @@ describe('heroic Wildheart Basin keeps its own shipped calibration', () => {
   });
 
   it('never stamps rangedDamageMult on a heroic spawn', () => {
-    // The ranged knob is normal-only by construction (HeroicDungeonTuning has no
-    // such field), so heroic Wildheart cannot be silently re-priced by it.
+    // Heroic Wildheart has no ranged override, so its shipped calibration
+    // cannot be silently re-priced by the Normal-only entries above.
     for (const id of Object.keys(basinTuning().damageMultiplierByMob)) {
       const mob = createMob(1, MOBS[id], 22, { x: 0, y: 0, z: 0 });
       applyDungeonMobTuning(mob, BASIN, 'heroic');

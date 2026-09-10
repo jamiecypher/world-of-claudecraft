@@ -5,6 +5,8 @@ import {
   EASTBROOK_NOTICEBOARD_TEMPLATE_ID,
   type Entity,
   INTERACT_RANGE,
+  REALM_BUILDER_MONUMENT_INTERACT_RADIUS,
+  REALM_BUILDER_MONUMENT_TEMPLATE_ID,
 } from '../sim/types';
 import { t } from '../ui/i18n';
 import { tSim } from '../ui/sim_i18n';
@@ -20,6 +22,7 @@ export interface PickInteractionWorld {
   entities: IWorld['entities'];
   duelInfo?: IWorld['duelInfo'];
   arenaInfo?: IWorld['arenaInfo'];
+  bgInfo?: IWorld['bgInfo'];
   // Local party roster for the corpse rights check; optional so party-less
   // fixtures stay valid.
   partyInfo?: IWorld['partyInfo'];
@@ -48,8 +51,25 @@ export function isAttackHoverTarget(e: Entity | undefined): boolean {
   return hoverCursorKind(e, -1, new Set()) === 'attack';
 }
 
+/**
+ * The entity ids the local player may attack in PvP right now: an active duel
+ * opponent, every active-arena enemy (plus the enemy Yumi cat), every
+ * opposing-team fighter of a live Thornhollow Fields match, and the PETS those
+ * enemies own. The one client mirror of the sim's `isHostileTo` PvP arms, so
+ * every attack affordance reading it (hover cursor, click marker, attack-move,
+ * attack-nearest, pad auto-target) agrees with what the server will accept.
+ *
+ * Enemy pets ride the set by ENTITY id because `isAttackableEntity` reads a mob
+ * as attackable only when wild-hostile or listed here, and an owned pet carries
+ * `hostile:false` for life (it is the sim that resolves a pet to its owner's
+ * hostility). Without this arm an enemy warlock's demon showed the friendly
+ * cursor, a gold click marker and the friendly-pet tooltip, and no mouse or pad
+ * affordance would engage it, in every PvP mode. `entities` is optional only so
+ * the lighter fixtures stay valid; every live caller hands the world's map.
+ */
 export function activePvpOpponentIds(
-  world: Pick<PickInteractionWorld, 'player' | 'playerId' | 'duelInfo' | 'arenaInfo'>,
+  world: Pick<PickInteractionWorld, 'player' | 'playerId' | 'duelInfo' | 'arenaInfo' | 'bgInfo'> &
+    Partial<Pick<PickInteractionWorld, 'entities'>>,
   ids = new Set<number>(),
 ): Set<number> {
   ids.clear();
@@ -66,6 +86,22 @@ export function activePvpOpponentIds(
     // own cat stays out of the set, matching the sim hostility rule).
     const yumi = match.yumi;
     if (yumi) ids.add(yumi.team === 'A' ? yumi.yumiB.entityId : yumi.yumiA.entityId);
+  }
+  // Thornhollow Fields: the opposing TEAM is hostile for the whole live match
+  // (the countdown and the ended hold are combat-off, so neither lists anyone).
+  const bg = world.bgInfo?.match;
+  if (bg?.state === 'active') {
+    for (const row of bg.players) {
+      if (row.team !== bg.myTeam && row.pid !== selfId) ids.add(row.pid);
+    }
+  }
+  // Enemy-owned pets, resolved AFTER every player arm above so the owner set is
+  // complete. Iterating the map allocates nothing, which the per-frame hover
+  // caller relies on.
+  if (ids.size > 0 && world.entities) {
+    for (const e of world.entities.values()) {
+      if (e.kind === 'mob' && e.ownerId !== null && ids.has(e.ownerId)) ids.add(e.id);
+    }
   }
   return ids;
 }
@@ -127,9 +163,17 @@ export function hoverCursorKind(
 
 /** Resolve the client-side range for a lootable object before dispatch or approach. */
 export function objectInteractionRange(entity: Pick<Entity, 'templateId'>): number {
-  return entity.templateId === EASTBROOK_NOTICEBOARD_TEMPLATE_ID
-    ? EASTBROOK_NOTICEBOARD_INTERACTION_RADIUS
-    : INTERACT_RANGE;
+  if (entity.templateId === EASTBROOK_NOTICEBOARD_TEMPLATE_ID) {
+    return EASTBROOK_NOTICEBOARD_INTERACTION_RADIUS;
+  }
+  // Mirrors the sim's catchment (interaction.ts): a click from 4 to 5 yd walks
+  // the player closer instead of drawing the server's refusal, and the
+  // nearby-prompt slot cannot hand the monument the interact key in the band
+  // where the sim would give it to the mailbox.
+  if (entity.templateId === REALM_BUILDER_MONUMENT_TEMPLATE_ID) {
+    return REALM_BUILDER_MONUMENT_INTERACT_RADIUS;
+  }
+  return INTERACT_RANGE;
 }
 
 /** Whether an otherwise incomplete entity click represents a useful movement intent. */

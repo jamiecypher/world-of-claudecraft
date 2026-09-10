@@ -27,9 +27,9 @@
 // in Node, the browser, and the headless RL env.
 
 import { DEED_ORDER, DEEDS, DEEDS_ERA } from './content/deeds';
+import { FARM_CROP_IDS } from './content/farm_crops';
 import { GATHERING_PROFESSION_IDS } from './content/professions';
 import { pointsSpent } from './content/talents';
-import { VC_ALLROUNDER_ONLY_MAX_BRACKET } from './content/vale_cup';
 import { ITEMS, MOBS, zoneAt } from './data';
 import { LAUNCH_PAPERDOLL_SLOTS } from './launch_paperdoll_slots';
 import {
@@ -136,7 +136,7 @@ export const DEEDS_RECENT_CAP = 8;
 // '<dungeonId>' and '<dungeonId>:heroic') and the dungeonFinalBossKills
 // counter. PINNED as of v1: a future dungeon's boss gets a new deed; this
 // list never grows an earned requirement.
-const FINAL_BOSS_DUNGEONS: Record<string, string> = {
+export const FINAL_BOSS_DUNGEONS: Record<string, string> = {
   morthen: 'hollow_crypt',
   vael_the_mistcaller: 'sunken_bastion',
   ysolei: 'drowned_temple',
@@ -145,16 +145,24 @@ const FINAL_BOSS_DUNGEONS: Record<string, string> = {
   // Without this entry Zulgar kills write no dungeonClears record, so the
   // dgn_wildheart_basin deed pair ships permanently unearnable (0/1 forever).
   wildheart_high_priest: 'wildheart_basin',
+  // The Crucible of the Last Spring raid credits per boss room: each raid
+  // room is its own dungeon id, and each boss dies through the generic
+  // kill-credit path (no bespoke lockout roster yet; the launch pass owns
+  // that), so the eligible snapshot (downed members included) is the
+  // recipient set, the wildheart precedent.
+  ignivar_herald_of_the_last_flame: 'ignivar_raid_arena',
+  varkhul_forgefather_of_the_last_flame: 'ignivar_inner_crucible',
 };
 
 // Perfection tasks: zero player deaths inside the boss's heroic instance
 // while the boss is engaged. Tainted by onPlayerDeathForDeeds; the window
 // re-arms on evade/reset/respawn (resetDeedEncounter).
-const FLAWLESS_TASKS: Record<string, string> = {
+export const FLAWLESS_TASKS: Record<string, string> = {
   morthen: 'dgn_morthen_flawless',
   ysolei: 'dgn_ysolei_flawless',
   korzul_the_gravewyrm: 'dgn_korzul_flawless',
   nythraxis_scourge_of_thornpeak: 'dgn_nythraxis_deathless',
+  varkhul_forgefather_of_the_last_flame: 'dgn_varkhul_flawless',
 };
 
 // Kill-order tasks: at boss death, every add it summoned this attempt is dead.
@@ -255,28 +263,138 @@ export const RARE_SLAIN_TEMPLATES = new Set([
 // Exported for the new-zone checklist (tests/professions_zone_rollout.test.ts):
 // a complete zone's first-cast deed is only earnable if a row here writes its
 // fish:<zone> mark, so the checklist sweeps this table too.
+// THE THREE HIGH-BAND CATCHES JOIN EVERY ROW (masterwrought Phase 11i), and
+// the verdict is written here rather than left implicit. They are uniform
+// across zones by construction (each sits in every zone's cell for its band at
+// the same weight), so every water that draws a real table or the Vale fallback
+// can land all three. Leaving them out would make the first-catch deed marks
+// silently incomplete for exactly the zones the new bands are authored against,
+// which is the harder bug to find later; the deeds_content guard intersects
+// each row against the tables its zone ACTUALLY draws, so an unearned row would
+// red there instead of sitting dormant.
 export const ZONE_FISH: Record<string, readonly string[]> = {
-  eastbrook_vale: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  mirefen_marsh: ['raw_marsh_pike', 'raw_bog_eel', 'glimmerfin_koi'],
-  thornpeak_heights: ['raw_frostgill_trout', 'raw_stonescale_carp', 'glimmerfin_koi'],
+  eastbrook_vale: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  mirefen_marsh: [
+    'raw_marsh_pike',
+    'raw_bog_eel',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  thornpeak_heights: [
+    'raw_frostgill_trout',
+    'raw_stonescale_carp',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
   // The three bottom-map zones (the phase 20 chronicle pairs, Q26): their
   // waters draw the Vale FALLBACK tables until the zone-4 pass authors real
   // ones (professions/fishing.ts, bandTables[zoneId] ?? eastbrook_vale), so
   // the rows list the fallback's own fish and the deeds_content guard
   // intersects them against the tables each zone ACTUALLY draws.
-  willowfen: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  galecrest: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  farshore_isle: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
+  willowfen: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  galecrest: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  farshore_isle: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
   // The remaining starter-tier zones (content/deeds.ts extends the same
   // chronicle pair to them; drakelands skipped, see the comment there) draw
   // the same Vale fallback table, so their rows list the same fish.
-  frostveil: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  amberfall: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  nightbloom: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  wraithwood: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  palmreach: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
-  evergarden: ['raw_mirror_trout', 'raw_river_perch', 'glimmerfin_koi'],
+  frostveil: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  amberfall: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  nightbloom: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  wraithwood: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  palmreach: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
+  evergarden: [
+    'raw_mirror_trout',
+    'raw_river_perch',
+    'glimmerfin_koi',
+    'raw_deepbarb_catfish',
+    'raw_hollowgill_sturgeon',
+    'raw_stillmere_salmon',
+  ],
 };
+
+// Farming hub zones whose beds feed the chr_ first-harvest chronicle deeds:
+// harvesting a SURVIVING crop from a bed in a listed zone writes its
+// farm:<zone> mark (professions/farming.ts harvestCrop via the
+// onCropHarvestedForDeeds hook below). ANY crop counts on purpose: plantCrop
+// carries no bed-tier gate (probed live in the celebrations phase), so every
+// hub's chronicle is earnable today with vendor-stocked low-tier seeds; the
+// high-tier crop gates never constrain these marks. Exported for the
+// new-zone checklist like ZONE_FISH above: a future farm patch zone earns its
+// chronicle only when a row lands here, and tests/deeds_content.test.ts pins
+// this list against the authored FARM_PATCHES zones from both directions.
+export const FARM_CHRONICLE_ZONES: readonly string[] = [
+  'eastbrook_vale',
+  'mirefen_marsh',
+  'thornpeak_heights',
+  'evergarden',
+];
 
 // The three Chronicler NPCs (interaction-only). Talking to one feeds an
 // 'npc:<templateId>' visited mark; Saul additionally drives the
@@ -293,7 +411,21 @@ const SAUL_TALKS_REQUIRED = 9;
 // chr_peaks_waking_witness (inside interest scope, pinned literal).
 // Exported for the placement suite's mirror-lake standability arm, which used
 // to carry its own copy of this number and could drift silently.
-export const POI_VISIT_RADIUS = 20;
+// 24, not a rounder number: within a zone a single-zone all-poi 'visits' deed
+// draws from (today: Wayfarer of the Vale/Marsh/Heights), the tightest
+// as-authored gap between two of its named places is Eastbrook Vale's
+// eastbrook<->reliquary_hill pair at ~49.2yd. A visit radius has to stay
+// under half of that or two distinct places on the same checklist could both
+// grant from one spot; 24 is the most forgiving value that still clears it
+// with margin, and tests/deeds.test.ts (POI_VISIT_RADIUS describe block)
+// pins every such zone's tightest gap against it, so a content edit that
+// narrows one can't silently break this. A cross-zone deed (The Long Road
+// North) is exempt: a player occupies exactly one zone at a time, so two of
+// its marks can never be satisfied from the same spot regardless of radius.
+// Zones with no all-poi wayfarer deed (e.g. Veiled Hollow) sit closer than
+// this in places, which is harmless today since nothing reads two of their
+// poi marks together; the pinned test would catch it the day that changes.
+export const POI_VISIT_RADIUS = 24;
 const THUNZHARR_WITNESS_RADIUS = 100;
 
 // ---------------------------------------------------------------------------
@@ -338,6 +470,14 @@ export function serializeDeedStats(stats: DeedStats): SavedDeedStats | undefined
   return anyCounter || out.itemsDiscovered || out.visited || out.dungeonClears ? out : undefined;
 }
 
+/** The sparse CharacterState fragment for one save (the sim.ts
+ *  serializeCharacter shape every optional field follows): absent when
+ *  serializeDeedStats has nothing to write. */
+export function deedStatsSaveFragment(stats: DeedStats): { deedStats?: SavedDeedStats } {
+  const deedStats = serializeDeedStats(stats);
+  return deedStats ? { deedStats } : {};
+}
+
 export function restoreDeedStats(saved: SavedDeedStats | undefined): DeedStats {
   const stats = freshDeedStats();
   if (!saved) return stats;
@@ -347,10 +487,23 @@ export function restoreDeedStats(saved: SavedDeedStats | undefined): DeedStats {
       if (typeof v === 'number' && Number.isFinite(v) && v > 0) stats.counters[k] = Math.floor(v);
     }
   }
-  // Bounded on load exactly like the write sites: only real item ids enter
-  // itemsDiscovered, and only marks in an authored namespace enter visited,
-  // so a hand-edited save cannot grow either set unboundedly.
-  for (const id of saved.itemsDiscovered ?? []) if (ITEMS[id]) stats.itemsDiscovered.add(id);
+  // Bounded on load like the write sites: only real item ids enter
+  // itemsDiscovered, and only marks in an AUTHORED NAMESPACE enter visited.
+  // Precise about which half that bounds, corrected at the Phase 11e QA: the
+  // itemsDiscovered arm really is bounded, because ITEMS is a closed table.
+  // The visited arm validates the PREFIX only, so the suffix after the colon
+  // is unbounded and a hand-edited save CAN grow that set. Harmless today (the
+  // visits evaluator counts only a deed's own authored markIds, so an invented
+  // mark satisfies nothing), and pre-existing for every namespace, but the old
+  // "cannot grow either set unboundedly" overstated it.
+  //
+  // The id gate on itemsDiscovered is also a ROLLBACK arm, and it is the one
+  // the Phase 11e deploy note first missed: a build whose ITEMS lacks an id
+  // DROPS it here and the next autosave writes the reduced set back.
+  // hasOwn for the same reason as markItemDiscovered: a prototype-named id in
+  // a tampered save indexes an inherited value and must not restore as real.
+  for (const id of saved.itemsDiscovered ?? [])
+    if (Object.hasOwn(ITEMS, id)) stats.itemsDiscovered.add(id);
   for (const mark of saved.visited ?? []) {
     if (typeof mark !== 'string') continue;
     const ns = mark.slice(0, mark.indexOf(':'));
@@ -573,7 +726,10 @@ export function markItemDiscovered(
   for (let depth = 0; id !== undefined && depth < 3; depth++) {
     // Annotated: indexing by the reassigned `id` would otherwise circularly
     // infer through def.heroicOf (TS7022).
-    const def: ItemDef | undefined = ITEMS[id];
+    // hasOwn, not truthiness: ITEMS carries Object.prototype, so a tampered
+    // container key like '__proto__' or 'toString' indexes an inherited value
+    // and would otherwise enter the PERSISTED discovery ledger as a real id.
+    const def: ItemDef | undefined = Object.hasOwn(ITEMS, id) ? ITEMS[id] : undefined;
     if (!def) return; // bounded by construction: only real item ids enter the set
     if (!meta.deedStats.itemsDiscovered.has(id)) {
       meta.deedStats.itemsDiscovered.add(id);
@@ -745,6 +901,7 @@ export const METER_DIRTY_KEYS: Record<DeedMeterId, readonly string[]> = {
   vcupWins: [],
   vcupGuildWins: [],
   bankPurchasedSlots: [],
+  bankSocketsUnlocked: [],
   townFocusPoints: [],
   delveLoreCount: [],
   companionRankBest: [],
@@ -855,6 +1012,7 @@ const METERS: Record<DeedMeterId, (meta: PlayerMeta) => number> = {
   vcupWins: (m) => m.vcupWins,
   vcupGuildWins: (m) => m.vcupGuildWins,
   bankPurchasedSlots: (m) => m.bank.purchasedSlots,
+  bankSocketsUnlocked: (m) => m.bank.unlockedSockets,
   townFocusPoints: (m) => {
     // Allocation-free sum (tick-tail predicate: no Object.values array).
     let n = 0;
@@ -1096,8 +1254,8 @@ export function updateDeeds(ctx: SimContext): void {
   }
 }
 
-// The 1 Hz sweep behind the poisVisited marks (within 20 yd of a named
-// ZoneDef poi), the Thunzharr witness mark, and the roster-restriction fold
+// The 1 Hz sweep behind the poisVisited marks (within POI_VISIT_RADIUS of a
+// named ZoneDef poi), the Thunzharr witness mark, and the roster-restriction fold
 // (every live hate-table member of a participant-tracked boss, so a non-damager
 // who leaves before the kill still counts against the trio cap). Deterministic:
 // fixed cadence on the sim clock, insertion-order iteration, zero rng.
@@ -1189,9 +1347,10 @@ export function recomputeRenown(meta: PlayerMeta): void {
 const RETRO_SEED = { retro: true } as const;
 
 /** Seed the discovery ledger from what the character already holds (bags,
- *  bank, equipment, and the vendor buyback list, whose entries were all once
- *  possessed), so veterans keep credit for what they still own. Runs on
- *  every join; the set only grows, so re-seeding is idempotent.
+ *  bank, the Materials Vault, equipment, and the vendor buyback list, whose
+ *  entries were all once possessed), so veterans keep credit for what they
+ *  still own. Runs on every join; the set only grows, so re-seeding is
+ *  idempotent.
  *
  *  Every call here is RETRO: the character already owned these before the
  *  join, so the Reliquary fills silently (no recent push, no invented clear
@@ -1213,10 +1372,30 @@ export function seedItemDiscovery(ctx: SimContext, meta: PlayerMeta): void {
   for (const slot of meta.bank.inventory) {
     markItemDiscovered(ctx, meta, slot.itemId, slot.instance?.rolled?.quality, RETRO_SEED);
   }
-  for (const [slot, itemId] of Object.entries(meta.equipment) as [
-    EquipSlot,
-    string | undefined,
-  ][]) {
+  // Ordinary vault stock carries no instance quality. Sorted: stock is
+  // persisted as an object keyed by item id and Postgres jsonb re-orders object
+  // keys, so the raw walk order differs between a server-loaded and an offline
+  // character. The PERSISTED itemsDiscovered array is already host-identical
+  // (serializeDeedStats sorts on the way out); this protects the LIVE Set order
+  // that rides the dstats self wire.
+  for (const itemId of Object.keys(meta.vault.stock).sort()) {
+    markItemDiscovered(ctx, meta, itemId, undefined, RETRO_SEED);
+  }
+  // Identity-preserving vault rows retain rolled quality. Sort on every field
+  // that can affect the discovery marks, rather than on JSON serialization
+  // whose nested key order differs after a Postgres jsonb round trip.
+  for (const slot of [...meta.vault.special].sort((a, b) => {
+    const ak = `${a.itemId}\u0000${a.instance?.rolled?.quality ?? ''}\u0000${a.craftedRecipeId ?? ''}`;
+    const bk = `${b.itemId}\u0000${b.instance?.rolled?.quality ?? ''}\u0000${b.craftedRecipeId ?? ''}`;
+    return ak < bk ? -1 : ak > bk ? 1 : 0;
+  })) {
+    markItemDiscovered(ctx, meta, slot.itemId, slot.instance?.rolled?.quality, RETRO_SEED);
+  }
+  // Sorted for the same reason: meta.equipment is rebuilt by spreading the save
+  // blob, so its key order is jsonb-hostage too.
+  for (const [slot, itemId] of (
+    Object.entries(meta.equipment) as [EquipSlot, string | undefined][]
+  ).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     if (itemId)
       markItemDiscovered(
         ctx,
@@ -1227,6 +1406,11 @@ export function seedItemDiscovery(ctx: SimContext, meta: PlayerMeta): void {
       );
   }
   for (const bagId of meta.bags) {
+    if (bagId) markItemDiscovered(ctx, meta, bagId, undefined, RETRO_SEED);
+  }
+  // Bank socket bags (phase 06): a persisted container position like the
+  // carried sockets above, so a bag parked in the bank still seeds discovery.
+  for (const bagId of meta.bank.socketBags) {
     if (bagId) markItemDiscovered(ctx, meta, bagId, undefined, RETRO_SEED);
   }
   for (const slot of meta.vendorBuyback) {
@@ -1813,126 +1997,12 @@ export function onArenaMatchEndForDeeds(
 }
 
 // ---------------------------------------------------------------------------
-// Vale Cup sites
+// Vale Cup sites: REMOVED with the minigame (the New Eastbrook program,
+// docs/design/eastbrook-revamp/master-plan.md). The vale cup deed CATALOG
+// rows stay retired-in-place: their meters persist on PlayerMeta and the
+// meter map below keeps historical progress readable, but no live site
+// grants them anymore.
 // ---------------------------------------------------------------------------
-
-// The Cup match shape the deed sites read. Kept structural (vale_cup.ts owns
-// the real VcMatch) so this module never imports the cup module.
-export interface CupMatchForDeeds {
-  id: number;
-  bracket: number;
-  rated: boolean;
-  golden: boolean;
-  scoreA: number;
-  scoreB: number;
-  teamA: number[];
-  teamB: number[];
-  roles: Record<number, string>;
-  benched: Set<number>;
-  practice: unknown | null;
-}
-
-// Personal outcomes count only in QUEUED bouts (rated or bot-backfilled);
-// practice bouts and offline-staged bouts never count for any Cup deed.
-function cupQueuedBout(match: CupMatchForDeeds): boolean {
-  return match.practice === null;
-}
-
-/** A personal ball touch (kick, grip, trap, or dribble nudge). Feeds the
- *  Chronicle debut immediately and the per-match memory pvp_vcup_first_match
- *  reads at full time. Backfill bots are real PlayerMeta players, so they are
- *  skipped explicitly (a bot must never accrue deed state). */
-export function onCupTouchForDeeds(ctx: SimContext, match: CupMatchForDeeds, pid: number): void {
-  if (!cupQueuedBout(match)) return;
-  if (ctx.vcup.botPids.includes(pid)) return;
-  let touched = ctx.deedRuntime.cupTouched.get(match.id);
-  if (!touched) {
-    touched = new Set();
-    ctx.deedRuntime.cupTouched.set(match.id, touched);
-  }
-  touched.add(pid);
-  const meta = ctx.players.get(pid);
-  if (meta) grantDeed(ctx, meta, 'chr_vale_cup_debut');
-}
-
-/** A goal was scored by `team`; resolve the scoring pid exactly like the
- *  scorer-name banner (last kicker within the kick window, else last
- *  toucher; an own goal never credits an opponent). Rated matches only. */
-export function onCupGoalForDeeds(
-  ctx: SimContext,
-  match: CupMatchForDeeds,
-  _team: 'A' | 'B',
-  scorerPid: number | null,
-): void {
-  if (!match.rated || scorerPid === null) return;
-  const meta = ctx.players.get(scorerPid);
-  if (!meta) return;
-  grantDeed(ctx, meta, 'pvp_vcup_first_goal');
-  if (match.golden) grantDeed(ctx, meta, 'pvp_vcup_golden_goal');
-  if (match.bracket > VC_ALLROUNDER_ONLY_MAX_BRACKET) {
-    let goals = ctx.deedRuntime.cupGoals.get(match.id);
-    if (!goals) {
-      goals = new Map();
-      ctx.deedRuntime.cupGoals.set(match.id, goals);
-    }
-    const n = (goals.get(scorerPid) ?? 0) + 1;
-    goals.set(scorerPid, n);
-    if (n >= 3) grantDeed(ctx, meta, 'pvp_vcup_hat_trick');
-  }
-}
-
-/** A keeper save (shot at or above the save speed floor), rated only. The
- *  description also promises the 3v3 bracket or larger; today that holds
- *  emergently (normalizeRole seats no small-bracket keeper), so the explicit
- *  gate enforces the published rule rather than inferring it. */
-export function onCupSaveForDeeds(
-  ctx: SimContext,
-  match: CupMatchForDeeds,
-  keeperPid: number,
-): void {
-  if (!match.rated || match.bracket <= VC_ALLROUNDER_ONLY_MAX_BRACKET) return;
-  const meta = ctx.players.get(keeperPid);
-  if (meta) grantDeed(ctx, meta, 'pvp_vcup_first_save');
-}
-
-/** Standing applied for one pid inside the rated result loop: the win meters
- *  move here, and a winning keeper with a clean sheet earns it now (roles and
- *  scores are final; the meta is still seated). */
-export function onCupStandingForDeeds(
-  ctx: SimContext,
-  match: CupMatchForDeeds,
-  pid: number,
-  team: 'A' | 'B',
-  winner: 'A' | 'B' | null,
-): void {
-  // The Cup win meters moved in the caller's standing loop: full pass.
-  markDeedsDirty(ctx, pid);
-  if (winner !== team) return;
-  // Clean sheet promises the 3v3 bracket or larger, like the save deed above:
-  // enforce the published rule directly instead of leaning on normalizeRole.
-  if (match.bracket <= VC_ALLROUNDER_ONLY_MAX_BRACKET) return;
-  if (match.roles[pid] !== 'keeper' || match.benched.has(pid)) return;
-  const opposingScore = team === 'A' ? match.scoreB : match.scoreA;
-  if (opposingScore !== 0) return;
-  const meta = ctx.players.get(pid);
-  if (meta) grantDeed(ctx, meta, 'pvp_vcup_clean_sheet');
-}
-
-/** Full time: seeing the match out seated with a personal touch earns the
- *  debut match deed (bot-backfilled queued bouts count for this debut only).
- *  Also drops the per-match memory. */
-export function onCupMatchEndForDeeds(ctx: SimContext, match: CupMatchForDeeds): void {
-  const touched = ctx.deedRuntime.cupTouched.get(match.id);
-  if (cupQueuedBout(match) && touched) {
-    for (const pid of [...match.teamA, ...match.teamB]) {
-      if (match.benched.has(pid) || !touched.has(pid)) continue;
-      const meta = ctx.players.get(pid);
-      if (meta) grantDeed(ctx, meta, 'pvp_vcup_first_match');
-    }
-  }
-  ctx.deedRuntime.cupTouched.delete(match.id);
-  ctx.deedRuntime.cupGoals.delete(match.id);
-}
 
 // ---------------------------------------------------------------------------
 // Delve sites
@@ -2023,6 +2093,27 @@ export function onFishCaughtForDeeds(
   if ((ZONE_FISH[zoneId] ?? []).includes(itemId)) markVisited(ctx, meta, `fish:${zoneId}`);
 }
 
+/** A harvest collected a SURVIVING crop from a farm bed in `zoneId` (withered
+ *  plots pay husks, never a chronicle: the fish rule that weeds and boots do
+ *  not count). Writes the farm:<zone> mark the chr_ first-harvest chronicle
+ *  deeds read. Marks only, zero rng, draw-order neutral (the deed-credit
+ *  line in src/sim/professions/CLAUDE.md). */
+export function onCropHarvestedForDeeds(
+  ctx: SimContext,
+  meta: PlayerMeta,
+  zoneId: string,
+  cropId?: string,
+): void {
+  if (FARM_CHRONICLE_ZONES.includes(zoneId)) markVisited(ctx, meta, `farm:${zoneId}`);
+  // The per-crop collection mark (masterwrought DECISION E). Gated on the
+  // catalog so a crop id that is not a shipped crop can never mint a mark: the
+  // namespace has to stay bounded, which is the same rule the zone list above
+  // follows and what the namespace assertion in the deeds tests exists for.
+  if (cropId !== undefined && FARM_CROP_IDS.has(cropId)) {
+    markVisited(ctx, meta, `farm_crop:${cropId}`);
+  }
+}
+
 /** A plain /roll (classic 1-100 bounds) landed exactly 100. */
 export function onChatRollForDeeds(
   ctx: SimContext,
@@ -2083,4 +2174,37 @@ export const VISITED_MARK_NAMESPACES = [
   // namespace registered it would serialize fine and be dropped on load,
   // exactly the gather_event bug above, and the mark could never refill.
   'masterwork',
+  // Farming celebration marks (the celebrations phase): farm:planted, the
+  // first-planting proof written at plant success, and the farm:<zone>
+  // first-harvest chronicle marks (onCropHarvestedForDeeds above), both
+  // written from professions/farming.ts. Registered so restoreDeedStats
+  // keeps them across saves (the gather_event lesson above).
+  'farm',
+  // Per-CROP first-harvest marks, farm_crop:<cropId>, the collection behind
+  // col_farm_roster (masterwrought DECISION E). A separate namespace from
+  // 'farm' above on purpose: that one is zone-keyed and closed at four, this
+  // one is crop-keyed and grows with the catalog, so keeping them apart is
+  // what lets each be reasoned about on its own.
+  //
+  // REGISTERING IT IS THE WHOLE POINT, not bookkeeping. An unregistered
+  // namespace serializes fine and is silently DROPPED by restoreDeedStats on
+  // load, so the collection could never refill and the deed would be
+  // unearnable for anyone who logs out mid-roster. That is the gather_event
+  // and masterwork bug twice over; tests/deeds_content.test.ts pins the round
+  // trip rather than trusting this comment.
+  'farm_crop',
+  // The apex feast craft mark (masterwrought Phase 11k), written at the same
+  // craft-credit arm as craft_rare and masterwork above. ONE key today,
+  // 'apex_feast:crafted', deliberately bounded rather than keyed per feast id:
+  // the deed asks whether a player has cooked an apex feast at all, and the
+  // three rungs are the same act with a different plate on it, so a per-id key
+  // would write three permanent entries where the question has one answer.
+  //
+  // REGISTERED FOR THE USUAL REASON, which this packet has now paid for three
+  // times (gather_event, masterwork, farm_crop): an unregistered namespace
+  // serializes fine and is silently DROPPED by restoreDeedStats on load, so the
+  // mark could never refill and the deed would be unearnable for anyone who
+  // logs out after the craft. tests/deeds_content.test.ts pins the round trip
+  // rather than trusting this comment.
+  'apex_feast',
 ] as const;

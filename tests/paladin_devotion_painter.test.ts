@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { HUD_FRAME_SPECS } from '../src/ui/interface_unlock_core';
 import type { PainterHostWriters } from '../src/ui/painter_host';
 import { PaladinDevotionPainter } from '../src/ui/paladin_devotion_painter';
 import type { PaladinDevotionState } from '../src/ui/paladin_devotion_view';
@@ -33,7 +34,7 @@ const FILL = { id: 'fill' } as unknown as HTMLElement;
 const LABEL = { id: 'label' } as unknown as HTMLElement;
 const STATUS = { id: 'status' } as unknown as HTMLElement;
 const CHARGES = Array.from(
-  { length: 5 },
+  { length: 7 },
   (_, index) => ({ id: `charge-${index}` }) as unknown as HTMLElement,
 ) as unknown as HTMLCollection;
 
@@ -96,7 +97,40 @@ describe('PaladinDevotionPainter', () => {
       args: [FILL, '--devotion-scale', '0.300'],
     });
     expect(calls).toContainEqual({ method: 'toggleClass', args: [ROOT, 'ascended', true] });
-    expect(calls.slice(9).map((call) => call.args[2])).toEqual([true, true, true, false, false]);
+    expect(calls.slice(9).map((call) => call.args[2])).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('lights all 7 charges once Extended Dawn raises the cap past the base 5', () => {
+    const calls = paint({
+      visible: true,
+      value: 0,
+      fillFrac: 0,
+      ready: false,
+      ascended: true,
+      charges: 7,
+      lastCharge: false,
+      label: '0 / 20',
+      ariaValueText: 'Devotion 0 of 20. Ascension 7 charges.',
+      announcement: '',
+    });
+
+    expect(calls.slice(9).map((call) => call.args[2])).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
   });
 
   it('marks the final Ascension charge as a visual warning', () => {
@@ -159,12 +193,54 @@ describe('PaladinDevotionPainter', () => {
     for (const entry of [html, playHtml]) {
       expect(entry.match(/id="paladin-devotion-frame"/g)).toHaveLength(1);
       expect(entry.match(/id="paladin-devotion"/g)).toHaveLength(1);
-      expect(entry).toMatch(/id="paladin-devotion-frame"[^>]*tabindex="0"/);
+      // No tabindex: the frame is not its own drag surface any more, so a
+      // focusable-but-inert group would be a dead tab stop. The registry
+      // mover's corner button carries the keyboard path.
+      expect(entry).not.toMatch(/id="paladin-devotion-frame"[^>]*tabindex/);
     }
-    expect(hud).toContain("attachOverlayDrag(this.paladinDevotionFrameEl, 'paladinDevotionAnchor'");
-    expect(hud).not.toContain('devotionFrameMover');
-    expect(css).toMatch(/\.paladin-devotion-frame\s*\{[\s\S]*cursor:\s*grab/);
-    expect(css).toMatch(/\.paladin-devotion-frame\.dragging\s*\{[\s\S]*cursor:\s*grabbing/);
+    // Movement is the "Unlock interface" registry's (HUD_FRAME_SPECS row
+    // 'paladinDevotion'), not the old always-on overlay grab-drag: locked, the
+    // medallion is click-through; its centering translate drops while a custom
+    // position applies so the saved top-left lands where it was dropped.
+    expect(hud).not.toContain('attachOverlayDrag(this.paladinDevotionFrameEl');
+    const devotionSpec = HUD_FRAME_SPECS.find((s) => s.id === 'paladinDevotion');
+    expect(devotionSpec?.elementId).toBe('paladin-devotion-frame');
+    // Extract the frame's own rule body (the same-file necromancy idiom), so
+    // the negative below is scoped to THIS rule rather than a 400-char window
+    // that could cross into a neighbor; the positive pointer-events pin
+    // doubles as proof the extraction found the rule at all.
+    const devotionRule = css.match(/\.paladin-devotion-frame\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(devotionRule).toContain('pointer-events: none');
+    expect(devotionRule).not.toContain('cursor: grab');
+    // The detached rule is a selector GROUP (the proc overlay shares its
+    // translate reset), so allow list members between selector and brace.
+    expect(css).toMatch(
+      /\.paladin-devotion-frame\.hud-frame-detached[^{}]*\{[^}]*translate:\s*none/,
+    );
+  });
+
+  it('renders 7 charge pips so Extended Dawn (5 base + 2) can fully light up', () => {
+    const css = readFileSync(new URL('../src/styles/hud.css', import.meta.url), 'utf8');
+    const tokensCss = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
+    const mobileCss = readFileSync(
+      new URL('../src/styles/hud.mobile.css', import.meta.url),
+      'utf8',
+    );
+    const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+    const playHtml = readFileSync(new URL('../play.html', import.meta.url), 'utf8');
+
+    for (const entry of [html, playHtml]) {
+      const block = entry.match(/class="paladin-ascension-charges"[\s\S]*?<\/div>/)?.[0] ?? '';
+      expect(block.match(/<span><\/span>/g)).toHaveLength(7);
+    }
+    expect(css).toMatch(/\.paladin-ascension-charges\s*\{[\s\S]*width:\s*94px/);
+    expect(mobileCss).toMatch(
+      /body\.mobile-touch \.paladin-ascension-charges\s*\{[\s\S]*width:\s*78px/,
+    );
+    expect(tokensCss).toContain('--color-ascension-bonus');
+    expect(css).toMatch(
+      /\.paladin-ascension-charges span:nth-child\(n \+ 6\)\.on\s*\{[\s\S]*var\(--color-ascension-bonus\)/,
+    );
   });
 });
 

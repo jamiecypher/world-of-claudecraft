@@ -4,6 +4,7 @@
 
 import { BG_BASES } from '../sim/battleground_layout';
 import type { StationType } from '../sim/types';
+import type { DungeonMapModel } from './dungeon_map_view';
 import {
   type BgMapModel,
   bgMapCanvasX,
@@ -15,6 +16,7 @@ import { formatNumber, getLanguage, type TranslationKey, t } from './i18n';
 import type { MapMarkerSemantic, MapMarkerSemanticLayer } from './map_marker_semantics_core';
 import type {
   MapAllyMarker,
+  MapFarmPatchMarker,
   MapGatherNodeMarker,
   MapNavigationMarker,
   MapNpcMarker,
@@ -278,6 +280,7 @@ export type MapSemanticLabelId =
   | 'cooldownLockedHerb'
   | 'station'
   | 'service'
+  | 'farmPatch'
   | 'partyMember'
   | 'deadPartyMember'
   | 'partyMemberGeneric'
@@ -286,11 +289,14 @@ export type MapSemanticLabelId =
   | 'guildMember'
   | 'pointOfInterest'
   | 'dungeonEntrance'
+  | 'dungeonExit'
   | 'delveEntrance'
   | 'worldPassage'
   | 'riftEntrance'
   | 'hostileEnemy'
   | 'aggressiveEnemy'
+  | 'bossEnemy'
+  | 'bossAggressiveEnemy'
   | 'lootableEnemy'
   | 'corpse'
   | 'deathZone'
@@ -369,6 +375,7 @@ function mapSummaryCategory(label: MapSemanticLabelId): MapSummaryCategory {
   switch (label) {
     case 'pointOfInterest':
     case 'dungeonEntrance':
+    case 'dungeonExit':
     case 'delveEntrance':
     case 'worldPassage':
     case 'riftEntrance':
@@ -396,6 +403,9 @@ function mapSummaryCategory(label: MapSemanticLabelId): MapSummaryCategory {
     case 'cooldownLockedOre':
     case 'cooldownLockedWood':
     case 'cooldownLockedHerb':
+    // A garden-bed site is a gathering destination, so it groups with the
+    // resource nodes rather than earning a summary category of its own.
+    case 'farmPatch':
       return 'gather';
     case 'station':
       return 'station';
@@ -410,6 +420,8 @@ function mapSummaryCategory(label: MapSemanticLabelId): MapSummaryCategory {
     case 'guildMember':
     case 'hostileEnemy':
     case 'aggressiveEnemy':
+    case 'bossEnemy':
+    case 'bossAggressiveEnemy':
     case 'lootableEnemy':
     case 'corpse':
     case 'teammate':
@@ -528,7 +540,9 @@ type ArgumentKind =
   | 'station'
   | 'poi'
   | 'rift'
-  | 'service';
+  | 'service'
+  | 'npc'
+  | 'mob';
 
 interface SummaryGroup extends MapMarkerLocation {
   label: MapSemanticLabelId;
@@ -560,6 +574,8 @@ export interface MapSemanticNameResolvers {
   station(type: StationType): string;
   poi(zoneId: string, poiIndex: number): string;
   rift(name: string, rank: string | null): string;
+  npc(npcId: string): string;
+  mob(mobId: string): string;
 }
 
 export interface DelveSemanticMapModel {
@@ -577,6 +593,7 @@ export interface OverworldSemanticMapModel {
   gatherNodes: readonly MapGatherNodeMarker[];
   stations: readonly MapStationMarker[];
   services: readonly MapServiceMarker[];
+  farmPatches: readonly MapFarmPatchMarker[];
   navigation: readonly MapNavigationMarker[];
   player: MapPlayerMarker | null;
   allies: readonly MapAllyMarker[];
@@ -734,6 +751,10 @@ export class MapSemanticAccessibilityCore {
         return t(
           argument === 'mailbox' ? 'worldContent.mailboxName' : 'worldContent.noticeboardName',
         );
+      case 'npc':
+        return this.names.npc(argument);
+      case 'mob':
+        return this.names.mob(argument);
     }
   }
 
@@ -755,6 +776,8 @@ export class MapSemanticAccessibilityCore {
       label === 'friend' ||
       label === 'guildMember' ||
       label === 'pointOfInterest' ||
+      label === 'bossEnemy' ||
+      label === 'bossAggressiveEnemy' ||
       label === 'dungeonEntrance' ||
       label === 'delveEntrance' ||
       label === 'riftEntrance'
@@ -959,6 +982,58 @@ export class MapSemanticAccessibilityCore {
     return this.finish();
   }
 
+  updateDungeon(model: DungeonMapModel | null, area: string, canvasSize: number): string {
+    const player = model?.markers.find((marker) => marker.kind === 'player');
+    this.begin(area, player?.cx ?? canvasSize / 2, player?.cy ?? canvasSize / 2, canvasSize);
+    if (!model) return this.finish();
+    for (const marker of model.markers) {
+      switch (marker.kind) {
+        case 'player':
+          this.add(marker.cx, marker.cy, 'you');
+          break;
+        case 'exit':
+          this.add(marker.cx, marker.cy, 'dungeonExit');
+          break;
+        case 'gate':
+          this.add(marker.cx, marker.cy, 'gateSealed');
+          break;
+        case 'loot':
+          this.add(
+            marker.cx,
+            marker.cy,
+            marker.source === 'enemy' ? 'lootableEnemy' : 'riftTreasureAvailable',
+          );
+          break;
+        case 'npc':
+          this.add(marker.cx, marker.cy, 'pointOfInterest', 'npc', marker.templateId);
+          break;
+        case 'mob':
+          this.add(
+            marker.cx,
+            marker.cy,
+            marker.boss
+              ? marker.aggro
+                ? 'bossAggressiveEnemy'
+                : 'bossEnemy'
+              : marker.aggro
+                ? 'aggressiveEnemy'
+                : 'hostileEnemy',
+            marker.boss ? 'mob' : 'none',
+            marker.boss ? marker.templateId : '',
+          );
+          break;
+        case 'party':
+          this.add(
+            marker.cx,
+            marker.cy,
+            marker.dead ? 'deadPartyMemberGeneric' : 'partyMemberGeneric',
+          );
+          break;
+      }
+    }
+    return this.finish();
+  }
+
   updateOverworld(model: OverworldSemanticMapModel, area: string, canvasSize: number): string {
     const centerX = model.player?.mx ?? canvasSize / 2;
     const centerY = model.player?.my ?? canvasSize / 2;
@@ -1019,6 +1094,10 @@ export class MapSemanticAccessibilityCore {
       this.add(station.mx, station.my, 'station', 'station', station.type);
     for (const service of model.services)
       this.add(service.mx, service.my, 'service', 'service', service.kind);
+    // Garden beds take the argument-free label: every patch is the same kind of
+    // site, and the zone-scoped map plus the direction and distance band the
+    // summary already carries are what identify which one is being described.
+    for (const patch of model.farmPatches) this.add(patch.mx, patch.my, 'farmPatch');
     for (const member of model.party)
       this.add(
         member.mx,

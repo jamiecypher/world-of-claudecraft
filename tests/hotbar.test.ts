@@ -12,6 +12,7 @@ import {
   clearHotbarSlot,
   dragCarriesAttack,
   encodeStoredHotbarAction,
+  freedAttackSlotDisplayAbility,
   HOTBAR_ACTION_MIME,
   HOTBAR_ATTACK_MIME,
   handleMobileAttackTap,
@@ -22,7 +23,6 @@ import {
   parseStoredHotbarAction,
   placeAbilityOnSlot,
   placeItemOnSlot,
-  resolveMobileHotbarDrop,
   saveAttackSlotAction,
   shouldSeedFormBar,
   syncHotbarActions,
@@ -663,19 +663,14 @@ describe('loadoutKnownAbilityIds', () => {
   });
 });
 
-describe('mobile touch drag drop resolution', () => {
-  it('resolves the target slot when it differs from the source', () => {
-    expect(resolveMobileHotbarDrop(2, 5)).toBe(5);
-  });
-
-  it('cancels when the pointer released outside any slot', () => {
-    expect(resolveMobileHotbarDrop(2, null)).toBeNull();
-  });
-
-  it('cancels when the pointer released back on the source slot', () => {
-    expect(resolveMobileHotbarDrop(2, 2)).toBeNull();
-  });
-});
+// The 'mobile touch drag drop resolution' suite that stood here covered
+// resolveMobileHotbarDrop, the long-press rearrange's release decision. That
+// gesture is RETIRED (it reached only the four visible ring centres and armed
+// underneath the radial, swapping slots mid-combat), and the decision it made
+// now lives in the bar editor's tap state machine: a tap on a second cell swaps,
+// a tap back on the picked-up cell cancels. The three cases moved verbatim to
+// tests/bar_editor_core.test.ts, "the retired long-press drop decision, carried
+// over".
 
 describe('desktop attack slot behavior', () => {
   const storage = () => {
@@ -721,5 +716,51 @@ describe('desktop attack slot behavior', () => {
     const action = { type: 'ability' as const, id: 'fireball' };
     expect(assignAttackSlotAction(action, 3)).toEqual({ action, clearSourceIndex: 3 });
     expect(assignAttackSlotAction(action, null)).toEqual({ action, clearSourceIndex: null });
+  });
+
+  describe('freedAttackSlotDisplayAbility (reopen of #3548)', () => {
+    // The freed slot's DATA already survives a build switch (ActionBarController,
+    // fixed by #3548); this is the DISPLAY fallback so the bar keeps showing it
+    // instead of painting empty while the granting build is inactive.
+    const defs: Record<string, unknown> = {
+      stormstrike: { id: 'stormstrike', name: 'Stormstrike' },
+      measured_fury: { id: 'measured_fury', name: 'Measured Fury', passive: true },
+      ghost_channel: { id: 'ghost_channel', name: 'Ghost Channel', hiddenFromPlayer: true },
+    };
+    const abilityDef = (id: string) => defs[id] as never;
+
+    it('resolves a real ability id to a display-only stub with known:false', () => {
+      const action = { type: 'ability' as const, id: 'stormstrike' };
+      expect(freedAttackSlotDisplayAbility(action, abilityDef)).toEqual({
+        def: { id: 'stormstrike', name: 'Stormstrike' },
+        cost: 0,
+        known: false,
+      });
+    });
+
+    it('drops a stale id the static ability table no longer resolves', () => {
+      const action = { type: 'ability' as const, id: 'ghost_ability_from_v99' };
+      expect(freedAttackSlotDisplayAbility(action, abilityDef)).toBeNull();
+    });
+
+    it('returns null for an item binding or an empty slot', () => {
+      expect(
+        freedAttackSlotDisplayAbility({ type: 'item', id: 'baked_bread' }, abilityDef),
+      ).toBeNull();
+      expect(freedAttackSlotDisplayAbility(null, abilityDef)).toBeNull();
+    });
+
+    it('drops a passive or hiddenFromPlayer id even though the static table resolves it (defense in depth)', () => {
+      // ActionBarController already filters these out on every write path
+      // (isAttackSlotStoredAbilityEligible / isAbilityPlacementAllowed both apply
+      // isAbilityActionBarEligible), so this re-checks the module's own "passives
+      // are informational only, never occupy an action slot" rule independently.
+      expect(
+        freedAttackSlotDisplayAbility({ type: 'ability', id: 'measured_fury' }, abilityDef),
+      ).toBeNull();
+      expect(
+        freedAttackSlotDisplayAbility({ type: 'ability', id: 'ghost_channel' }, abilityDef),
+      ).toBeNull();
+    });
   });
 });

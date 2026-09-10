@@ -18,6 +18,7 @@
 // garbage on the hot path), mirroring the speedStreaksInto / cameraSpace out-param
 // idiom elsewhere in src/render.
 
+import { isFeastTemplateId } from '../sim/professions/feast';
 import type { Entity } from '../sim/types';
 import { INTERACT_RANGE } from '../sim/types';
 import { comboPipsFor } from './nameplate_combo';
@@ -44,11 +45,6 @@ export const NAMEPLATE_SELF_EMOTE_ANCHOR_LIFT = 0.2;
 // The crypt's sealed royal door carries no floating label (it reads as back wall,
 // not a portal billboard).
 const UNLABELED_DOOR_DUNGEON_ID = 'nythraxis_boss_arena';
-
-// The Vale Cup boarball is an inert mob entity (bell pattern) with a bespoke
-// ball visual; a floating "Ball" name + hp bar over it would break the toy
-// (the dungeon-door carve-out pattern, kept template-scoped and pure).
-const UNLABELED_MOB_TEMPLATE_ID = 'vale_cup_ball';
 
 /** Per-entity nameplate decisions the painter consumes. Mutated in place by
  *  nameplatePlanInto so the painter can reuse one instance across all entities. */
@@ -90,8 +86,20 @@ export function newNameplatePlan(): NameplatePlan {
  * player's. `showPlayerNameplates` is the other-players toggle (defaults on):
  * when off, other players' plates hide, except the current target so a clicked
  * player stays readable; the self plate stays governed by showOwnNameplate
- * alone, and mob/object plates are unaffected. Pure: same inputs give the same
- * plan, no DOM/Three/i18n, no Math.random/Date.now/performance.now.
+ * alone, and mob/object plates are unaffected. `standIn` says this entity has
+ * no in-world body at all right now (a compile gate hides it, see
+ * entity_gate_stand_in_core.ts): its plate is then the only thing telling the
+ * player the entity is there, so it overrides BOTH nameplate toggles, the
+ * nameplate range and the plateless-object rule. The arrival gate hides the
+ * whole group of ANY non-self view, objects included, so a gated ground-loot
+ * pile, chest or quest object would otherwise have no representation at all;
+ * and a view only exists inside the streaming radius (about 80 yd), so showing
+ * its plate out to that distance for the gate window is the honest stand-in.
+ * It still overrides nothing that is not about a hidden body: a looted corpse,
+ * the deliberately label-less sealed crypt door and the Vale Cup ball stay
+ * hidden, and the self plate stays the player's own choice (the local player's
+ * view is never gated). Pure: same inputs give the same plan, no DOM/Three/i18n,
+ * no Math.random/Date.now/performance.now.
  */
 export function nameplatePlanInto(
   out: NameplatePlan,
@@ -101,6 +109,7 @@ export function nameplatePlanInto(
   showNameplates: boolean,
   showOwnNameplate: boolean,
   showPlayerNameplates: boolean,
+  standIn: boolean,
 ): NameplatePlan {
   const dx = e.pos.x - player.pos.x;
   const dz = e.pos.z - player.pos.z;
@@ -127,16 +136,26 @@ export function nameplatePlanInto(
     e.templateId === 'delve_bell_rope' ||
     e.templateId === 'delve_bell_rope_pulled';
   const delveInteractNear = isDelveInteract && d2 <= (INTERACT_RANGE + 1) * (INTERACT_RANGE + 1);
+  // The placed harvest feast (Phase 12): labels like the delve interactables,
+  // and like every object plate it carries no hp bar (the flag-family object
+  // treatment). The pad is INTERACT_RANGE + 1, the delve-family hysteresis
+  // band: the plate shows one yard PAST the bite's own INTERACT_RANGE gate
+  // (consumeFeastAction denies strictly beyond it with the merged not-found
+  // frame, farmDenied 'feast_expired', since masterwrought Phase 18), so the
+  // title is already up as a player walks into eating range and never
+  // flickers at the exact boundary.
+  const feastNear =
+    isFeastTemplateId(e.templateId) && d2 <= (INTERACT_RANGE + 1) * (INTERACT_RANGE + 1);
 
   out.hidden =
     (isSelf && !hasOverheadEmote && !showOwnNameplate) ||
-    d2 > NAMEPLATE_RANGE_SQ ||
     (e.dead && !e.lootable && e.kind === 'mob') ||
-    (e.kind === 'object' && !isDoor && !delveInteractNear) ||
     (isDoor && e.dungeonId === UNLABELED_DOOR_DUNGEON_ID) ||
-    e.templateId === UNLABELED_MOB_TEMPLATE_ID ||
-    (!showNameplates && e.kind === 'mob' && !e.dead) ||
-    (!showPlayerNameplates && e.kind === 'player' && !isSelf && e.id !== player.targetId);
+    (!standIn &&
+      (d2 > NAMEPLATE_RANGE_SQ ||
+        (e.kind === 'object' && !isDoor && !delveInteractNear && !feastNear) ||
+        (!showNameplates && e.kind === 'mob' && !e.dead) ||
+        (!showPlayerNameplates && e.kind === 'player' && !isSelf && e.id !== player.targetId)));
   out.anchorYOffset =
     viewHeight * e.scale +
     (isSelf && hasOverheadEmote && !showOwnNameplate

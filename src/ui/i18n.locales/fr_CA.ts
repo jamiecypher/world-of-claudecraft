@@ -80,22 +80,22 @@ export const fr_CA: Partial<Record<TranslationKey, string>> = {
   'delveUi.board.marks': "Marques d'excavation : {count}",
   'delveUi.board.openDelveAria': 'Ouvrir le tableau des excavations depuis {name}',
   'delveUi.board.title': 'Tableau des excavations',
-  'delveUi.boss.varric.bell.emote': 'Le diacre Varric empoigne la cloche enfouie à deux mains!',
+  'delveUi.boss.varric.bell.emote': 'Le diacre Vandric empoigne la cloche enfouie à deux mains!',
   'delveUi.boss.varric.bell.impact': 'Le glas de la cloche fissure le sol de la chambre!',
   'delveUi.boss.varric.bell.lesson':
     "Glas funèbre : un choc au sol toutes les douze secondes. Éloignez-vous avant l'impact.",
-  'delveUi.boss.varric.bell.log': 'Le diacre Varric se met à sonner la cloche funéraire.',
-  'delveUi.boss.varric.bell.warning': 'Éloignez-vous du diacre Varric!',
+  'delveUi.boss.varric.bell.log': 'Le diacre Vandric se met à sonner la cloche funéraire.',
+  'delveUi.boss.varric.bell.warning': 'Éloignez-vous du diacre Vandric!',
   'delveUi.boss.varric.mid60':
-    'Le diacre Varric lit des noms dans le registre avec un triomphe tremblant.',
+    'Le diacre Vandric lit des noms dans le registre avec un triomphe tremblant.',
   'delveUi.boss.varric.pull':
     'Vous foulez la poussière sacrée avec des intentions impures. À genoux, et soyez compté.',
-  'delveUi.boss.varric.raise.emote': 'Le diacre Varric appelle des noms des tombes brisées!',
-  'delveUi.boss.varric.raise.interrupt_fail': "Les morts répondent à l'appel du diacre Varric!",
+  'delveUi.boss.varric.raise.emote': 'Le diacre Vandric appelle des noms des tombes brisées!',
+  'delveUi.boss.varric.raise.interrupt_fail': "Les morts répondent à l'appel du diacre Vandric!",
   'delveUi.boss.varric.raise.interrupt_ok': 'Le rite funèbre vacille.',
   'delveUi.boss.varric.raise.lesson':
     'Interrompez la tombe fissurée en cinq secondes, sinon les morts se lèvent à son appel.',
-  'delveUi.boss.varric.raise.log': 'Le diacre Varric entame Relever les morts.',
+  'delveUi.boss.varric.raise.log': 'Le diacre Vandric entame Relever les morts.',
   'delveUi.boss.varric.raise.object': "La tombe fissurée frémit d'un souffle volé.",
   'delveUi.boss.varric.raise.warning': 'Arrêtez le rite funèbre!',
   'delveUi.chest.flavor': "Les morts ont cédé ce qu'ils pouvaient épargner.",
@@ -139,8 +139,6 @@ export const fr_CA: Partial<Record<TranslationKey, string>> = {
   'entities.abilities.blazing_barrier.description':
     'Entoure-toi de feu et absorbe {damage} points de dégâts pendant 60 s. (Feu)',
   'entities.abilities.cold_snap.name': 'Rappel hivernal',
-  'entities.abilities.cold_snap.description':
-    'Réinitialise la recharge de Pas scintillant, Voile de givre et Invisibilité accrue. (Talent de mage)',
   'entities.abilities.greater_invisibility.name': 'Invisibilité accrue',
   'entities.abilities.hot_streak.name': 'Suite flamboyante',
   'entities.abilities.hot_streak.description':
@@ -187,6 +185,7 @@ export const fr_CA: Partial<Record<TranslationKey, string>> = {
     "Vous ne pouvez pas entrer dans une excavation pendant un match d'arène.",
   'sim.delve.duringDuel': 'Vous ne pouvez pas entrer dans une excavation pendant un duel.',
   'sim.delve.graveFalters': 'Le rite funèbre vacille.',
+  'sim.delve.enemiesRemain': "Réglez d'abord le sort des ennemis restants.",
   'sim.delve.mechanismOpen':
     "Un mécanisme s'ouvre dans un déclic tout près. Un passage s'ouvre vers le nord : trouvez le portail de sortie devant vous.",
   'sim.delve.notInDelve': "Vous n'êtes pas dans une excavation.",
@@ -288,7 +287,6 @@ export const fr_CA: Partial<Record<TranslationKey, string>> = {
   'hudChrome.auraEffect.bloodbath':
     'Accroît les chances de coup critique et les dégâts infligés de {pct}%',
   'hudChrome.auraEffect.dieBySword': 'Diminue les dégâts subis de {pct}%',
-  'hudChrome.auraEffect.victoryRush': 'Élan de victoire est prêt',
   'hudChrome.auraEffect.maxHpPct': 'Accroît les points de vie maximum de {pct}%',
   'hudChrome.statInfo.desc.parry':
     'Vos chances de parer entièrement une attaque de mêlée de front, sans subir de dégâts. Un coup porté dans le dos ne peut pas être paré.',
@@ -328,4 +326,23 @@ export const fr_CA: Partial<Record<TranslationKey, string>> = {
   'auth.designCodeErrVersion': "Ce code d'apparence vient d'une version plus récente du jeu.",
   'auth.designCodeErrMalformed':
     "Ce code d'apparence est endommagé. Copiez le code au complet et réessayez.",
+  // Release-fill batch (fr_CA divergences over fr_FR): the "increase X" stat/value
+  // phrasing consistently uses accroit/accroitre in this overlay (see the
+  // hudChrome.auraEffect.increase.*/reduce.*/vulnerability precedents above), and
+  // the Chat frame label follows the established Clavardage term (see
+  // hudChrome.interfaceTabs.chat). Every other autoFillable key in this batch
+  // resolves identically to its filled fr_FR value, so no override is added for it.
+  'hudChrome.auraEffect.makersBrand':
+    "Pendant {duration} s, chaque cumul accroît les dégâts subis de la part de Varkhul de {pct}%. Cumul jusqu'à {max} fois. Les tanks doivent échanger à {swap} cumuls.",
+  'hudChrome.bank.vaultUpgrade': 'Accroître chaque plafond à {cap}',
+  'hudChrome.bank.vaultUpgradeConfirm':
+    'Accroître chaque plafond de matériau à {cap} pour {price}?',
+  'hudChrome.raidBossGuide.varkhul.legionSummary':
+    'Les Gardiens du creuset incantent Séisme du creuset pour accroître la chaleur de la forge, tandis que les Artificiers des cendres utilisent Protocole de réparation pour soigner Varkhul.',
+  'hudChrome.raidBossGuide.varkhul.makersBrandSummary':
+    'Varkhul frappe son tank actuel et applique un effet cumulable qui accroît tous les dégâts subis de sa part.',
+  'hudChrome.interfaceUnlock.frameNames.chat': 'Clavardage',
+  'hudChrome.bags.capacityPools':
+    'Articles {generalUsed}/{generalTotal}, matériaux {materialsUsed}/{materialsTotal}',
+  'hudChrome.bags.emptyMaterialsOnly': 'Matériaux seulement',
 };

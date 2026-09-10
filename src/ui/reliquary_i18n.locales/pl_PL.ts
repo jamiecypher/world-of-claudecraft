@@ -150,4 +150,33 @@ export const table: ReliquaryLocaleTable = {
     name: 'Pierścienie Szczeliny',
     desc: 'Osobiste pierścienie Szczeliny, bite dla każdego czempiona w drużynie, która zdobędzie pierwsze przejście rankingowej Szczeliny. Każda postać może mieć tylko własny.',
   },
+  conquerors_ignivar: {
+    name: 'Tygiel Ostatniego Źródła',
+    desc: 'Epickie łupy od Ignivara, Herolda Ostatniego Płomienia.',
+  },
+  conquerors_ignivar_heroic: {
+    name: 'Heroiczny: Tygiel Ostatniego Źródła',
+    desc: 'Bronie dostępne wyłącznie heroicznie od Ignivara, Herolda Ostatniego Płomienia.',
+  },
+  conquerors_varkhul: {
+    name: 'Wewnętrzny Tygiel',
+    desc: 'Epickie łupy od Varkhula, Ojca Kuźni Ostatniego Płomienia.',
+  },
+  conquerors_varkhul_heroic: {
+    name: 'Heroiczny: Wewnętrzny Tygiel',
+    desc: 'Tarcze i bronie dostępne wyłącznie heroicznie od Varkhula, Ojca Kuźni Ostatniego Płomienia.',
+  },
+  conquerors_set_bramblehide: {
+    name: 'Cierniowa Skóra Rootsa',
+    desc: 'Pełna skórzana rodzina Cierniowej Skóry Rootsa.',
+  },
+  professions_crucible: {
+    desc: 'Jedenaście kolekcji wykonywanych na rajd, z których każda oferuje element na tors, pas i stopy. Podręczniki i formuły to wiedza, nie relikwie.',
+
+    name: 'Rzemiosło Tygla',
+  },
+  professions_forgebreaker: {
+    name: 'Łamacz Kuźni',
+    desc: 'Głos Ostatniego Źródła, uwolniony z kuźni i niesiony w młocie własnej roboty.',
+  },
 };

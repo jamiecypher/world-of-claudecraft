@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { boundQuadSize, IMPACT_QUAD_MAX_SCREEN_FRACTION } from '../vfx_screen_bounds_core';
 import { FLIPBOOK_GRID, FLIPBOOK_STYLES, type FlipbookStyle, flipbookSheet } from './fx_textures';
 
 // Camera-facing impact flipbooks, ported from the gallery's spawnFlipbook /
@@ -32,9 +33,11 @@ export function asFlipbookStyle(s: string): FlipbookStyle {
 export class ImpactFlipbooks {
   private slots: FlipSlot[] = [];
   private next = 0;
+  private readonly geometry: THREE.PlaneGeometry;
+  private disposed = false;
 
   constructor(scene: THREE.Scene) {
-    const geo = new THREE.PlaneGeometry(1, 1);
+    this.geometry = new THREE.PlaneGeometry(1, 1);
     const proto = new THREE.ShaderMaterial({
       uniforms: {
         uMap: { value: null },
@@ -68,6 +71,10 @@ export class ImpactFlipbooks {
           vec4 a = cell(fi);
           vec4 b = cell(fi + 1.0);
           vec4 s = mix(a, b, fract(uFrame));
+          // An impact sheet cell is mostly empty around the blast: early-out
+          // below the additive floor rather than blend a transparent fragment
+          // the bloom re-reads (../vfx.ts / overlay_sprites.ts idiom).
+          if (s.a * uOpacity < 0.004) discard;
           gl_FragColor = vec4(s.rgb * uTint * uHdr, s.a) * uOpacity;
         }`,
       transparent: true,
@@ -76,7 +83,7 @@ export class ImpactFlipbooks {
     });
     for (let i = 0; i < FLIP_SLOTS; i++) {
       const mat = proto.clone();
-      const mesh = new THREE.Mesh(geo, mat);
+      const mesh = new THREE.Mesh(this.geometry, mat);
       mesh.visible = false;
       mesh.renderOrder = 8; // over the shock rings: the sheet IS the impact
       mesh.userData.renderCategory = 'vfx';
@@ -95,6 +102,7 @@ export class ImpactFlipbooks {
     hdr: number,
     style: FlipbookStyle,
   ): void {
+    if (this.disposed) return;
     const slot = this.slots[this.next];
     this.next = (this.next + 1) % FLIP_SLOTS;
     slot.active = true;
@@ -117,14 +125,40 @@ export class ImpactFlipbooks {
     for (const style of FLIPBOOK_STYLES) this.spawn(x, y, z, 1, 0xffffff, 1, style);
   }
 
-  update(dt: number, camQuat: THREE.Quaternion): void {
+  /**
+   * `camPos` and `tanHalfVFov` bound the quad to a fraction of the screen
+   * (../vfx_screen_bounds_core.ts). An impact sheet is authored at 5 to 12
+   * yards across and always faces the camera, so at melee range one quad is
+   * effectively fullscreen additive fill that the composer bloom then re-reads.
+   * The bound sits far above any ordinary camera distance, so it only trims the
+   * degenerate close-range case; a host that cannot supply the camera (a test,
+   * an orthographic viewport) omits both and keeps the unbounded size.
+   */
+  update(
+    dt: number,
+    camQuat: THREE.Quaternion,
+    camPos?: THREE.Vector3,
+    tanHalfVFov?: number,
+  ): void {
+    if (this.disposed) return;
+    const bounded = camPos !== undefined && tanHalfVFov !== undefined && tanHalfVFov > 0;
     for (const slot of this.slots) {
       if (!slot.active) continue;
       slot.age += dt;
       const t = Math.min(1, slot.age / FLIP_DUR);
       slot.mat.uniforms.uFrame.value = t * LAST_FRAME;
       slot.mat.uniforms.uOpacity.value = t > 0.7 ? 1 - (t - 0.7) / 0.3 : 1;
-      slot.mesh.scale.setScalar(slot.size * (0.65 + 0.55 * easeOutCubic(t)));
+      const grown = slot.size * (0.65 + 0.55 * easeOutCubic(t));
+      slot.mesh.scale.setScalar(
+        bounded
+          ? boundQuadSize(
+              grown,
+              slot.mesh.position.distanceTo(camPos as THREE.Vector3),
+              tanHalfVFov as number,
+              IMPACT_QUAD_MAX_SCREEN_FRACTION,
+            )
+          : grown,
+      );
       slot.mesh.quaternion.copy(camQuat);
       if (t >= 1) {
         slot.active = false;
@@ -138,5 +172,16 @@ export class ImpactFlipbooks {
       slot.active = false;
       slot.mesh.visible = false;
     }
+  }
+
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clear();
+    for (const slot of this.slots) {
+      slot.mesh.removeFromParent();
+      slot.mat.dispose();
+    }
+    this.geometry.dispose();
   }
 }

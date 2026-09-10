@@ -5,6 +5,7 @@
 // sim import), so a Vitest drives them directly; the HUD gates on the player's setting.
 
 import type { AbilityEffect, Entity } from '../../../sim/types';
+import type { BgInfo } from '../../../world_api/battleground';
 import type { ArenaInfo, DuelInfo } from '../../../world_api/duel_arena';
 
 // Auto-attack classification of EVERY AbilityEffect type. Because this is a Record over
@@ -148,14 +149,6 @@ const EFFECT_CLASS: Record<AbilityEffect['type'], AutoAttackClass> = {
   ruinousBrand: 'other',
   duskfireClaim: 'other',
   summonPyreColossus: 'other',
-  // Vale Cup sport moves (docs/prd/vale-cup.md): no-damage, harvest-truce
-  // utility. None of them should engage auto-attack on use (the paired stun on
-  // Shoulder is non-breaking CC, and nothing on the pitch deals damage).
-  ballKick: 'other',
-  ballPass: 'other',
-  ballShoot: 'other',
-  sportDash: 'other',
-  sportShove: 'other',
   packCommand: 'damage',
   unleashBeast: 'damage',
   howlingRage: 'other',
@@ -177,6 +170,10 @@ export function abilityStartsAutoAttack(effects: AbilityEffect[]): boolean {
   let damaging = false;
   for (const e of effects) {
     if (e.type === 'aoeRoot' && e.breakOnDamage !== undefined) return false;
+    // A groundAoE with allyBuffPct is a FRIENDLY zone (Rune of Power): its min/max
+    // are ignored by the sim (see the AbilityEffect comment), so it deals no damage
+    // and must not be classified as an attack.
+    if (e.type === 'groundAoE' && e.allyBuffPct !== undefined) continue;
     const cls = EFFECT_CLASS[e.type];
     if (cls === 'breakCC') return false;
     if (
@@ -213,11 +210,15 @@ export function hasAutoAttackTarget(
 }
 
 /**
- * Whether a player target is PvP-hostile right now: an active duel opponent, or an
- * active-arena opponent/enemy. Mirrors the private `isHostilePlayer` the renderer
+ * Whether a player target is PvP-hostile right now: an active duel opponent, an
+ * active-arena opponent/enemy, or an opposing-team fighter in a live Thornhollow
+ * Fields battleground match. Mirrors the private `isHostilePlayer` the renderer
  * already computes for nameplate coloring (`src/render/renderer.ts`), so the "Auto-Attack
  * on Ability Use" QoL setting recognizes the same PvP-hostile state instead of gating on
- * the mob-only `hostile` flag, which a player target never carries.
+ * the mob-only `hostile` flag, which a player target never carries. The battleground
+ * arm is the one the renderer grew and this gate did not: a hostile cast at a
+ * battleground enemy then never engaged the white swing, while the identical cast in a
+ * duel or arena did.
  *
  * Deliberately narrower than the sim's `isHostileTo`: it does not cover the jail brawl,
  * the warden arm, an enemy player's PET (resolved through `pvpController`), or the Vale
@@ -229,9 +230,17 @@ export function isPvpHostileTarget(
   targetId: number | null | undefined,
   duelInfo: DuelInfo | null | undefined,
   arenaInfo: ArenaInfo | null | undefined,
+  bgInfo?: BgInfo | null,
 ): boolean {
   if (targetId === null || targetId === undefined) return false;
   if (duelInfo?.state === 'active' && duelInfo.otherPid === targetId) return true;
+  // Thornhollow Fields: the opposing TEAM is hostile for the whole live match
+  // (the countdown and the ended hold are combat-off, so neither engages).
+  const bg = bgInfo?.match;
+  if (bg?.state === 'active') {
+    const row = bg.players.find((p) => p.pid === targetId);
+    if (row && row.team !== bg.myTeam) return true;
+  }
   const match = arenaInfo?.match;
   return (
     !!match &&
@@ -252,4 +261,26 @@ export function isPvpHostileTarget(
  */
 export function deferAutoAttackUntilCastEnd(castTime: number): boolean {
   return castTime > 0;
+}
+
+/**
+ * A deferred engage is RECORDED (by ability id) at button-press time, before the
+ * sim has validated anything: range, cost, cooldown, and gates such as Soulwell's
+ * `requiresOutOfCombat` can all still refuse the cast, and a refused cast never
+ * reaches `castStart` at all. Recording it unconditionally and clearing it only at
+ * a matching castStop would leave it armed forever after a refusal, so it fires on
+ * whatever unrelated cast completes next: an earlier damaging cast getting refused
+ * left this armed, and casting Soulwell (which never engages auto-attack on its
+ * own; see `summonSoulwell: 'other'` above) right after pulled the player's current
+ * target when Soulwell's own castStop found the stale request still set.
+ *
+ * Call this on EVERY castStart for the player: it keeps the request only while it
+ * is still confirmed to be the SAME cast, dropping it the moment a different
+ * ability (or none) is the one that actually started.
+ */
+export function confirmPendingAutoAttackEngage(
+  pendingAbilityId: string | null,
+  startedAbilityId: string,
+): string | null {
+  return pendingAbilityId === startedAbilityId ? pendingAbilityId : null;
 }

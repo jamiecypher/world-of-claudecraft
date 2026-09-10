@@ -6,9 +6,36 @@ import { MECH_CHROMAS, type MechChroma } from '../../sim/content/skins';
 import { offhandMirrorsWeaponSkin } from '../../sim/content/weapon_skin_rules';
 import { WEAPON_SKINS } from '../../sim/content/weapon_skins';
 import { ITEMS, MOBS } from '../../sim/data';
-import { ALL_CLASSES, type Entity, isMechWearer, type PlayerClass } from '../../sim/types';
+import {
+  VARKHUL_ANVILS_DECREE_CAST_ID,
+  VARKHUL_BOSS_ID,
+  VARKHUL_FORGE_HAMMER_ABILITY_ID,
+  VARKHUL_FORGESTORM_CAST_ID,
+  VARKHUL_FRONTAL_CAST_ID,
+} from '../../sim/encounters/varkhul';
+import {
+  IGNIVAR_CINDER_ARTIFICER_ID,
+  IGNIVAR_CRUCIBLE_WARDEN_ID,
+  IGNIVAR_EMBER_SENTINEL_ID,
+} from '../../sim/ignivar_raid_ids';
+import { DUNGEON_MINIBOSS_STOMP_ABILITY_ID } from '../../sim/mob/dungeon_miniboss_stomp';
+import { VARKHUL_CRUCIBLE_QUAKE_CAST_ID } from '../../sim/mob/healer_channel';
+import { NYTHRAXIS_BONE_SPIKE_ID } from '../../sim/nythraxis_bone_spike';
+import {
+  ALL_CLASSES,
+  type Entity,
+  IGNIVAR_BOSS_ID,
+  isMechWearer,
+  type PlayerClass,
+} from '../../sim/types';
+import {
+  VARKHUL_CINDER_REPAIR_END_ANIMATION_ID,
+  VARKHUL_CINDER_REPAIR_START_ANIMATION_ID,
+} from '../../sim/varkhul_cinder_artificer';
 import { ITEM_WEAPON_VARIANTS } from '../../ui/weapon_variants';
 import type { OverheadEmoteId } from '../../world_api';
+import { VARKHUL_FORGING_STRIKE_TIMESCALE } from '../varkhul_forge_hammer';
+import { NPC_PROP_SET_IDS, type NpcPropSet } from './npc_looks';
 
 export interface EmoteClipSpec {
   clips: readonly string[];
@@ -18,6 +45,29 @@ export interface EmoteClipSpec {
 
 export interface ClipMap {
   idle: string;
+  /** Extra standing-still clips, played one at a time in place of `idle` and
+   *  then handed back to it over the standard one-shot crossfade. Purely
+   *  cosmetic idle-breakers ("fidgets"): author each to END on the idle pose,
+   *  because leaving idle CANCELS one mid-clip and the rig cuts straight back
+   *  over a 0.18s fade. Empty/absent for every rig that just breathes.
+   *
+   *  These fire from ONE shared, jittered timer and are picked at random, so a
+   *  given clip's own cadence falls as the pool grows. A clip that has to show
+   *  up on a schedule belongs in `idleBeat` instead. */
+  idleVariants?: string[];
+  /** A signature idle on a FIXED cadence, scheduled independently of the
+   *  `idleVariants` pool. Same contract as a fidget (one-shot, must end on the
+   *  idle pose, cancelled the moment the rig stops standing still); the
+   *  difference is only that it keeps its own clock, so "every N seconds"
+   *  actually means it. */
+  idleBeat?: { clip: string; everySec: number; jitterSec?: number };
+  /** The braced battle stance: the idle a body holds while it is actually
+   *  fighting someone, played instead of `idle` whenever the rig is engaged and
+   *  standing still (see anim_state.desiredBaseState). Absent = the rig relaxes
+   *  into its normal idle between swings, as every rig did before this existed.
+   *  Its pose should match what the rig's attack and hit one-shots open and
+   *  close on, so those blend into and out of it without a snap. */
+  combatIdle?: string;
   walk: string;
   run: string;
   /** one-shot swing clips, rotated per attack */
@@ -33,6 +83,27 @@ export interface ClipMap {
   hit?: string[];
   /** looping cast channel */
   cast?: string;
+  /** Hold instead of replaying: the generic `cast` clip plays ONCE up to this
+   *  many seconds in (the held gesture at the top of the raise: arm up,
+   *  pointing) and FREEZES on that frame while the cast channels; the
+   *  remainder (the recovery back to stance) plays on cast end via
+   *  castPlayOut. Only the generic clip: castByAbility overrides keep their
+   *  authored behavior. */
+  castHoldPointSeconds?: number;
+  /** Cast clips that FINISH as a one-shot when their cast ends mid-clip (the
+   *  crash recovery, the pointing arm coming back down) instead of being cut
+   *  by the base-pose crossfade. Opt-in per clip so a seamless cadence loop
+   *  (the Forgefather's decree Forging) keeps its instant handoff. */
+  castPlayOut?: readonly string[];
+  /** Per-ability override for the looping cast clip (the windup LOOK of one
+   *  cast differing from the rig's generic channel; the one-shot route in
+   *  attackByAbility cannot cover held cast states). */
+  castByAbility?: Record<string, string>;
+  /** Playback rate for per-ability cast clips whose authored length must land
+   *  its key pose inside the cast window. Also re-applied every frame, since
+   *  actions are cached per clip and a clip shared with attackByAbility would
+   *  otherwise carry that route's one-shot timescale into the cast loop. */
+  castTimeScaleByAbility?: Record<string, number>;
   sitDown?: string;
   sitIdle?: string;
   /** swim base. On the authored player lane this is the SUBMERGED stroke and
@@ -88,6 +159,14 @@ export interface AttachDef {
   rotationY?: number;
   /** Copy grip from a built-in accessory node on the character rig (e.g. Spellbook_open). */
   gripRef?: string;
+  /** A pure swap-slot BASE that never renders anywhere: it exists only so an
+   *  `offhandSlot` can point at it (the game skips the entry whenever the
+   *  offhand is empty or unmapped), so its url and grip are dead data. The
+   *  wiki generator filters these out of GuideModelSpec, which is what keeps
+   *  the class figures from showcasing another class's fixed prop. Never set
+   *  this on an attach that should showcase in the guide (the shield classes'
+   *  offhand bases deliberately stay unflagged). */
+  swapOnly?: boolean;
 }
 
 export interface VisualDef {
@@ -104,6 +183,27 @@ export interface VisualDef {
   hover?: number;
   /** yaw applied so the model faces +Z (facing-0 convention) */
   yaw?: number;
+  /** Optional texture-aware ambient lift for exceptionally dark authored bodies. */
+  selfIllumination?: number;
+  /** Optional per-visual multiplier for scene environment reflections. */
+  envMapIntensity?: number;
+  /** Force a fully diffuse surface response on the body materials: zero
+   *  metalness, full roughness, and the metallic/roughness maps dropped, so
+   *  the key/hemisphere/torch lights cannot lay a specular sheen over the
+   *  albedo. For rigs whose authored PBR response reads as gloss under an
+   *  interior light rig (the Ignivar raid roster). */
+  matte?: boolean;
+  /** The body atlas is an AUTHORED baked texture (a Tripo or Blender export
+   *  that carries its own shading, largely dark texels), not a KayKit palette.
+   *  On the low graphics tier the Lambert rebuild adds a small uniform
+   *  emissive floor for readability (assets.ts applyLowReadabilityLift);
+   *  sized for bright palette swatches, that same constant lifts every dark
+   *  texel of an authored atlas to one grey and reads as a flat film over the
+   *  whole texture. With this flag the floor is scaled by the atlas instead
+   *  (emissiveMap = map), so black stays black. Standard tiers ignore it.
+   *  Opt-in per def on purpose: player bodies and every other kit rig keep
+   *  the uniform floor they always had. */
+  authoredAtlas?: boolean;
   /** KayKit chars ship every accessory visible: non-skinned mesh nodes to KEEP.
    *  undefined = keep everything (creature GLBs have no accessories). */
   show?: string[];
@@ -139,6 +239,24 @@ export interface VisualDef {
   gaitWindDown?: boolean;
   attackTimeScale?: number;
   deathTimeScale?: number;
+  /** Cut out of locomotion into idle instead of crossfading.
+   *
+   *  For a vehicle whose locomotion clip drives WHEELS. A crossfade keeps the
+   *  outgoing clip playing while it fades, so the wheels keep turning for the
+   *  length of the fade after the throttle is released, which reads as the car
+   *  coasting on ice. A creature's legs blending to a stand is the opposite:
+   *  there the fade is what stops it looking snapped, so this stays opt-in. */
+  cutToIdle?: boolean;
+  /** Final model-local sink for an authored death pose that ends above the
+   *  normalized feet anchor. CharacterVisual eases it in only over the final
+   *  quarter of the Death clip and restores the base offset on revive. */
+  deathGroundOffset?: number;
+  /** Hold the idle base state frozen on the FIRST frame of its clip instead of
+   *  looping it: a downed/dormant look (the forge mech lies still on the ground
+   *  on crawl frame 0 until it moves). Walk/run still play the clip normally, so
+   *  a rig whose idle and walk share one clip animates the moment it starts
+   *  moving. Pairs with the sim's MobTemplate.idleStationary. */
+  idleFrozen?: boolean;
   /** Skip the boot preload sweep (manifestUrls); the asset is fetched on demand
    *  instead — e.g. the cosmetic-only Combat Mech, loaded via preloadMechAssets()
    *  when the skin-select preview opens, so it never bloats every client's boot. */
@@ -193,8 +311,15 @@ const KAYKIT_EMOTES: Partial<Record<OverheadEmoteId, EmoteClipSpec>> = {
   salute: { clips: ['Spellcast_Raise', 'Block'], timeScale: 1.18 },
   cry: { clips: ['Hit_A', 'Sit_Floor_Down'], timeScale: 0.65 },
   bow: { clips: ['Sit_Floor_Down', 'Spellcast_Raise'], timeScale: 1.35 },
-  clap: { clips: ['1H_Melee_Attack_Slice_Diagonal', 'Cheer'], timeScale: 1.55, repeats: 2 },
-  roar: { clips: ['2H_Melee_Attack_Chop', '1H_Melee_Attack_Chop', 'Cheer'], timeScale: 0.9 },
+  clap: {
+    clips: ['1H_Melee_Attack_Slice_Diagonal', 'Cheer'],
+    timeScale: 1.55,
+    repeats: 2,
+  },
+  roar: {
+    clips: ['2H_Melee_Attack_Chop', '1H_Melee_Attack_Chop', 'Cheer'],
+    timeScale: 0.9,
+  },
   kneel: { clips: ['Sit_Floor_Down'], timeScale: 0.85 },
 };
 
@@ -222,6 +347,35 @@ const skeletonClips = (attack: string[], flourish = 'Skeletons_Awaken_Standing')
   ...kaykit(attack, 'Idle_Combat'),
   flourish,
 });
+
+// The Bonebound Rickshaw's puller ONLY (skel_rickshaw_puller). Not shared
+// with any other skeleton key on purpose.
+//
+// skeleton_minion.glb is one of the rigs corrupted by build_assets.mjs's
+// meshopt() step (it breaks this exact multi-primitive-skinned KayKit shape),
+// which the mount cannot ship around: its puller renders as a scattered pile of
+// bones. It is rebuilt by scripts/assets/rebuild_kaykit_skeletons_free.mjs from
+// the KayKit_Skeletons_1.1_FREE pack and shipped as a SEPARATE file
+// (skeleton_minion_free.glb) rather than overwriting the original, because the
+// FREE pack bundles only 2 of the 7 Rig_Medium animation sources: no combat
+// swing, no emotes. Overwriting the shared file would have handed that
+// regression to delve_skel_wraith, a real Reliquary delve mob that currently
+// has real attack clips and nothing to do with this mount. A cart puller never
+// swings at anything, so the reduced set costs the mount nothing.
+//
+// Fixing the other rigs on that shared file, and deciding whether losing their
+// attack swings is worth the geometry fix, is a separate change with its own
+// argument to make.
+const RICKSHAW_PULLER_CLIPS: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walking_A',
+  run: 'Running_A',
+  // Empty rather than naming a clip this GLB does not contain, which
+  // tests/character_clipmaps.test.ts correctly refuses to let through.
+  attack: [],
+  hit: ['Hit_A'],
+  death: 'Death_A',
+};
 
 const skeletonLargeClips = (attack: string[]): ClipMap => ({
   idle: 'Idle',
@@ -276,6 +430,44 @@ const AVIAN_MOUNT_RIGGED: ClipMap = {
   jumpMoving: 'Jump_Running',
   attack: [],
   death: 'Idle',
+};
+
+// The Mech Bird's own map: it ships exactly Idle / Run / Jump (authored in
+// Blender against its 28-bone rig). Walk aliases the run cycle (the servo
+// sprint reads as a stately strut at walk timeScales), death holds Idle (a
+// ridden mount never plays a death; the summon strips on death first), and
+// jump is the one mount clip in the game that actually uses the airborne
+// channel: the renderer already feeds the real airborne flag to mount
+// visuals, so the single authored wing-flap plays on every hop.
+const MOUNT_MECH_BIRD: ClipMap = {
+  idle: 'Idle',
+  walk: 'Run',
+  run: 'Run',
+  attack: [],
+  death: 'Idle',
+  jump: 'Jump',
+};
+
+// The Chimeglass Tortoise ships three authored idle-breakers on top of the
+// breathing Idle: he looks about him, rears up to paw the air, and stamps his
+// front feet one at a time. Each ends back on the idle pose so the hand-off is
+// seamless.
+const MOUNT_TORTOISE: ClipMap = {
+  ...MOUNT_RIGGED,
+  idleVariants: ['Idle_Look', 'Idle_Rear', 'Idle_Stamp', 'Idle_Groove'],
+  // The wet-dog head shake is his signature, so it keeps its own clock rather
+  // than taking a one-in-five share of the pool's 20-45s draw (which would have
+  // put it 100-225s apart). Small jitter only, so a paddock of them does not
+  // shake in lockstep.
+  idleBeat: { clip: 'Idle_Shake', everySec: 20, jitterSec: 4 },
+  // Naming `land` opts this rig into the HELD-jump treatment (visual.ts
+  // isOnce): `Jump` stops looping and clamps on its last frame, the airborne
+  // tuck, for as long as the body is off the ground, and `Land` fires as a
+  // one-shot on the touchdown edge. So `Jump` is only the spring and the tuck;
+  // the arc itself is the game's, and the clip must not carry a rise or the
+  // mount would still be held above the ground when it touches down.
+  jump: 'Jump',
+  land: 'Land',
 };
 
 // The Drakelands dragonkin brood (tmp/dragonkin_build.mjs bakes): artist
@@ -536,13 +728,44 @@ const ENEMY7: ClipMap = {
   death: 'Death',
 };
 
+// The authored ogre body (the _Mob_Updates artist drop, combined by
+// tmp/ogre_build.mjs): a rigged Tripo donor whose drop authors every slot,
+// Run included (retimed in the build, see the gait numbers on mob_ogre
+// below). Its own constant rather than ENEMY7 because the clip names
+// differ (Hit, not the 2023 pack's HitRecieve pair).
+const OGRE: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walk',
+  run: 'Run',
+  attack: ['Attack'],
+  hit: ['Hit'],
+  death: 'Death',
+};
+
+// Warlord Drogmar's own drop (tmp/drogmar_v02_build.mjs): a rigged Tripo donor
+// carrying a bone-parented Skull Cleaver, with the full slate authored, so it
+// gets its own ClipMap rather than reading OGRE.
+//
+// CombatIdle is the one clip the artist did not ship and the build synthesizes
+// (tmp/drogmar_combat_stance.mjs): the drop authors Attack AND Hit to both open
+// and close on one braced guard pose (hips sunk 5.7u under the relaxed idle,
+// feet 38.5u apart against its 21.6, torso 10deg forward, cleaver carried 6.6u
+// higher), but never shipped the loop that HOLDS it. The stance is that pose
+// wearing Idle's own breathing delta, so the warlord stays set between blows
+// and his swings and flinches blend into and out of it with nothing to
+// reconcile at either end.
+const DROGMAR: ClipMap = {
+  ...OGRE,
+  combatIdle: 'CombatIdle',
+};
+
 // The kobold family's own attack (scripts/build_kobold_anims.mjs, issue
-// #2889): ENEMY7's Attack is shared by reference with mob_ogre (a giant
-// twice its height, on giant.glb), so a kobold currently swings the exact
-// same single double-claw chop. This clip is baked off goblin.glb's own
-// donor poses (Attack's own beats re-timed into a two-part combo, plus
-// Jump, a clip goblin.glb ships that ENEMY7 never wires), so only
-// mob_kobold gets it; mob_ogre stays on the shared constant untouched.
+// #2889): ENEMY7's Attack was shared by reference with mob_ogre back when
+// the ogre rendered on giant.glb (it has its own authored body and OGRE
+// ClipMap now), so a kobold then swung the exact same single double-claw
+// chop. This clip is baked off goblin.glb's own donor poses (Attack's own
+// beats re-timed into a two-part combo, plus Jump, a clip goblin.glb ships
+// that ENEMY7 never wires), so only mob_kobold gets it.
 const KOBOLD_ENEMY7: ClipMap = {
   ...ENEMY7,
   attack: ['Kobold_Pounce'],
@@ -712,6 +935,129 @@ const WATER_ELEMENTAL: ClipMap = {
   death: 'Death',
 };
 
+// The contributor-authored Colossus ships a dedicated rigid-rock rig and a
+// complete boss animation set. Its channel loop drives the socket-mounted
+// furnace/flamethrower VFX; impact pulses are synchronized by the encounter.
+const IGNIVAR: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walk',
+  run: 'Run',
+  attack: ['Attack'],
+  death: 'Death',
+  cast: 'Channel',
+  flourish: 'FistSpin360',
+};
+
+// Ignivar Ashcaller is stationary in the encounter. Its clips keep Apocalypse
+// in a sustained channel pose while retaining its authored cast and death motion.
+const IGNIVAR_HEART: ClipMap = {
+  idle: 'Idle',
+  walk: 'Move',
+  run: 'Move',
+  attack: ['Cast'],
+  death: 'Death',
+  cast: 'Channel',
+};
+
+const IGNIVAR_CRUCIBLE_WARDEN: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walk',
+  run: 'Run',
+  attack: ['Attack'],
+  attackByAbility: {
+    [VARKHUL_CRUCIBLE_QUAKE_CAST_ID]: 'JumpSlam',
+    [DUNGEON_MINIBOSS_STOMP_ABILITY_ID]: 'JumpSlam',
+  },
+  attackTimeScaleByAbility: {
+    [VARKHUL_CRUCIBLE_QUAKE_CAST_ID]: 0.8,
+    [DUNGEON_MINIBOSS_STOMP_ABILITY_ID]: 1.35,
+  },
+  hit: ['Hit'],
+  death: 'Death',
+};
+
+const IGNIVAR_EMBER_SENTINEL: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walk',
+  run: 'Run',
+  attack: ['Attack'],
+  hit: ['Hit'],
+  death: 'Death',
+};
+
+const IGNIVAR_CINDER_ARTIFICER: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walk',
+  run: 'Run',
+  attack: ['Attack'],
+  attackByAbility: {
+    [VARKHUL_CINDER_REPAIR_START_ANIMATION_ID]: 'ChannelStart',
+    [VARKHUL_CINDER_REPAIR_END_ANIMATION_ID]: 'ChannelEnd',
+  },
+  attackTimeScaleByAbility: {
+    [VARKHUL_CINDER_REPAIR_START_ANIMATION_ID]: 1,
+    [VARKHUL_CINDER_REPAIR_END_ANIMATION_ID]: 1,
+  },
+  cast: 'Channel',
+  hit: ['Hit'],
+  death: 'Death',
+};
+
+// Varkhul, Forgefather of the Last Flame (varkhul_forgefather.glb): the
+// authored smith body. Every major windup runs through the cast loop (PowerUp,
+// a two-hand gathering raise); the payoff one-shots are dispatched per strike
+// by varkhul_forge_hammer.ts (the assembly forge hammer, the Anvil's Decree
+// strikes, the Molten Fissure release). Forging is 1.63s, stretched to the
+// sim's exact 2s hammer cadence. No hit mapping on purpose: raid-wide damage
+// must never thrash the boss rig (the mob_ignivar precedent).
+const VARKHUL_FORGEFATHER: ClipMap = {
+  idle: 'Idle',
+  walk: 'Walk',
+  run: 'Run',
+  // plain swings only; Slam is reserved for the frontal windup below
+  attack: ['Slash'],
+  attackByAbility: {
+    [VARKHUL_FORGE_HAMMER_ABILITY_ID]: 'Forging',
+    [VARKHUL_ANVILS_DECREE_CAST_ID]: 'Forging',
+    // each Forgestorm wave's windup cue: he powers up and the meteors answer
+    [VARKHUL_FORGESTORM_CAST_ID]: 'PowerUp',
+  },
+  attackTimeScaleByAbility: {
+    [VARKHUL_FORGE_HAMMER_ABILITY_ID]: VARKHUL_FORGING_STRIKE_TIMESCALE,
+    [VARKHUL_ANVILS_DECREE_CAST_ID]: VARKHUL_FORGING_STRIKE_TIMESCALE,
+    // authored 2.367s fills the 2.5s wave warning; 1 overrides the 1.3
+    // one-shot default so the pump is not rushed
+    [VARKHUL_FORGESTORM_CAST_ID]: 1,
+  },
+  // generic channel: the contained hand gesture, never the roar. Plays up to
+  // the pointing gesture's peak (0.72s in, measured off the shipped clip) and
+  // HOLDS that frame while the cast channels; the arm-down recovery plays on
+  // release via castPlayOut instead of replaying the raise.
+  cast: 'Casting',
+  castHoldPointSeconds: 0.72,
+  // Casting's arm-down and Slam's stand-back-up recoveries must not be cut
+  // when the cast ends mid-clip: both finish before the rig returns to base.
+  // Forging stays OFF this list: the decree cadence loop hands off instantly.
+  castPlayOut: ['Casting', 'Slam'],
+  castByAbility: {
+    // the frontal windup is a full Slam swing: he crashes the hammer down and
+    // the cone answers it
+    [VARKHUL_FRONTAL_CAST_ID]: 'Slam',
+    // at the anvil the decree cast IS the forging loop; the 2s strike
+    // one-shots land on the same clip so the cadence stays seamless
+    [VARKHUL_ANVILS_DECREE_CAST_ID]: 'Forging',
+  },
+  castTimeScaleByAbility: {
+    // Slam's crash sits ~1.5s in; 0.65 lands it just before the 2.5s release
+    [VARKHUL_FRONTAL_CAST_ID]: 0.65,
+    [VARKHUL_ANVILS_DECREE_CAST_ID]: VARKHUL_FORGING_STRIKE_TIMESCALE,
+  },
+  jump: 'Jump',
+  // the roar is the ENGAGE cue only (and respawn), never a cast loop
+  flourish: 'PowerUp',
+  death: 'Death',
+};
+
 const SPIDER: ClipMap = {
   idle: 'Spider_Idle',
   walk: 'Spider_Walk',
@@ -776,15 +1122,56 @@ const MODULAR = 'models/chars/modular';
 const ENEMIES = 'models/chars/enemies';
 const FORMS = 'models/chars/forms';
 const CREATURES = 'models/creatures';
+const PROPS = 'models/props';
 const WEAPONS = 'models/weapons';
 const MOUNTS_DIR = 'models/mounts';
 
-const ITEM_OFFHAND_MODELS: Readonly<Record<string, string>> = {
+/** Exported for the authored-surface guard (tests/authored_surfaces.test.ts),
+ *  which sweeps every shipped held model; render code resolves through
+ *  itemOffhandModelUrl, never this table directly. */
+export const ITEM_OFFHAND_MODELS: Readonly<Record<string, string>> = {
   eastbrook_buckler: 'shield_round',
   highwatch_wallshield: 'shield_square',
   bonewrought_bulwark: 'shield_square',
+  duskforged_bulwark: 'shield_square', // crafted apex tower shield (masterwrought); bulwarks share shield_square
   pearlward_aegis: 'shield_round', // the first caster (int/spi) shield
+  // The inscription tomes: the first held_offhand item models, procedural GLBs
+  // from scripts/assets/inscription_tomes (VAR_BOOK grips). The phase 09 apex
+  // grimoire joined the family at phase 18, and with it left the conscious
+  // no-model pin in tests/held_weapon_models.test.ts.
+  silverleaf_primer: 'tome_silverleaf',
+  goldleaf_folio: 'tome_goldleaf',
+  sunpetal_grimoire: 'tome_sunpetal',
+  voidbound_grimoire: 'tome_voidbound',
+  // Crucible raid shields (content/ignivar_loot.ts): tank wall + healer barrier.
+  bulwark_of_the_inner_crucible: 'shield_square',
+  ember_wardens_barrier: 'shield_round',
+  votive_ward_of_the_deathless_court: 'shield_round', // Nythraxis gap-fill healer shield
+  varkhul_emberward: 'varkhul_emberward', // Ignivar raid legendary (Varkhul drop)
 };
+
+/** Held-model GLBs whose materials are AUTHORED surfaces: a Tripo or Blender
+ *  atlas that already carries its own shading, wear, and ember detail. The
+ *  held-weapon polish (assets.ts applyWeaponMaterialPolish: cream lift, gloss
+ *  clamp, metalness floor, uniform emissive floor) was authored for the KayKit
+ *  palette kit; on one of these it lays a flat grey film over the whole atlas
+ *  (the emissive floor lifts every black texel to the same grey, the gloss
+ *  clamp adds a sheen the atlas never asked for). attachProp tags their meshes
+ *  so applyMaterials keeps the shipped response instead. Also scales the
+ *  low-tier readability floor by the atlas, as VisualDef.authoredAtlas does
+ *  for bodies. Opt-in per model on purpose: every other held model keeps the
+ *  polish it always had. Keyed by held-model key (ITEM_WEAPON_VARIANTS /
+ *  ITEM_OFFHAND_MODELS values). */
+export const AUTHORED_HELD_MODELS: ReadonlySet<string> = new Set([
+  'hammer_varkhul', // Varkhul Forgebreaker (Ignivar raid legendary)
+  'varkhul_emberward', // Varkhul Emberward (Ignivar raid legendary)
+]);
+
+/** True when a held-prop GLB url resolves to one of AUTHORED_HELD_MODELS. */
+export function isAuthoredHeldModelUrl(url: string): boolean {
+  const m = /^models\/weapons\/([^/]+)\.glb$/.exec(url);
+  return m !== null && AUTHORED_HELD_MODELS.has(m[1]);
+}
 
 function itemModelKey(
   itemId: string | null | undefined,
@@ -1061,7 +1448,7 @@ export const VISUALS: Record<string, VisualDef> = {
     url: `${PLAYERS}/knight.glb`,
     // Every clip knight.glb ships is already wired somewhere in this block
     // (idle/walk/attack/hit/emotes account for the full shipped library, no
-    // spare donor pose), so Heroic Leap (issue #2889 batch, verified against
+    // spare donor pose), so Vaulting Charge (issue #2889 batch, verified against
     // the warrior's real kit in src/sim/content/classes.ts, not assumed) is
     // authored by pose-sample-and-blend (scripts/build_warrior_ability_anims.mjs)
     // instead of pointed at an unused clip.
@@ -1100,7 +1487,7 @@ export const VISUALS: Record<string, VisualDef> = {
         // Jawcrack is a bare-fist interrupt: the synthesized punch
         // (scripts/_add_pummel_punch_anim.mjs), not a weapon swing.
         pummel: 'Punch_A',
-        // Heroic Leap is a position-targeted jump, not a swing: the bespoke
+        // Vaulting Charge is a position-targeted jump, not a swing: the bespoke
         // pose-sample-and-blend clip (coil, airborne, driven two-hand slam on
         // landing). It carries no castFx and resolves no target entity, so it
         // completes through the renderer's generic 'selfCast' cue, which only
@@ -1109,13 +1496,13 @@ export const VISUALS: Record<string, VisualDef> = {
         // painter.ts's non-contact 'selfCast' branch); with no entry it plays
         // nothing at all on the body.
         heroic_leap: 'Warrior_Heroic_Leap',
-        // Victory Rush is a real weapon strike (weaponStrike effect, not a
+        // Victor's Surge is a real weapon strike (weaponStrike effect, not a
         // pure buff), so it lands through the ordinary damage-event attack
         // trigger like every entry above it: a confident decisive swing, the
         // same clip heroic_strike/overpower/hamstring already use.
         victory_rush: '1H_Melee_Attack_Slice_Diagonal',
         // Seething Fury and Recklessness are both a defiant roar of rage: no
-        // castFx, no target, so (like Heroic Leap above) the existing Cheer
+        // castFx, no target, so (like Vaulting Charge above) the existing Cheer
         // gesture only shows up once an attackByAbility entry exists for it.
         berserker_rage: 'Cheer',
         recklessness: 'Cheer',
@@ -1131,7 +1518,7 @@ export const VISUALS: Record<string, VisualDef> = {
         // the Cheer EMOTE and never reaches attackByAbility at all - adding
         // an entry for any of those would be dead code, so this batch leaves
         // them alone). Piercing Howl's own selfCast cue DOES reach the same
-        // gesture path Heroic Leap/berserker_rage/etc use above, and the
+        // gesture path Vaulting Charge/berserker_rage/etc use above, and the
         // painter's shout-emote call right after it is guarded on
         // isMidOneShot, so it does not stomp this gesture.
         piercing_howl: 'Spellcast_Raise',
@@ -1281,7 +1668,7 @@ export const VISUALS: Record<string, VisualDef> = {
         // 'Block' guard, no bake needed (the pattern player_warrior's
         // raised_guard already uses).
         evasion: 'Block',
-        // Cutthroat Tempo, Smokestep, Quickened Blood, and Duskveil are all
+        // Cutthroat Tempo, Smokefade, Quickened Blood, and Duskveil are all
         // self-buff/stealth toggles with no combat swing to author: rogue.
         // glb's own already-baked 'Spellcast_Raise', the pattern player_
         // warrior's sanguine_aura and the hunter batch's aspect toggles both
@@ -1329,8 +1716,18 @@ export const VISUALS: Record<string, VisualDef> = {
     // accessory as a SkinnedMesh, and the allowlist filter (assets.ts) only
     // hides non-skinned nodes, so the hat always renders. Sanctioned look.
     show: [],
-    attach: [{ url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' }],
+    // The offhand slot renders ONLY an equipped, model-mapped offhand item
+    // (the phase 06 inscription tomes are the first): offhandAttachDef skips
+    // the slot entirely when the offhand is empty or unmapped, so the empty
+    // hand look is unchanged. The base url never renders and is already in
+    // the preload set via the warlock's fixed spellbook; swapOnly keeps it
+    // out of the wiki figures too.
+    attach: [
+      { url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' },
+      { url: `${WEAPONS}/spellbook_open.glb`, bone: 'handslot.l', swapOnly: true },
+    ],
     weaponSlots: [0],
+    offhandSlot: 1,
     // Faint warm lift only, to tell this apart from the mage/warlock models it
     // shares mage.glb with. The whole rig is ONE merged material/atlas (skin,
     // hair, and robe together), so this lerp multiplies the entire body, not
@@ -1354,20 +1751,20 @@ export const VISUALS: Record<string, VisualDef> = {
       // issue #2889): the shaman had zero attackByAbility overrides across
       // its kit, so every spell played the same melee chop/slice. Mapped by
       // school (src/sim/content/classes.ts): Cast_Bolt is the class's
-      // signature nature bolt (its longest cast, 1.5 to 3.0s); Earth/Flame/
-      // Frost Shock are all instant (0s cast) and differ only in damage
+      // signature nature bolt (its longest cast, 1.5 to 3.0s); Earthen/
+      // Cinder/Rime Jolt are all instant (0s cast) and differ only in damage
       // school, so they share Cast_Shock's snappy point-and-release;
-      // Healing Wave and the Restoration signature Chain Heal share
+      // Mending Waters and the Spiritcall signature Chain Heal share
       // Cast_Heal's sustained mending channel instead of a sharp release;
       // Earthquake borrows the two-hand chop's committed downswing energy
       // for Cast_Quake, the same "slam and radiate outward" read the mage's
-      // Cast_Nova makes; Stormstrike (physical) gets its own charged
-      // diagonal slice, Storm_Strike. The weapon imbues (Rockbiter,
-      // Flametongue, Frostbrand) and the short self buffs (Ghost Wolf,
-      // Elemental Mastery) have no swing to author, so they read fine on the
+      // Cast_Nova makes; Ancestral Strike (physical) gets its own charged
+      // diagonal slice, Storm_Strike. The weapon imbues (Stonebound,
+      // Pyrebrand, Rimebound Weapon) and the short self buffs (Shadewolf,
+      // Primal Mastery) have no swing to author, so they read fine on the
       // rig's existing Spellcast_Raise gesture, the same no-bake call the
-      // priest's renew and the warlock's sanguine_aura make; Lightning
-      // Shield reads as a defensive ward instead, so it reuses Block, the
+      // priest's renew and the warlock's sanguine_aura make; Thunder
+      // Ward reads as a defensive ward instead, so it reuses Block, the
       // same call the warrior's raised_guard makes. This covers every
       // ability tagged class: 'shaman' in classes.ts.
       attackByAbility: {
@@ -1461,8 +1858,14 @@ export const VISUALS: Record<string, VisualDef> = {
     // (assets.ts) only hides non-skinned nodes. The hatted silhouette is the
     // sanctioned mage look; listing Mage_Cape is inert but kept as intent.
     show: ['Mage_Cape'],
-    attach: [{ url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' }],
+    // Offhand slot: renders only an equipped model-mapped offhand (the
+    // inscription tomes); empty stays empty. See the priest note.
+    attach: [
+      { url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' },
+      { url: `${WEAPONS}/spellbook_open.glb`, bone: 'handslot.l', swapOnly: true },
+    ],
     weaponSlots: [0],
+    offhandSlot: 1,
   }),
   player_warlock: swims({
     url: `${PLAYERS}/mage.glb`,
@@ -1506,7 +1909,11 @@ export const VISUALS: Record<string, VisualDef> = {
     show: [],
     attach: [
       { url: `${WEAPONS}/wand.glb`, bone: 'handslot.r' },
-      { url: `${WEAPONS}/spellbook_open.glb`, bone: 'handslot.l', gripRef: 'Spellbook_open' },
+      {
+        url: `${WEAPONS}/spellbook_open.glb`,
+        bone: 'handslot.l',
+        gripRef: 'Spellbook_open',
+      },
     ],
     weaponSlots: [0], // mainhand (wand) swaps; spellbook offhand stays
     // Faint violet lift only, to tell this apart from the mage/priest models
@@ -1556,8 +1963,14 @@ export const VISUALS: Record<string, VisualDef> = {
     // alongside the hit-variety donor.
     animUrls: [`${PLAYERS}/druid_hit_variety_anims.glb`, `${PLAYERS}/druid_ability_anims.glb`],
     // dedicated druid model (own texture, ships a Backpack mesh)
-    attach: [{ url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' }],
+    // Offhand slot: renders only an equipped model-mapped offhand (the
+    // inscription tomes); empty stays empty. See the priest note.
+    attach: [
+      { url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' },
+      { url: `${WEAPONS}/spellbook_open.glb`, bone: 'handslot.l', swapOnly: true },
+    ],
     weaponSlots: [0],
+    offhandSlot: 1,
   }),
 
   // -- cosmetic body skin (class-agnostic; both the skin preview and a live
@@ -1714,6 +2127,90 @@ export const VISUALS: Record<string, VisualDef> = {
     runRef: 4.5,
     lazyPreload: true,
   },
+  // Goblin Rocket Sled: clipless rigid vehicle. Runtime exhaust and motion live
+  // in its mount-owned render controller, never in a baked idle animation.
+  mount_goblin_rocket_sled: {
+    url: `${MOUNTS_DIR}/goblin_rocket_sled.glb`,
+    height: 2.5,
+    clips: MOUNT_RIGGED,
+    authoredAtlas: true,
+    lazyPreload: true,
+  },
+  // Toy rally car. Rigid node animation, no skin: the wheels, the four
+  // independent springs and the body all move as separate nodes.
+  // Wheel rate is authored at 14.93 deg/frame against 9 spokes, so playback
+  // past ~1.34x makes the wheels strobe backwards; raise the clip's spoke
+  // count rather than dropping runRef past that.
+  mount_rallycart_rxt: {
+    url: `${MOUNTS_DIR}/rallycart_rxt.glb`,
+    // 3.1 was the rider-fit solve; three tuning passes in game took it down
+    // 7.5%, 7.5% and 10% from there. `seat` and `seatFwd` in mount_visuals.ts
+    // are ABSOLUTE world units, so they are scaled by the same 0.771 and must
+    // move together with any further change here.
+    height: 2.39,
+    // A car has ONE forward gait, so both bands play Run and the cadence is
+    // separated by walkRef/runRef. It reverses and jumps for real, and it has
+    // no death clip, so death holds the idle.
+    clips: {
+      idle: 'Idle',
+      walk: 'Run',
+      run: 'Run',
+      walkBack: 'WalkBackward',
+      jump: 'Jump',
+      attack: [],
+      death: 'Idle',
+    },
+    walkRef: 3,
+    runRef: 4.4,
+    authoredAtlas: true,
+    // Wheels stop when the car stops, rather than turning on through a fade.
+    cutToIdle: true,
+    lazyPreload: true,
+  },
+  // The Lanternback Troll: a hand-authored rig (troll body skinned, the iron
+  // throne and both lanterns each welded rigid to a single bone) with authored
+  // Idle/Walk/Run/Death clips. runRef is deliberately the RIDDEN speed
+  // (RUN_SPEED 7 x +80% = 12.6), the same call the Drakemaw Raptor makes above:
+  // his stride is a long loose lope, and foot-matching a 3.4yd stride to 12.6
+  // yd/s would play the cycle at 3.7 strides/sec, which reads as a wind-up toy
+  // on a mount this heavy. At 12.6 the timeScale lands on 1.0 and he lopes at
+  // the authored 2.5 steps/sec.
+  mount_lanternback_troll: {
+    url: `${MOUNTS_DIR}/lanternback_troll.glb`,
+    // 7.0 makes him the tallest thing in the stable by a distance (the griffin
+    // is 4.1), which is the point: he is a hill troll wearing a throne, and at
+    // 5.0 he read as merely large rather than as something you would strap a
+    // chair to. walkRef scales with him, since a bigger creature covers more
+    // ground per stride and would otherwise scurry.
+    height: 7.0,
+    clips: MOUNT_RIGGED,
+    walkRef: 5.6,
+    runRef: 12.6,
+    lazyPreload: true,
+  },
+  // The Chimeglass Tortoise. Low and broad: 3.6 puts the crown of his shell
+  // near a horse's saddle without pretending he is horse-shaped.
+  //
+  // walkRef/runRef are a CADENCE choice, not a foot match, and the gap is not
+  // small: say so plainly rather than calling it a slide. His legs rest 99.6%
+  // extended, so the reach envelope caps his stride at 0.092 model units, about
+  // 0.33yd here. At a mounted 12.6 yd/s (RUN_SPEED 7 x +80%) a true foot match
+  // would need ~38 strides/sec. Nothing recovers that, so his feet carry only
+  // ~5% of the ground he covers and the refs buy a readable gait instead.
+  //
+  // The numbers are picked to land INSIDE locomotionTimeScale's clamp rather
+  // than against it: run clamps to [0.6, 1.6] and walk to [0.6, 1.8], so any
+  // runRef at or under 7.9 would saturate at 1.6 and every value in that range
+  // would render identically. 10 gives 1.26 (about 1.7 strides/sec), brisk for
+  // a tortoise without reading as a wind-up toy.
+  mount_chimeglass_tortoise: {
+    url: `${MOUNTS_DIR}/chimeglass_tortoise.glb`,
+    height: 3.6,
+    clips: MOUNT_TORTOISE,
+    walkRef: 3.6,
+    runRef: 10,
+    lazyPreload: true,
+  },
   // Compact fantasy tank. One wheel revolution per locomotion clip matches
   // its authored tread cadence at the reference ground speeds below.
   mount_terrorspark_groundshaker: {
@@ -1791,6 +2288,53 @@ export const VISUALS: Record<string, VisualDef> = {
     lazyPreload: true,
   },
 
+  // The Cluckwork Mech Bird (the store mount): authored Blender clips on its
+  // own 28-bone rig (no bake_mount_gaits entry, never bake over it). walkRef
+  // is the Run cycle's measured natural speed (stride 0.332 raw p2p, 0.433s
+  // cycle, height 3.4 over rawHeight 1.0 = 5.2 yd/s), so walking plays near
+  // the authored look. runRef follows the drakemaw precedent above: the
+  // RIDDEN speed (RUN_SPEED 7 x +75% = 12.25) so timeScale lands on 1.0 and
+  // the servo sprint keeps its authored cadence; the slide this trades away
+  // sits between the drakemaw's 28% and grag_bear's half-travel, and the
+  // 1-2-1 mount_run gait beat carries the footfall read.
+  mount_mech_bird: {
+    url: `${MOUNTS_DIR}/mech_bird.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 3.4,
+    clips: MOUNT_MECH_BIRD,
+    walkRef: 5.2,
+    runRef: 12.25,
+    lazyPreload: true,
+  },
+  // Developer-only Halloween cart (image-to-glb static prop, no clips of its
+  // own): height is the measured shipped bbox (npx gltf-transform inspect).
+  // The puller is a SEPARATE visual (skel_rickshaw_puller) composed at
+  // runtime by src/render/rickshaw_mount.ts, not baked into this GLB.
+  mount_rickshaw_mount: {
+    url: `${MOUNTS_DIR}/rickshaw_mount.glb`,
+    // MUST match the shipped GLB's measured bbox height exactly (npx
+    // gltf-transform inspect): prepareVisual's normScale = height /
+    // measuredHeight, so a stale value here silently RESCALES the whole
+    // model to compensate. A canopy-raise once landed with almost no visible
+    // effect in-game because this field was left stale through two geometry
+    // changes, quietly shrinking the whole mount to compensate; the canopy
+    // was later cut entirely (floating/unmounted, unconnected wheel spokes),
+    // dropping the real height back down. Re-measure after any geometry
+    // change to this GLB.
+    // Re-measured off the shipped GLB after this pass's geometry work (arched
+    // seat back, trimmed throne wings, harness collar, lantern rebuild): 2.8 was
+    // stale and was silently rescaling the whole cart.
+    height: 4.779,
+    // This GLB ships NO clips: the wheels are spun procedurally by
+    // rickshaw_mount.ts's spinMountWheels, because crossfading a spin clip out drags the wheel back
+    // toward its bind rotation and reads as backwards spin on every stop (full
+    // history in scripts/assets/rickshaw_mount/model.js, above WHEEL_NODES).
+    // MOUNT_RIGGED's names therefore resolve to nothing, which is already a
+    // no-op: visual.ts registers actions only for clips that exist.
+    clips: MOUNT_RIGGED,
+    lazyPreload: true,
+  },
+
   // Ambient Highwatch stable horse (sim mob 'stable_horse', MOB_KEYS below). Reuses
   // the Valorsteed GLB + its authored gait clips so it renders and ambles as a real
   // horse through the STANDARD mob-visual path, never a humanoid capsule. Unlike the
@@ -1813,6 +2357,7 @@ export const VISUALS: Record<string, VisualDef> = {
     // time. Baked basecolor texture; keeps a light entity tint so this doubles
     // as the beast-family fallback and each beast keeps its own colour.
     url: `${CREATURES}/wolf_basic.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
     height: 1.6,
     clips: WOLF_BAKED,
     tint: 'entity',
@@ -1846,6 +2391,7 @@ export const VISUALS: Record<string, VisualDef> = {
     // Old Greyjaw's model: 2.2 at scale 1 (his template scale 1.25 makes the
     // rare ~2.75 in-world vs the 1.6 pack wolf).
     url: `${CREATURES}/greyjaw.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
     height: 2.2,
     clips: GREYJAW_WOLF,
     // Greyjaw_Attack clip donor (scripts/build_greyjaw_anims.mjs): mesh-free,
@@ -1944,9 +2490,10 @@ export const VISUALS: Record<string, VisualDef> = {
   // biped skeleton, KAYKIT_CLIP_PLAN vocabulary. The dummy never casts or
   // jumps (sim's dummy handling holds it stationary and ability-less), so
   // those two clips are stripped from the shipped GLB rather than carried as
-  // dead weight. It appears in exactly one hub (zone3.ts, count: 1, radius:
-  // 0), so it is lazy-preloaded rather than joining every client's eager
-  // boot set.
+  // dead weight. Shared by the whole Highwatch practice row and the Eastbrook
+  // hub dummy (MOB_VISUALS below points all four dummy templates here): two
+  // fixed spots in the whole world, so it stays lazy-preloaded (fetched on
+  // first sight, renderer.ts) rather than joining every client's eager boot set.
   mob_training_dummy: {
     url: `${CREATURES}/training_dummy.glb`,
     height: 2.3,
@@ -2071,6 +2618,7 @@ export const VISUALS: Record<string, VisualDef> = {
   // drop: v01's cycles gave 1.31/2.22, and its Walk was 1.00s against v02's 1.13s.
   mob_kobold_digger: {
     url: `${CREATURES}/kobold.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
     height: 2.1,
     clips: KOBOLD_DIGGER,
     // The mid-idle pose drops the tail 0.23 units (at scale 1) below the foot
@@ -2108,6 +2656,7 @@ export const VISUALS: Record<string, VisualDef> = {
   // 1.0: natural 1.23 and 2.31 yd/s against a 7 yd/s chase.
   mob_grix: {
     url: `${CREATURES}/grix.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
     height: 2.1,
     clips: GRIX,
     // Same dragging-tail float as mob_kobold_digger, smaller: mid-idle his
@@ -2137,13 +2686,51 @@ export const VISUALS: Record<string, VisualDef> = {
     tint: 'entity',
     tintStrength: 0.12,
   },
+  // The authored ogre body (the _Mob_Updates artist drop, combined by
+  // tmp/ogre_build.mjs), replacing the 2023-pack giant.glb stick rig the
+  // whole family rendered as. Gait refs measured (tmp/ogre_gait_measure.mjs)
+  // at the dominant template scale 1.3 (thornpeak_ogre / ogre_crusher /
+  // rift_stone_ogre; the kobold_digger dominant-population precedent): Walk
+  // natural 2.79 yd/s, and the authored Run cycle measured 4.83, a 1.45x
+  // ask against the family's 7.0 chase, so the build retimes it 1.21x in
+  // place (a 0.60s heavy sprint cadence), natural 5.84, and the chase runs
+  // at ~1.2x with clamp headroom instead of at the 1.6 edge.
   mob_ogre: {
-    url: `${CREATURES}/giant.glb`,
-    animUrls: [`${CREATURES}/giant_hit_variety_anims.glb`],
+    url: `${CREATURES}/ogre.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
     height: 2.8,
-    clips: ENEMY7,
+    clips: OGRE,
+    walkRef: 2.79,
+    runRef: 5.84,
+    // Light wash, the kobold_digger reason: the drop ships an authored brown
+    // hide, and the old 0.2 (sized to keep the giant's flat atlas readable)
+    // would only muddy it. Entity tint still separates the family's mobs.
     tint: 'entity',
-    tintStrength: 0.2, // skin washes pink fast
+    tintStrength: 0.12,
+  },
+  // Warlord Drogmar, the ogre family's quest boss. His own body rather than the
+  // family's mob_ogre fallback: he is a named kill objective fought up close, so
+  // the atlas ships at full 1024 (no maxTex clamp in specs/drogmar.json) where
+  // the trash ogres clamp to 512.
+  //
+  // Gait refs are the drop's own MEASURED natural speeds at this height and his
+  // content scale of 1.5 (tmp/drogmar_v02_gait.mjs): Walk 1.37s/stride 37.6u ->
+  // 2.65 yd/s, Run 0.80s/stride 41.1u -> 4.95 yd/s. Declared as measured rather
+  // than retimed to the family's numbers, which is what makes the foot match
+  // exact: his moveSpeed 7 chase lands at timeScale 1.41, inside the 1.6 run
+  // clamp with headroom to spare.
+  mob_drogmar: {
+    url: `${CREATURES}/drogmar.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 2.8,
+    clips: DROGMAR,
+    walkRef: 2.65,
+    runRef: 4.95,
+    // Same light wash as mob_ogre and for its reason: the drop ships an authored
+    // hide, so a heavy tint would only muddy it. Entity tint still separates him
+    // from the Crushers he leads.
+    tint: 'entity',
+    tintStrength: 0.12,
   },
   // Five Wildheart troll silhouettes use the same complete biped vocabulary,
   // but preserve their woven cloth, bone paint, feathers, and jungle palette.
@@ -2224,6 +2811,104 @@ export const VISUALS: Record<string, VisualDef> = {
     tint: 'entity',
     tintStrength: 0.4,
   },
+  mob_ignivar: {
+    url: `${CREATURES}/ignivar_herald.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 2.65,
+    // The contributor rig is authored directly onto the game's +Z-facing bind.
+    yaw: 0,
+    // Preserve the furnace read without the glossy HIFI treatment. The old
+    // 0.2 plus an envMapIntensity boost date from the near-black arena grade;
+    // under the sunset forge rig the boost read as a milky IBL sheen, so the
+    // boss keeps a lower ember glow and the stock envMapIntensity of 1.
+    selfIllumination: 0.14,
+    // The contributor atlas ships metallicFactor 1 with a metallic-roughness
+    // texture, which lays a specular sheen over the whole body under the
+    // forge key light; matte keeps the albedo readable instead.
+    matte: true,
+    clips: IGNIVAR,
+    walkRef: 1.6,
+    runRef: 3.2,
+    attackTimeScale: 1,
+  },
+  mob_ignivar_heart_of_the_end: {
+    url: `${CREATURES}/ignivar_ashcaller.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 1.8,
+    yaw: 0,
+    selfIllumination: 0.16,
+    // One of its two materials ships metallicFactor 1 plus a metallic-
+    // roughness texture; matte kills that metallic response so the ash robes
+    // stay diffuse under the raid rooms' key light. The old 1.3 boost here
+    // was dead config: three overwrites per-material envMapIntensity with
+    // scene.environmentIntensity for materials lit by scene.environment.
+    matte: true,
+    clips: IGNIVAR_HEART,
+    attackTimeScale: 6,
+    deathTimeScale: 3,
+  },
+  mob_ignivar_crucible_warden: {
+    url: `${CREATURES}/crucible_warden.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 2.2,
+    yaw: 0,
+    // The three automata (this def and the two below) carried 0.18 plus an
+    // envMapIntensity of 1.35 as a readability crutch for the near-black
+    // rooms (a knob three ignores under scene.environment, see the boss defs
+    // above). The sunset forge rig lights them now, so they keep only a
+    // whisper of glow. Their GLBs already ship metalness 0 with no MR maps,
+    // so matte here lifts the authored 0.85 roughness to 1, flattening the
+    // key light's remaining dielectric highlight so the gunmetal paint reads.
+    selfIllumination: 0.08,
+    matte: true,
+    clips: IGNIVAR_CRUCIBLE_WARDEN,
+  },
+  mob_ignivar_ember_sentinel: {
+    url: `${CREATURES}/ember_sentinel.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 2.3,
+    yaw: 0,
+    selfIllumination: 0.08,
+    matte: true,
+    clips: IGNIVAR_EMBER_SENTINEL,
+  },
+  mob_ignivar_cinder_artificer: {
+    url: `${CREATURES}/cinder_artificer.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    height: 2.1,
+    yaw: 0,
+    selfIllumination: 0.08,
+    matte: true,
+    clips: IGNIVAR_CINDER_ARTIFICER,
+  },
+  mob_varkhul_forgefather: {
+    url: `${CREATURES}/varkhul_forgefather.glb`,
+    authoredAtlas: true, // baked Tripo/contributor atlas: low-tier floor rides the map
+    // 9.6u at the template's 3.2 scale: colossus-class, matching Ignivar's
+    // own arena presence.
+    height: 3,
+    yaw: 0,
+    // The authored Death lies flat with its lowest skinned vertex 16.62 raw
+    // units above the feet anchor. At this 3u normalization that is 0.565u.
+    deathGroundOffset: 0.565,
+    // The smith atlas is near-black leather and iron; the add-tier grade
+    // (0.18/1.35) reads as a silhouette in the Crucible. Match the Ignivar
+    // colossus furnace grade instead so the bronze and beard stay legible.
+    // The smith atlas ships metalness 0 with no MR maps at authored
+    // roughness 1, which the body clamp used to pull DOWN to 0.9 gloss;
+    // matte holds it at 1, and that roughness step is the visible de-sheen.
+    // The old 1.6 boost was dead config (three overwrites per-material
+    // envMapIntensity with scene.environmentIntensity under scene env), so
+    // deleting it changes nothing on screen; the brightened room rig
+    // carries legibility.
+    selfIllumination: 0.22,
+    matte: true,
+    clips: VARKHUL_FORGEFATHER,
+    // planted-foot naturals measured off the shipped clips (63.4 and 166.2
+    // raw units/s at rawHeight 88.48, scaled by height 3 x mob scale 3.2)
+    walkRef: 6.9,
+    runRef: 18,
+  },
   mob_water_elemental: {
     url: `${CREATURES}/water_elemental.glb`,
     height: 2.65,
@@ -2278,6 +2963,7 @@ export const VISUALS: Record<string, VisualDef> = {
   // ground per cycle, and reusing the lord's refs over-strode her by 25%.
   mob_dragonkin_broodlord: {
     url: `${CREATURES}/dragonkin_elite.glb`,
+    authoredAtlas: true, // baked Tripo atlas: low-tier floor rides the map
     height: 2.6,
     clips: DRAGONKIN_BROODLORD,
     // scale 2.25: walk 4.24 (wander 3.3 -> 0.78x), run 7.92 (chase 9.5 ->
@@ -2294,6 +2980,7 @@ export const VISUALS: Record<string, VisualDef> = {
   // as the gilded mother of the same brood.
   mob_dragonkin_matriarch: {
     url: `${CREATURES}/dragonkin_elite.glb`,
+    authoredAtlas: true, // baked Tripo atlas: low-tier floor rides the map
     height: 2.6,
     clips: DRAGONKIN_BROODLORD,
     walkRef: 5.37,
@@ -2303,6 +2990,7 @@ export const VISUALS: Record<string, VisualDef> = {
   },
   mob_dragonkin_broodguard: {
     url: `${CREATURES}/dragonkin_mob.glb`,
+    authoredAtlas: true, // baked Tripo atlas: low-tier floor rides the map
     height: 2.2,
     clips: DRAGONKIN_BROODGUARD,
     // scale 1.5: walk 2.15 (wander 2.98 -> 1.39x), run 5.59 (chase 8.5 ->
@@ -2314,6 +3002,7 @@ export const VISUALS: Record<string, VisualDef> = {
   },
   mob_dragonkin_whelp: {
     url: `${CREATURES}/dragonkin_baby.glb`,
+    authoredAtlas: true, // baked Tripo atlas: low-tier floor rides the map
     height: 1.05,
     clips: DRAGONKIN_WHELP,
     // scale 0.85: walk 0.54, run 1.87. A hatchling 0.9yd tall CANNOT
@@ -2331,6 +3020,10 @@ export const VISUALS: Record<string, VisualDef> = {
   // swaps to Egg_Open (the cracked shell IS the corpse; see corpseMeshSwap).
   mob_dragon_egg: {
     url: `${CREATURES}/dragon_egg.glb`,
+    // Blender-default roughness 0.5 export: the body clamp kept it glossy, a grey
+    // specular sheen over the painted shell. matte restores the flat paint.
+    matte: true,
+    authoredAtlas: true, // baked atlas: low-tier floor rides the map
     height: 0.95,
     clips: STATIC_PROP,
     corpseMeshSwap: { hide: 'Egg_Closed', show: 'Egg_Open' },
@@ -2365,7 +3058,7 @@ export const VISUALS: Record<string, VisualDef> = {
   },
   // Dedicated Destruction summons generated through the creature pipeline.
   // Their authored fel textures stay untinted. The manifest height combines
-  // with each MobTemplate scale to render Emberkin at 1.15 units, Gloomshade
+  // with each MobTemplate scale to render Emberkin at 1.15 units, Duskmurk
   // at 3.0 units, and the Pyre Colossus at 4.25 units.
   mob_emberkin: {
     url: `${CREATURES}/emberkin.glb`,
@@ -2383,6 +3076,28 @@ export const VISUALS: Record<string, VisualDef> = {
       cast: 'Cast',
       jump: 'Jump',
       attackByAbility: { emberkin_felbolt: 'Cast' },
+    },
+  },
+  // WIP forge mech (mech.glb, Tripo auto-rig on a mixamorig core). It ships only
+  // a CRAWL -> STAND UP -> DIE clip set (no idle/walk/attack yet), so idle/walk/
+  // run all read as the crawl, StandUp doubles as the attack lunge and the spawn
+  // flourish, and Death is the death. yaw/height are first-pass guesses; tune
+  // against the live model.
+  mob_mech: {
+    url: `${CREATURES}/mech.glb`,
+    height: 2.0,
+    // Mixamo/Tripo rig faces +Z natively (unlike the KayKit creatures that need
+    // -PI/2), so no yaw offset: without this the body sat 90 degrees off its
+    // travel direction and read as sideways gliding while crawling.
+    yaw: 0,
+    idleFrozen: true,
+    clips: {
+      idle: 'Crawl',
+      walk: 'Crawl',
+      run: 'Crawl',
+      attack: ['StandUp'],
+      death: 'Death',
+      flourish: 'StandUp',
     },
   },
   mob_gloomshade: {
@@ -2619,7 +3334,7 @@ export const VISUALS: Record<string, VisualDef> = {
     tintStrength: 0.65,
   },
   delve_skel_varric: {
-    // Deacon Varric: boss mage rig with Taunt flourish on pull
+    // Deacon Vandric: boss mage rig with Taunt flourish on pull
     url: `${ENEMIES}/skeleton_mage.glb`,
     animUrls: [`${ENEMIES}/skeleton_mage_hit_variety_anims.glb`],
     height: 2.5,
@@ -2635,6 +3350,34 @@ export const VISUALS: Record<string, VisualDef> = {
     animUrls: [`${ENEMIES}/skeleton_minion_hit_variety_anims.glb`],
     height: 2.5,
     clips: skeletonClips(['1H_Melee_Attack_Chop', '1H_Melee_Attack_Slice_Diagonal']),
+    tint: 'entity',
+    tintStrength: 0.25,
+  },
+  // The Bonebound Rickshaw's puller ONLY: a separate key on its own rebuilt
+  // rig (see RICKSHAW_PULLER_CLIPS above for why it is a separate GLB from
+  // skeleton_minion.glb, which skel_minion above still uses unchanged, no
+  // regression to any of its own consumers).
+  //
+  // 2.166 is a DELIBERATE ART CHOICE, not a measurement, and it is the one
+  // value in this entry that is not free to change. `height` is a TARGET:
+  // prepareVisual poses a throwaway clone mid-idle, measures that, and
+  // derives normScale = height / posedHeight, so whatever goes here IS the
+  // puller's rendered size. The rest of this skeleton family stands at the
+  // 2.5 convention (skel_minion, skel_warrior), so this puller is
+  // deliberately about 13% shorter than the identical rig walking around as
+  // a mob: it reads as a hunched grunt harnessed to a cart rather than a
+  // soldier, and it keeps the crown clear of the cart's own canopy line.
+  //
+  // Changing it is a geometry change, not a number change. The shaft
+  // cross-brace (model.js SHAFT_TIP_Y/Z/SIDE_X) is positioned against this
+  // rig's measured handslot bones AT THIS SIZE, and RICKSHAW_PULLER_OFFSET_Z
+  // /_Y (src/render/rickshaw_mount.ts) were tuned live against it. Scaling
+  // to 2.5 moves the hand bones and breaks the grip alignment; re-tune all
+  // three together and retake the screenshots if you ever do.
+  skel_rickshaw_puller: {
+    url: `${ENEMIES}/skeleton_minion_free.glb`,
+    height: 2.166,
+    clips: RICKSHAW_PULLER_CLIPS,
     tint: 'entity',
     tintStrength: 0.25,
   },
@@ -2871,7 +3614,11 @@ export const VISUALS: Record<string, VisualDef> = {
     show: ['Mage_Hat'],
     attach: [
       { url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' },
-      { url: `${WEAPONS}/spellbook_open.glb`, bone: 'handslot.l', gripRef: 'Spellbook_open' },
+      {
+        url: `${WEAPONS}/spellbook_open.glb`,
+        bone: 'handslot.l',
+        gripRef: 'Spellbook_open',
+      },
     ],
     tint: 'entity',
     tintStrength: 0.55,
@@ -2909,6 +3656,21 @@ export const VISUALS: Record<string, VisualDef> = {
       attack: ['Idle'],
       death: 'Idle',
     },
+  },
+  // Bone Spike (the Nythraxis raid, src/sim/nythraxis_bone_spike.ts): the
+  // Tripo cluster of bone spikes erupting from cracked flagstones with violet
+  // tips that pins an impaled raider until the raid shatters it. A stationary
+  // prop mob: the GLB ships NO clips (registered in CLIPLESS_RIGS,
+  // tests/character_clipmaps.test.ts), so STATIC_PROP parks every action on
+  // the nominal 'Idle' and the mesh just stands. Authored upright and
+  // front-facing (footprint radius 0.88); shown at 2.6 world units so the
+  // spike reads as the thing pinning a raider from across the hall (owner
+  // playtest 2026-09-04: 1.6 was too small).
+  mob_nythraxis_bone_spike: {
+    url: `${PROPS}/nythraxis_bone_spike.glb`,
+    height: 2.6,
+    yaw: 0,
+    clips: STATIC_PROP,
   },
 };
 
@@ -2959,11 +3721,63 @@ export function modularVisualKey(cls: PlayerClass): string {
 }
 
 // ---------------------------------------------------------------------------
+// NPC modular bodies: one `npc_modular_<propSet>` def per held-prop set
+// (npc_looks.ts authors WHICH set each NPC carries; this loop owns the
+// geometry). NPC gear never changes, so every prop is a FIXED attach (no
+// weaponSlots): with none, a composed NPC would inherit the warrior def's
+// default sword through modularKeyFor's class fallback. Clips ride the rogue
+// GLB exactly like npc_villager's fixed rig, so a composed villager idles,
+// walks, sits and dies with the same base clip set the town always used.
+// Driven by NPC_PROP_SET_IDS rather than a local list so a new prop set in
+// npc_looks.ts cannot ship without its def (tests/npc_looks.test.ts pins it).
+// ---------------------------------------------------------------------------
+const NPC_MODULAR_PROP_ATTACH: Record<NpcPropSet, AttachDef[]> = {
+  none: [],
+  staff: [{ url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' }],
+  walking_staff: [{ url: `${WEAPONS}/brasscrown_walking_staff.glb`, bone: 'handslot.r' }],
+  oak_stave: [{ url: `${WEAPONS}/knotted_oak_stave.glb`, bone: 'handslot.r' }],
+  tome: [
+    { url: `${WEAPONS}/staff.glb`, bone: 'handslot.r' },
+    { url: `${WEAPONS}/spellbook_open.glb`, bone: 'handslot.l', gripRef: 'Spellbook_open' },
+  ],
+  crossbow: [{ url: `${WEAPONS}/crossbow_1handed.glb`, bone: 'handslot.r' }],
+  hammer: [{ url: `${WEAPONS}/hammer_a.glb`, bone: 'handslot.r' }],
+  woodaxe: [{ url: `${WEAPONS}/notched_woodaxe.glb`, bone: 'handslot.r' }],
+  sword_shield: [
+    { url: `${WEAPONS}/sword_1handed.glb`, bone: 'handslot.r' },
+    { url: `${WEAPONS}/shield_round.glb`, bone: 'handslot.l' },
+  ],
+  sword: [{ url: `${WEAPONS}/sword_1handed.glb`, bone: 'handslot.r' }],
+  scythe: [{ url: `${WEAPONS}/scythe.glb`, bone: 'handslot.r' }],
+  knife: [{ url: `${WEAPONS}/whittler_s_knife.glb`, bone: 'handslot.r' }],
+  spear: [{ url: `${WEAPONS}/spear_a.glb`, bone: 'handslot.r' }],
+};
+
+for (const propSet of NPC_PROP_SET_IDS) {
+  VISUALS[`npc_modular_${propSet}`] = {
+    url: `${MODULAR}/warrior_modular.glb`,
+    modular: true,
+    height: HUMANOID_H,
+    clips: kaykit(['1H_Melee_Attack_Chop']),
+    animUrls: [`${PLAYERS}/rogue.glb`, `${PLAYERS}/rogue_hit_variety_anims.glb`],
+    attach: NPC_MODULAR_PROP_ATTACH[propSet],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch: entity -> visual key (mirrors the old buildRigFor selection:
 // e.kind + e.templateId + MOBS[id].family)
 // ---------------------------------------------------------------------------
 
 const MOB_KEYS: Record<string, string> = {
+  // WIP forge mech enemy (crawl/standup/die placeholder rig).
+  derelict_mech: 'mob_mech',
+  [IGNIVAR_BOSS_ID]: 'mob_ignivar',
+  ignivar_heart_of_the_end: 'mob_ignivar_heart_of_the_end',
+  [IGNIVAR_CRUCIBLE_WARDEN_ID]: 'mob_ignivar_crucible_warden',
+  [IGNIVAR_EMBER_SENTINEL_ID]: 'mob_ignivar_ember_sentinel',
+  [IGNIVAR_CINDER_ARTIFICER_ID]: 'mob_ignivar_cinder_artificer',
+  [VARKHUL_BOSS_ID]: 'mob_varkhul_forgefather',
   wildheart_stalker: 'mob_wildheart_stalker',
   wildheart_ravager: 'mob_wildheart_ravager',
   wildheart_hexcaller: 'mob_wildheart_hexcaller',
@@ -2999,7 +3813,22 @@ const MOB_KEYS: Record<string, string> = {
   // Protect Yumi objective cat: the dedicated Meshy familiar
   // (docs/prd/protect-yumi-assets.md item 1, delivered).
   yumi_cat: 'mob_yumi_cat',
+  // The Highwatch practice row (sim/content/practice_dummies.ts) is four
+  // dummies on one body: same GLB, told apart by the entity tint the visual
+  // already applies (tint: 'entity'), so a boss dummy reads as a dummy rather
+  // than as a 3.1-scale dragon standing two yards from the training post.
   training_dummy: 'mob_training_dummy',
+  friendly_player_dummy: 'mob_training_dummy',
+  normal_boss_dummy: 'mob_training_dummy',
+  heroic_boss_dummy: 'mob_training_dummy',
+  // The Eastbrook hub's two level-5 practice targets (sim/content/
+  // practice_dummies.ts): the same shared body again, told apart the same
+  // way as the row above (tint: 'entity' on mob_training_dummy). The healing
+  // dummy carries a friendly ally color from its template, exactly like
+  // friendly_player_dummy above; nothing here decides friend or foe, that is
+  // the template's `hostile`/`friendlyPracticeTarget` fields.
+  hub_training_dummy: 'mob_training_dummy',
+  hub_healing_dummy: 'mob_training_dummy',
   emberkin: 'mob_emberkin',
   gloomshade: 'mob_gloomshade',
   pyre_colossus: 'mob_pyre_colossus',
@@ -3030,6 +3859,9 @@ const MOB_KEYS: Record<string, string> = {
   widow_hatchling: 'mob_spider',
   sump_troll_devourer: 'mob_troll',
   grave_silt_bulwark: 'mob_ogre',
+  // The ogre family's quest boss gets his own body instead of the family's
+  // mob_ogre fallback (visualKeyFor checks MOB_KEYS first).
+  warlord_drogmar: 'mob_drogmar',
   drowned_cantor: 'delve_mob_acolyte',
   deepfen_spearjaw: 'mob_spearjaw',
   choir_thrall: 'mob_choir_thrall',
@@ -3060,6 +3892,7 @@ const MOB_KEYS: Record<string, string> = {
   nythraxis_heroic_warrior_add: 'skel_warrior',
   nythraxis_heroic_priest_add: 'skel_necromancer',
   nythraxis_heroic_rogue_add: 'skel_rogue',
+  [NYTHRAXIS_BONE_SPIKE_ID]: 'mob_nythraxis_bone_spike',
   graveguard: 'skel_warrior',
   necromancy_skeletal_warrior: 'skel_minion',
   necromancy_bone_mage: 'skel_mage',
@@ -3131,6 +3964,12 @@ const MOB_KEYS: Record<string, string> = {
   // the Palmreach: coral crabs, jungle boars, and the carved-stone guardian
   // (the canopy weavers take the spider family default)
   tide_scuttler: 'mob_crab',
+  // the Proving Shore (tutorial island): the strand crab and the straw
+  // practice target reuse the shipped crab and training-dummy rigs, and the
+  // tide-pool king is the same crab rig grown into his template scale
+  shore_scuttler: 'mob_crab',
+  mister_crabs: 'mob_crab',
+  training_effigy: 'mob_training_dummy',
   thicket_boar: 'mob_boar',
   idol_guardian: 'skel_golem',
   topiary_stag: 'mob_stag',
@@ -3204,12 +4043,13 @@ const NPC_KEYS: Record<string, string> = {
   // The graveyard angel: a robed figure, rendered translucent (ethereal) with a
   // holy shimmer by the renderer (see the spirit_healer branches there).
   spirit_healer: 'npc_villager_robed',
-  // Eldergleam, the Veiled Hollow
+  // Eldershine, the Veiled Hollow
   keeper_saelwyn: 'npc_mage',
   loremother_bryn: 'npc_villager_robed',
   provisioner_fenna: 'npc_villager',
   wardsmith_orun: 'npc_smith',
   archivist_tullo: 'npc_villager_robed',
+  archivist_maelin_emberward: 'npc_villager_robed',
   // Professions 2.0 station masters: existing looks only (no new GLBs). The
   // forge and toolworks masters wear the smith's work apron; the weaver and
   // alchemist match the robed apothecary/herbalist look; the cook and tanner

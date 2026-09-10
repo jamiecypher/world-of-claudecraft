@@ -23,7 +23,7 @@
 // render/ui/game/net/DOM/Three, no Math.random/Date.now), so it runs unchanged in
 // Node, the browser, and the headless RL env.
 
-import { bagCapacity, bagsFullError, consumeOneScratch, countFit, countStacked } from '../bags';
+import { bagPools, bagsFullError, consumeOneScratch, countFit, countStacked } from '../bags';
 import { ITEMS, QUESTS, questRewardItemId } from '../data';
 import { formatMoney } from '../format_money';
 import { removePreferFungible } from '../items';
@@ -33,6 +33,7 @@ import { planGradeRemoval } from '../professions/material_grades';
 import { questFallbackGrants } from '../quest_fallback';
 import type { PlayerMeta } from '../sim';
 import type { SimContext } from '../sim_context';
+import { hubHealingAbilityId } from '../tutorial/hub_healing_lesson';
 import {
   dist2d,
   type Entity,
@@ -52,6 +53,7 @@ import {
   validateProfessionQuestSelection,
 } from './profession_quest_effects';
 import { playerHoldsQuestItem } from './quest_item_presence';
+import { grantQuestRecipeReward, validateQuestRecipeReward } from './quest_recipe_rewards';
 
 // Pure quest-state computation, shared by the sim and the network client. Relocated
 // from sim.ts (W4) and re-exported from sim.ts so the ClientWorld import
@@ -81,6 +83,16 @@ export function computeQuestState(
   // other class. A missing class fails closed so a class-less caller never opens it.
   if (quest.requiredClass && (!playerClass || !quest.requiredClass.includes(playerClass)))
     return 'unavailable';
+  // The hub's optional healing lesson: unavailable until the SAME resolver its
+  // credit arm and the UI coach read (hub_healing_lesson.ts) says this class
+  // has actually learned a usable direct heal at this level, so an eligible
+  // class never sees the quest before their kit has anything to teach it with.
+  if (
+    quest.requiresUsableHealAbility &&
+    (!playerClass || hubHealingAbilityId(playerClass, playerLevel) === null)
+  ) {
+    return 'unavailable';
+  }
   if (
     quest.completionEffect &&
     professionState &&
@@ -183,6 +195,13 @@ export function finalizeQuestAccept(
   // from alone (bags, bank, market escrow, mailbox), not just the bags: a
   // bags-only read was the unbounded starter-tool mint (bank it, abandon,
   // re-accept, repeat). See quest_item_presence.ts for the full reasoning.
+  // Capacity is deliberately NOT pre-checked here, nor in the giver-talk twin
+  // regrantMissingQuestItems below: a required item the player can no longer
+  // obtain must never be lost to a full bag, so the grant force-adds and the
+  // over-capacity bag is tolerated and visible. The turn-in reward below DOES
+  // gate (countFit + bagsFullError); that asymmetry is the design. See the
+  // ungated-paths list in src/sim/bags.ts (qr-19-qprofintro-overflow-grant,
+  // 2026-09-01).
   for (const itemId of questFallbackGrants(quest, (id) => playerHoldsQuestItem(ctx, meta, id))) {
     ctx.addItem(itemId, 1, meta.entityId);
   }
@@ -362,6 +381,10 @@ export function turnInQuest(ctx: SimContext, questId: string, pid?: number): voi
   if (rewardItem) {
     const scratch = meta.inventory.map((s) => ({ ...s }));
     for (const obj of quest.objectives) {
+      // An ownership turn-in consumes nothing, so it frees no room either:
+      // modelling a removal here would let the reward overflow the bags
+      // (the #2139 class, in the other direction).
+      if (quest.keepsCollectedItems) break;
       if (obj.type === 'collect' && obj.itemId) {
         const index = quest.objectives.indexOf(obj);
         // The same grade plan turnInQuestCore applies, against the scratch
@@ -381,8 +404,8 @@ export function turnInQuest(ctx: SimContext, questId: string, pid?: number): voi
         }
       }
     }
-    if (countFit(scratch, bagCapacity(meta.bags), rewardItem, 1) < 1) {
-      bagsFullError(ctx, meta.entityId);
+    if (countFit(scratch, bagPools(meta.bags), rewardItem, 1) < 1) {
+      bagsFullError(ctx, meta.entityId, rewardItem);
       return;
     }
   }
@@ -404,8 +427,12 @@ export function turnInQuestCore(
 ): boolean {
   const qp = meta.questLog.get(questId);
   if (!qp) return false;
+  if (!validateQuestRecipeReward(ctx, quest, meta)) return false;
   if (!applyProfessionQuestEffect(ctx, quest, qp, meta)) return false;
   for (const [index, obj] of quest.objectives.entries()) {
+    // An ownership objective (QuestDef.keepsCollectedItems) proves the player
+    // HAS the thing; the turn-in leaves it with them, so nothing is consumed.
+    if (quest.keepsCollectedItems) break;
     if (obj.type === 'collect' && obj.itemId) {
       // Base grade first, then the fine grade, so a player holding both hands
       // over the plain ore and keeps the premium copies. Within each grade
@@ -446,6 +473,7 @@ export function turnInQuestCore(
   }
   const rewardItem = questRewardItemId(quest, meta.cls);
   if (rewardItem) ctx.addItem(rewardItem, 1, meta.entityId);
+  grantQuestRecipeReward(ctx, quest, meta);
   ctx.grantXp(quest.xpReward, meta);
   // Arm the repeat-cadence window (work orders): the quest stays
   // unavailable (computeQuestState) until now + repeatCadenceTicks, server-

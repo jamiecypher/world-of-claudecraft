@@ -6,7 +6,7 @@ const EASTBROOK_BUILDING_IDS = new Set<string>([
   ...EASTBROOK_LAYOUT.preservedBuildings.map((placement) => placement.id),
   ...EASTBROOK_LAYOUT.buildings.map((placement) => placement.id),
 ]);
-const EASTBROOK_WELL_IDS = new Set<string>([EASTBROOK_LAYOUT.civic.wellBeacon.id]);
+const EASTBROOK_WELL_IDS = new Set<string>([EASTBROOK_LAYOUT.civic.monument.id]);
 const EASTBROOK_STALL_IDS = new Set<string>(
   EASTBROOK_LAYOUT.market.stalls.map((placement) => placement.id),
 );
@@ -64,7 +64,7 @@ export function clonePropsWithoutEastbrookLayout(source: ZonePropsDef): ZoneProp
     docks: source.docks.map((dock) => ({ ...dock, hutLocal: { ...dock.hutLocal } })),
     tents: cloneRecords(source.tents),
     marshReeds: source.marshReeds.map(([x, z]) => [x, z]),
-    crates: source.crates.map(([x, z]) => [x, z]),
+    crates: source.crates.map(([x, z, stack]) => (stack === undefined ? [x, z] : [x, z, stack])),
     campfires: source.campfires.map(([x, z]) => [x, z]),
     mudHuts: source.mudHuts.map(([x, z]) => [x, z]),
     ruinRings: cloneRecords(source.ruinRings),

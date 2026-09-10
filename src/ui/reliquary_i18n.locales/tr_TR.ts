@@ -150,4 +150,34 @@ export const table: ReliquaryLocaleTable = {
     name: 'Yarık Halkaları',
     desc: "Kişisel Yarık halkaları: dereceli bir Yarık'ın ilk tamamlamasını kazanan gruptaki her şampiyon için basılır. Bir karakter yalnızca kendisininkini taşıyabilir.",
   },
+  conquerors_ignivar: {
+    name: 'Son Pınar Potası',
+    desc: 'Ignivar, Son Alevin Habercisi’nden çıkan epik ganimetler.',
+  },
+  conquerors_ignivar_heroic: {
+    name: 'Kahramanca: Son Pınar Potası',
+    desc: 'Ignivar, Son Alevin Habercisi’nden yalnızca kahramanca modda düşen silahlar.',
+  },
+  conquerors_varkhul: {
+    name: 'İç Pota',
+    desc: 'Varkhul, Son Alevin Demirhane Babası’ndan çıkan epik ganimetler.',
+  },
+  conquerors_varkhul_heroic: {
+    name: 'Kahramanca: İç Pota',
+    desc: 'Varkhul, Son Alevin Demirhane Babası’ndan yalnızca kahramanca modda düşen kalkanlar ve silahlar.',
+  },
+  conquerors_set_bramblehide: {
+    name: "Roots'un Dikenli Postu",
+    desc: "Roots'un Dikenli Postu'nun eksiksiz deri ailesi.",
+  },
+  professions_crucible: {
+    desc: 'Her biri göğüs, bel ve ayak parçası sunan on bir raid yapımı koleksiyon. El kitapları ve formüller kutsal emanet değil, bilgidir.',
+
+    name: 'Pota Ustalığı',
+  },
+
+  professions_forgebreaker: {
+    name: 'Dövme Kıran',
+    desc: "Ocaktan özgürleşen Son Pınar'ın sesi, kendi yaptığın bir çekicin içinde taşınır.",
+  },
 };

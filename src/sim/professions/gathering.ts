@@ -9,7 +9,7 @@
 // 20 Hz tick loop (sim.ts `tick()`, next to `updateRested`), so a grant only
 // ever takes effect on the deterministic tick path, never out of band.
 
-import { bagCapacity, bagsFullError, countFit } from '../bags';
+import { bagsFullError } from '../bags';
 import { isActionLockingFormAuraKind } from '../combat/forms';
 import { GATHER_NODES } from '../content/gather_nodes';
 import {
@@ -20,6 +20,7 @@ import {
   TOOL_EFFECTS,
 } from '../content/professions';
 import { ITEMS } from '../data';
+import { gatheredMaterialSources } from '../material_gatherer';
 import { forceDismount } from '../mounts';
 import type { Rng } from '../rng';
 import type { PlayerMeta } from '../sim';
@@ -32,7 +33,6 @@ import {
   type GatherRareEventFlavor,
   INTERACT_RANGE,
   type InvSlot,
-  type ItemDef,
   isConsuming,
 } from '../types';
 import {
@@ -40,6 +40,7 @@ import {
   GATHER_RARE_EVENT_YIELD_MULT,
   rollGatherRareEvent,
 } from './gather_events';
+import { type MaterialRarity, nodeMaterialFor } from './gathering_materials';
 import { fineGradeReachable, harvestGradeItemId } from './material_grades';
 import { gatherActionXp } from './profession_xp';
 import { proficiencyBandFor } from './proficiency_bands';
@@ -88,96 +89,10 @@ export const NODE_HARVEST_TABLE: Record<
   herb: { professionId: 'herbalism', respawnSeconds: 240 },
 };
 
-// Every material row yields this many units per rolled rarity (one
-// shared curve; a per-family tune may diverge later if playtests want it).
-// Frozen because every NODE_MATERIAL_TABLE row shares this one object: a
-// per-family tune must clone it per row, never mutate it in place.
-const MATERIAL_QTY_BY_RARITY: Record<MaterialRarity, number> = Object.freeze({
-  common: 1,
-  uncommon: 2,
-  rare: 2,
-  epic: 3,
-  legendary: 4,
-});
-
-// Zone x node-type material matrix (Professions 2.0): which item a
-// harvest grants in which zone, and the per-rarity unit counts. The zone-1
-// (eastbrook_vale) rows grant ONLY the dedicated starter-material FAMILIES
-// (copper_ore/ironbark_log/silverleaf_herb), never the premium vendor
-// reagents: that is the stockpiling mitigation, scoped to what it actually
-// buys since D8: an out-tooled gatherer harvests the sellValue-8 FINE grade
-// of these same families here, so starter-node farming yields fine starter
-// materials, still never the mid-tier vendor reagents the mitigation
-// exists to keep off this faucet. Exported so tests can pin the table
-// contents.
-export const NODE_MATERIAL_TABLE: Record<
-  GatherNodeType,
-  Record<string, { itemId: string; qtyByRarity: Record<MaterialRarity, number> }>
-> = {
-  ore: {
-    eastbrook_vale: { itemId: 'copper_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    mirefen_marsh: { itemId: 'iron_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    thornpeak_heights: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    veiled_hollow: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    drakelands: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    frostveil: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    amberfall: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    willowfen: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    nightbloom: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    wraithwood: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    galecrest: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    palmreach: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    evergarden: { itemId: 'thorium_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    farshore_isle: { itemId: 'iron_ore', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-  },
-  wood: {
-    eastbrook_vale: { itemId: 'ironbark_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    mirefen_marsh: { itemId: 'ashwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    thornpeak_heights: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    veiled_hollow: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    drakelands: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    frostveil: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    amberfall: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    willowfen: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    nightbloom: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    wraithwood: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    galecrest: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    palmreach: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    evergarden: { itemId: 'elderwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    farshore_isle: { itemId: 'ashwood_log', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-  },
-  herb: {
-    eastbrook_vale: { itemId: 'silverleaf_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    mirefen_marsh: { itemId: 'goldleaf_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    thornpeak_heights: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    veiled_hollow: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    drakelands: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    frostveil: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    amberfall: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    willowfen: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    nightbloom: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    wraithwood: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    galecrest: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    palmreach: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    evergarden: { itemId: 'sunpetal_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-    farshore_isle: { itemId: 'goldleaf_herb', qtyByRarity: MATERIAL_QTY_BY_RARITY },
-  },
-};
-
-// The material row for one node type in one zone. A zone without its own row
-// (a future zone added before its material content lands) falls back to the
-// eastbrook_vale starter row rather than throwing: degraded yields, never a
-// broken harvest.
-export function nodeMaterialFor(
-  type: GatherNodeType,
-  zoneId: string,
-): { itemId: string; qtyByRarity: Record<MaterialRarity, number> } {
-  const byZone = NODE_MATERIAL_TABLE[type];
-  // Bare index on purpose, unlike rodTierRequiredForZone's Object.hasOwn:
-  // zoneId here is static GATHER_NODES content, never a map-doc-authored
-  // string, so a prototype key cannot reach this lookup.
-  return byZone[zoneId] ?? byZone.eastbrook_vale;
-}
+export type { MaterialRarity } from './gathering_materials';
+// Public compatibility: callers historically import these through the command
+// module even though their canonical owner is now a pure leaf.
+export { NODE_MATERIAL_TABLE, nodeMaterialFor } from './gathering_materials';
 
 /** The item id a harvest of `node` grants a player whose best matching tool is
  *  `usableToolTier`: the zone row's material, upgraded to its fine grade when
@@ -262,7 +177,7 @@ export function usableToolEffectSlot(
  * promised a second the sim's clamp never gave. One definition, three live
  * readers (the capacity gates at both ends of the cast, through
  * harvestYieldItemId, the grant, and the grade-preview tooltip, which adapts
- * the IWorld reads into `GradeReadMeta` in src/ui/gathering_view.ts so the
+ * the IWorld reads into `GradeReadMeta` in src/ui/hud/professions/gathering_view.ts so the
  * preview and the grant literally share this function).
  *
  * Pure and draw-free, and it never spends a charge: spending belongs to the
@@ -309,8 +224,6 @@ export function gatherNodeById(nodeId: string): GatherNodeDef | undefined {
 // src/sim/types.ts), minus 'poor' (a harvested material is never junk-grade). A
 // gathering profession's proficiency shifts a harvest's rarity roll toward the
 // higher tiers; a fresh proficiency-0 harvest always lands common.
-export type MaterialRarity = Exclude<NonNullable<ItemDef['quality']>, 'poor'>;
-
 // Proficiency is clamped to this ceiling before weighting: proficiency gains
 // beyond this point buy no further rarity odds (the ladder is already maxed out).
 export const MATERIAL_RARITY_MAX_PROFICIENCY = 100;
@@ -767,6 +680,7 @@ export function harvestNode(
   // unprompted one tick after it ends (updateCasting's retry arm).
   p.queuedCastAbility = null;
   p.queuedCastAim = null;
+  p.queuedCastTargetId = null;
   ctx.emit({
     type: 'castStart',
     entityId: p.id,
@@ -780,6 +694,12 @@ export function harvestNode(
 // Inverse of NODE_HARVEST_TABLE for the tool-use path below: which node type
 // a gathering tool works. Fishing has no world nodes (its gatherTool rods
 // route to startFishing at the items.ts boundary), so it never appears here.
+// Farming NEVER gains a row either, the fishing precedent applied to a
+// different shape: its hoes shipped with the hoe phase, but a hoe is a
+// PASSIVE gate (the step-12 arm in professions/farming.ts reads the
+// wield-filtered bag scan at plant time), and crop beds ride their own patch
+// path rather than a GatherNodeType, so there is no node for a hoe click to
+// start and useGatherToolItem answers false for farming by design.
 export const NODE_TYPE_BY_PROFESSION: Partial<Record<GatheringProfessionId, GatherNodeType>> = {
   mining: 'ore',
   logging: 'wood',
@@ -898,6 +818,25 @@ export function completeGatherCast(ctx: SimContext, p: Entity, meta: PlayerMeta)
   let grantedQty = 0;
   // Fungible grant: find the largest count that still fits (stack top-up
   // plus free slots, ctx.canAddItem). The pre-gate guarantees at least 1.
+  //
+  // ONE arm now serves both a plain and a rare-event harvest. The premium
+  // signature moved OUT of the item payload and into the granted units' own
+  // source bucket (material_gatherer.ts gatheredMaterialSources), where it sits
+  // beside the gatherer and is decided independently of it: recording who
+  // gathered a unit never signs it, and a signed unit is signed by the roll
+  // alone. Two consequences, both deliberate:
+  //   * A signed yield is no longer a distinct payload, so it merges into the
+  //     same stacks plain material does instead of needing same-signer room or
+  //     a free slot of its own. The old signed pre-walk (countFit against a
+  //     `{signer}` payload) and its truncation fallback existed only to model
+  //     that separate room, and with it gone a rare event can no longer lose
+  //     its mark to capacity: the node `gatherDowngrade` arm is unreachable and
+  //     is removed rather than left as dead player-facing feedback.
+  //   * The composition never changes the FIT. Compatible stacks are decided by
+  //     item, payload and craft provenance, never by whose units they hold, so
+  //     this is the same capacity walk in the same order it always was, and the
+  //     granted quantity can only be greater than or equal to what the signed
+  //     path used to land.
   const grantFungibleFit = (): number => {
     let fit = qty;
     while (fit > 1 && !ctx.canAddItem(itemId, fit, meta.entityId)) fit--;
@@ -907,44 +846,22 @@ export function completeGatherCast(ctx: SimContext, p: Entity, meta: PlayerMeta)
     // stack on top of it, and it logs the rarity-colored, item-linked gather
     // line, so the hub's "You receive:" line would be a second line for the
     // one grant (#2430).
-    ctx.addItem(itemId, fit, meta.entityId, { silent: true, callerLogs: true });
+    //
+    // One batched grant: a x5 windfall lands as ONE hub loot event instead of
+    // five (the recorded loot-burst polish), which the gather line then renders
+    // as a single "You gather: X x5." line.
+    ctx.addItem(itemId, fit, meta.entityId, {
+      silent: true,
+      callerLogs: true,
+      materialSources: gatheredMaterialSources(
+        meta,
+        fit,
+        signed ? { signer: meta.name } : undefined,
+      ),
+    });
     return fit;
   };
-  if (signed) {
-    // A signed instance merges only into a byte-equal same-signer stack
-    // (identical-payload stacking; never a plain stack, #1165):
-    // countFit with the payload counts that merge room plus free slots, so a
-    // rare-event windfall lands whole once a single slot (or same-signer
-    // stack room) is open, where the earlier contract needed one free slot
-    // per unit. The fungible pre-gate above can pass on plain-stack top-up
-    // room alone, so when no signed unit fits the yield falls back to an
-    // unsigned top-up grant (the truncation contract wins over signing in
-    // that self-inflicted edge; the crossing-case pin lives in
-    // tests/gather_rare_events.test.ts).
-    const capacity = bagCapacity(meta.bags);
-    const fit = countFit(meta.inventory, capacity, itemId, qty, { signer: meta.name });
-    if (fit > 0) {
-      // One batched grant: a x5 windfall lands as ONE hub loot event
-      // instead of five (the recorded loot-burst polish), which the gather
-      // line then renders as a single "You gather: X x5." line.
-      // silent + callerLogs: see grantFungibleFit's matching comment above,
-      // same reasons.
-      ctx.addItemInstance(itemId, { signer: meta.name }, meta.entityId, fit, {
-        silent: true,
-        callerLogs: true,
-      });
-      grantedQty = fit;
-    }
-    if (grantedQty === 0) {
-      grantedQty = grantFungibleFit();
-      // The yield survived as a plain top-up but its signature did
-      // not; tell the player (a text-free personal event, the gatherDenied
-      // idiom; one signed batch per harvest, so no dedupe flag is needed).
-      ctx.emit({ type: 'gatherDowngrade', pid: meta.entityId, surface: 'node', lost: 'mark' });
-    }
-  } else {
-    grantedQty = grantFungibleFit();
-  }
+  grantedQty = grantFungibleFit();
   // The R42 charge settle, AFTER the grant so truncation is visible: the
   // charge is spent only when the bonus actually changed what the player
   // received. The two kinds reduce to one predicate over the counterfactual
@@ -1030,7 +947,7 @@ export interface PendingGatherGrant {
 }
 
 export function emptyGatheringProficiency(): GatheringProficiency {
-  return { mining: 0, logging: 0, herbalism: 0, fishing: 0 };
+  return { mining: 0, logging: 0, herbalism: 0, fishing: 0, farming: 0 };
 }
 
 export function isGatheringProfessionId(id: string): id is GatheringProfessionId {
@@ -1353,8 +1270,11 @@ export interface FocusHarvestYield {
  * nothing), which was itself only ever true BELOW the threshold: above it, the
  * same frame already spread. Scope, so the sentence above is not read as more
  * than it is: this covers a tag the corpse does not CARRY. A tag it carries
- * that HARVEST_COMPONENT_ITEMS does not map (claw, tusk, gills, horn) is a
- * different case and is still handled a different way: it survives THIS
+ * that HARVEST_COMPONENT_ITEMS does not map (claw and tusk shipped that way
+ * until #2905, gills and horn until Masterwrought Phase 11m; no shipped family
+ * does today, and the corpse suites drive the shape through the synthetic
+ * families of tests/helpers/unmapped_family.ts) is a different case and is
+ * still handled a different way: it survives THIS
  * function, because two later readers need to see it. The command boundary
  * REFUSES the harvest pre-claim when the surviving pick maps to no item at all
  * (#2509, forfeitsEveryMappedYield and src/sim/interaction.ts harvestCorpse),
@@ -1406,7 +1326,8 @@ export function effectiveFocusComponents(
  * be one narrowing away from disagreeing. Its second half is now belt and
  * braces rather than the load-bearing term it was for #2509, and both states
  * are pinned separately (tests/corpse_harvest_view.test.ts drives both terms
- * on sethrael_palecoil's real mixed tags, and the all-unmapped arm rides the
+ * on the three-tag mixed shape sethrael_palecoil shipped with until Phase 11m
+ * mapped its horn, now a retagged fixture, and the all-unmapped arm rides the
  * retagged fixtures in tests/corpse_harvest_window.test.ts and
  * tests/loot_window_controller.test.ts, so the two terms can never quietly
  * coincide).
@@ -1450,8 +1371,11 @@ export function yieldingFocusComponents(
  * `[0, HARVEST_TIERS.length - 1]`.
  *
  * THE #2514 RULING, next to the formula it governs. The bonus counts families
- * the harvest could not extract, and a family with no item behind it (claw,
- * tusk, gills, horn) is NEVER extracted, whether or not the player checked it.
+ * the harvest could not extract, and a family with no item behind it is NEVER
+ * extracted, whether or not the player checked it (claw, tusk, gills and horn
+ * each shipped that way, until #2905 mapped the first two and Masterwrought
+ * Phase 11m the last two; no shipped family does today, so the shape lives in
+ * the retagged fixtures of the corpse suites, tests/helpers/unmapped_family.ts).
  * So it is always forfeited breadth: the numerator is yieldingFocusComponents,
  * not the raw effective pick.
  *
@@ -1460,9 +1384,10 @@ export function yieldingFocusComponents(
  * nothing for claw. Measured at seed 5, `['hide']` gave bonus 2 (rough_hide 4
  * plus a signed pristine_hide) and `['hide','claw']` gave bonus 1 (rough_hide 3):
  * the player paid a tier and a specimen roll to tick a box that can only ever
- * come back empty. Nine shipped templates mix mapped and unmapped families and
- * on sethrael_palecoil (hide, claw, horn) two of the three boxes carried that
- * cost. After: `['hide','claw']` is byte-identical to `['hide']`.
+ * come back empty. At the time nine shipped templates mixed mapped and
+ * unmapped families and on sethrael_palecoil (then hide, claw, horn) two of
+ * the three boxes carried that cost. After: `['hide','claw']` is
+ * byte-identical to `['hide']`.
  *
  * Why THIS numerator and not a matching move of the denominator to the mapped
  * tag count: the denominator is the corpse's ADVERTISED breadth, what it
@@ -1472,9 +1397,9 @@ export function yieldingFocusComponents(
  * today where `['hide']` on forest_wolf (2 tags) is bonus 1. #2514 does not
  * introduce that, it extends it to the picks that were paying for breadth they
  * never received. Moving the denominator too would make the single-mapped
- * shapes (the three `gills, hide` murlocs, sethrael_palecoil) permanently
- * bonus-0, a NERF on the very templates this issue is about, and it would make
- * the bonus SHRINK when content ships.
+ * shapes (at the time, the three `gills, hide` murlocs and sethrael_palecoil)
+ * permanently bonus-0, a NERF on the very templates this issue was about, and
+ * it would make the bonus SHRINK when content ships.
  *
  * The tension with #2513, stated rather than left for a reader to find: that
  * issue called an unmapped tag inert data and masked a corpse made of nothing
@@ -1524,18 +1449,25 @@ export function yieldingFocusComponents(
  *     harvestCorpse, so nothing downstream is pinned to the old phase; what it
  *     means in practice is that which harvests happen to mint a specimen is
  *     reshuffled symmetrically rather than made more or less likely.
- *   - It is self-healing. The day claw/tusk/gills/horn get items, every number
- *     returns to today's, with no code change.
+ *   - It is self-healing. The day an unmapped family gets an item, every
+ *     number on its carriers returns to the all-mapped world with no code
+ *     change: claw and tusk did exactly that at #2905, and gills and horn at
+ *     Phase 11m (measured on sethrael_palecoil and mudfin_murloc in
+ *     tests/corpse_harvest_sim.test.ts, "the concentration bonus on a mixed
+ *     corpse").
  *
  * What is deliberately retired, because "the equivalence survives" must not be
  * read as "nothing moved": on a mixed corpse bonus 0, the unshifted
  * BASE_TIER_WEIGHTS roll #1141 shipped as the spread, is no longer REACHABLE.
- * The widest pick available on those nine templates is now bonus 1 (2 on
- * sethrael_palecoil), because part of their breadth is unreachable content. On
- * the four templates carrying exactly one mapped family (the three murlocs and
- * sethrael_palecoil) that collapses every legal pick to one identical outcome,
- * so the picker there stops being a choice, which is honest: a picker offering
- * one live row and one dead one never was one.
+ * The widest pick available on the nine templates then mixed was bonus 1 (2
+ * on sethrael_palecoil), because part of their breadth was unreachable
+ * content. On the four templates then carrying exactly one mapped family (the
+ * three murlocs and sethrael_palecoil) that collapsed every legal pick to one
+ * identical outcome, so the picker there stopped being a choice, which is
+ * honest: a picker offering one live row and one dead one never was one. No
+ * shipped template is in either shape since Phase 11m; the rule still governs
+ * any future unmapped tag, and the corpse suites keep it exercised on the
+ * retagged fixtures.
  *
  * The "an explicit full cover spreads exactly like an empty pick" equivalence
  * SURVIVES, and is pinned: both still collapse to `taggedComponents` inside

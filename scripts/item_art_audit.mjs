@@ -9,7 +9,7 @@ import {
 
 const DEFAULT_OUTPUT = 'tmp/imagegen/item-art-consistency/final-audit';
 const DEFAULT_VERDICT =
-  'docs/achievements/item-art-consistency-2026-08-09/final-item-art-audit-verdict.json';
+  'docs/achievements/masterwrought-art-completion-2026-09-02/final-item-art-audit-verdict.json';
 
 function usage() {
   return `Usage: node scripts/item_art_audit.mjs [options]
@@ -59,7 +59,13 @@ function parseArguments(arguments_) {
 async function loadItems(repoRoot) {
   const build = await esbuild.build({
     stdin: {
-      contents: "export { ITEMS } from './src/sim/data.ts';",
+      // ITEM_ART_PENDING is the one art-pending ledger: it spreads its
+      // content-side source list (IGNIVAR_ART_PENDING_ITEM_IDS in
+      // src/sim/content/ignivar_loot.ts) on top of the enumerated debt, so the
+      // audit reads the union through the UI seam and never a partial list.
+      contents:
+        "export { ITEMS } from './src/sim/data.ts';\n" +
+        "export { ITEM_ART_PENDING } from './src/ui/icons.ts';",
       resolveDir: repoRoot,
       sourcefile: 'item-art-audit-entry.ts',
       loader: 'ts',
@@ -72,7 +78,8 @@ async function loadItems(repoRoot) {
   });
   const bundled = build.outputFiles[0].text;
   const dataUrl = `data:text/javascript;base64,${Buffer.from(bundled).toString('base64')}`;
-  return (await import(dataUrl)).ITEMS;
+  const module_ = await import(dataUrl);
+  return { items: module_.ITEMS, pendingArtIds: module_.ITEM_ART_PENDING };
 }
 
 const arguments_ = parseArguments(process.argv.slice(2));
@@ -83,10 +90,18 @@ if (arguments_.help) {
 
 const repoRoot = process.cwd();
 await readFile(path.join(repoRoot, 'package.json'));
-const items = await loadItems(repoRoot);
+const { items, pendingArtIds } = await loadItems(repoRoot);
 const mapping = JSON.parse(
   await readFile(path.join(repoRoot, 'public/ui/items/mapping.json'), 'utf8'),
 );
+// The art-pending ledger (artPendingIds) reaches the library as-is: pending
+// ids stay in the live counts and are excluded only from the missing-file
+// sweep (scripts/lib/item_art_audit.mjs, whose bytes are the tracked verdict's
+// renderer fingerprint). A staged wave whose generated heroic ARMOR variants
+// lack their own WebPs trips the library's weapon-only alias assertion; the
+// wave that next needs staging teaches the alias accounting about
+// artPendingIds there, rather than pre-filtering the item set here, so the
+// live counts keep one meaning.
 const build = await buildItemArtAudit({
   repoRoot,
   itemDirectory: 'public/ui/items',
@@ -94,14 +109,31 @@ const build = await buildItemArtAudit({
   renderOutputs: !arguments_.verifyOnly,
   items,
   mapping,
+  pendingArtIds: [...pendingArtIds].sort(),
+  // Restored post-merge (release/v0.42.0 into professions): the merged
+  // catalog (professions' Crucible armor/patterns/quest items union'd with
+  // release's Nythraxis gap-fill weapons and Bramblehide icons) does not
+  // match either pre-merge parent's pin (professions HEAD: catalogCount
+  // 1256; release: catalogCount 1069). These are the measured values from
+  // `node scripts/item_art_audit.mjs --verify-only` run directly on the
+  // merged tree, not guessed or derived from either parent.
   expected: {
-    catalogCount: 823,
-    liveItemCount: 838,
-    generatedHeroicDefinitions: 64,
-    heroicDefinitionsWithOwnWebp: 48,
-    heroicWeaponArtAliases: 16,
-    sheetPageCount: 26,
-    groupCount: 22,
+    // OSSBrain PR #3781 reconcile: the release's own arm reached 1281 / 1299
+    // (the Masterwrought completion, Field Kit, Crucible professions, and
+    // Nythraxis/Bramblehide waves) and the OSSBrain candidate's arm reached
+    // 1071 / 1089 (its two disjoint reins items, reins_goblin_rocket_sled and
+    // reins_rallycart_rxt, on the shared 1069 / 1087 base); both deltas are
+    // additive over that shared base, so 1069 + 212 + 2 = 1283 and
+    // 1087 + 212 + 2 = 1301. Verified with `node scripts/item_art_audit.mjs
+    // --verify-only` against the merged tree.
+    catalogCount: 1283,
+    liveItemCount: 1301,
+    pendingArtCount: 0,
+    generatedHeroicDefinitions: 78,
+    heroicDefinitionsWithOwnWebp: 59,
+    heroicWeaponArtAliases: 19,
+    sheetPageCount: 31,
+    groupCount: 25,
   },
 });
 assertItemArtAuditPass(build);

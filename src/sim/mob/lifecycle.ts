@@ -33,9 +33,13 @@
 
 import { MOBS } from '../data';
 import * as deedsMod from '../deeds';
+import { resetIgnivarEncounter } from '../encounters/ignivar';
+import { resetVarkhulEncounter, VARKHUL_BOSS_ID } from '../encounters/varkhul';
+import { releasePin } from '../instances/instance_combat_hold';
+import { cancelCorpseHarvestForCorpse } from '../professions/corpse_harvest_session';
 import type { SimContext } from '../sim_context';
 import { clearThreat } from '../threat';
-import { dist2d, type Entity, NYTHRAXIS_BOSS_ID } from '../types';
+import { dist2d, type Entity, IGNIVAR_BOSS_ID, NYTHRAXIS_BOSS_ID } from '../types';
 import { groundHeight } from '../world';
 import { resetMobCharge } from './charge';
 import { idleRng, wanderPause } from './idle_rng';
@@ -50,6 +54,11 @@ export function respawnMob(ctx: SimContext, mob: Entity): void {
     return;
   }
   ctx.clearNonPlayerStatAuras(mob);
+  // The entity id is about to be reused for a live mob: a corpse-harvest
+  // reservation must not survive it (Intentional Gathering, PR3). A no-op
+  // when nobody was harvesting; draws no rng.
+  cancelCorpseHarvestForCorpse(ctx, mob);
+  mob.corpseHarvestState = undefined;
   mob.dead = false;
   mob.lootable = false;
   mob.loot = null;
@@ -75,6 +84,7 @@ export function respawnMob(ctx: SimContext, mob: Entity): void {
   mob.evadeStall = 0;
   mob.chaseStall = 0;
   mob.chainPullInbound = false;
+  releasePin(mob);
   mob.fleeTimer = 0;
   mob.fleeReturnTimer = 0;
   mob.hasFled = false;
@@ -94,6 +104,7 @@ export function respawnMob(ctx: SimContext, mob: Entity): void {
   mob.firedSummons = 0;
   mob.enraged = false;
   mob.healedThisPull = false;
+  mob.pulseTimer = MOBS[mob.templateId]?.aoePulse?.every ?? 0;
   mob.stompTimer = MOBS[mob.templateId]?.stomp?.every ?? 0;
   mob.terrifyTimer = MOBS[mob.templateId]?.terrify?.every ?? 0;
   // The shared spacing lock dies with the life like the timers around it.
@@ -155,6 +166,8 @@ export function respawnMob(ctx: SimContext, mob: Entity): void {
   // every mob here privately and intentionally has a different shared RNG digest.
   mob.wanderTimer = wanderPause(idleRng(ctx, mob), mob, 2, 8);
   if (mob.templateId === NYTHRAXIS_BOSS_ID) ctx.resetNythraxisEncounter(mob);
+  if (mob.templateId === IGNIVAR_BOSS_ID) resetIgnivarEncounter(ctx, mob);
+  if (mob.templateId === VARKHUL_BOSS_ID) resetVarkhulEncounter(ctx, mob);
   for (const meta of ctx.players.values()) {
     const e = ctx.entities.get(meta.entityId);
     if (e && e.targetId === mob.id) e.targetId = null;

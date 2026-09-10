@@ -26,6 +26,7 @@ const base: InspectInput = {
   skinCatalog: 'class',
   deedTitleText: '',
   border: null,
+  borderDeedName: '',
   curatorRank: 0,
   relicsOwned: null,
   relicsTotal: null,
@@ -334,19 +335,29 @@ describe('buildInspectView: the header border accent', () => {
     expect(buildInspectView(base, ITEMS).header.border).toBeNull();
   });
 
-  it('resolves a worn border deed id to its slug AND that slug palette', () => {
+  it('E51: resolves a worn deed to its slug, motif, palette, and localized granting name', () => {
     // Deed id in, slug + colors out: the painter must receive resolved colors so
     // it holds no palette of its own. The expected colors come from the ONE
     // table, so this cannot drift from what the nameplate and portrait ring draw.
     const accent = borderAccent('reliquary_gilt');
     expect(accent).not.toBeNull();
     expect(
-      buildInspectView({ ...base, border: 'col_reliquary_rank_5' }, ITEMS).header.border,
+      buildInspectView(
+        {
+          ...base,
+          border: 'col_reliquary_rank_5',
+          borderDeedName: 'Reliquary Eternal',
+        },
+        ITEMS,
+      ).header.border,
     ).toEqual({
       slug: 'reliquary_gilt',
       frame: accent?.frame,
       edge: accent?.edge,
       glow: accent?.glow,
+      motif: accent?.motif,
+      motifPath: accent?.motifPath,
+      deedName: 'Reliquary Eternal',
     });
   });
 
@@ -381,6 +392,34 @@ describe('buildInspectView: gear reuses the char_view paperdoll (no forked slot 
       (c: { slot: EquipSlot; item: unknown }) => c.item === null,
     );
     expect(emptySlots.length).toBe(m.gear.right.length); // nothing on the right in `base`
+  });
+
+  it('threads worn instances into the cells (projected), and stays def-only without them', () => {
+    // The 2026-08-27 QA round: the inspect card was the one item-cell surface
+    // still def-only. The core now hands equippedInstances to
+    // buildPaperdollView, whose cells carry each slot's eqi-projected payload
+    // (cosmetic fields survive, the bond fields are trimmed).
+    const promoted = {
+      name: 'Dawnbreaker',
+      rolled: { quality: 'legendary' as const },
+      signer: 'Maker',
+      boundTo: 7,
+    };
+    const m = buildInspectView({ ...base, equippedInstances: { helmet: promoted } }, ITEMS);
+    expect(m.gear).toEqual(buildPaperdollView(base.equippedItems, ITEMS, { helmet: promoted }));
+    expect(m.gear.left[0].instance).toEqual({
+      name: 'Dawnbreaker',
+      rolled: { quality: 'legendary' },
+      signer: 'Maker',
+    });
+    // Slot-keyed, never smeared: the worn mainhand carries no payload.
+    expect(m.gear.left[4].item).toBe(ITEMS.worn_sword);
+    expect(m.gear.left[4].instance).toBeNull();
+    // The def-only negative: no instances input resolves every cell
+    // payload-free, byte for byte the old model.
+    const defOnly = buildInspectView(base, ITEMS);
+    expect(defOnly.gear.left.every((c) => c.instance === null)).toBe(true);
+    expect(defOnly.gear.right.every((c) => c.instance === null)).toBe(true);
   });
 });
 

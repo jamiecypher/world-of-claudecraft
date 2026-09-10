@@ -1,3 +1,4 @@
+import { isOnProvingShore } from '../../../sim/content/proving_shore';
 import { DELVES, ITEMS, NPCS, QUESTS, questRewardItem } from '../../../sim/data';
 import { CHRONICLER_TEMPLATE_IDS } from '../../../sim/deeds';
 import { craftsForPairTarget } from '../../../sim/professions/archetype';
@@ -15,9 +16,10 @@ import type { FocusTrapHandle } from '../../focus_manager';
 import { t } from '../../i18n';
 import { QUALITY_COLOR } from '../../icons';
 import { NPC_WINDOW_CLOSE_RANGE } from '../../npc_service_range';
-import { archetypeImageUrl } from '../../profession_art';
-import { buildAttunementPreview } from '../../profession_identity_view';
+import type { PainterHostPresentation } from '../../painter_host';
 import { svgIcon } from '../../ui_icons';
+import { archetypeImageUrl } from '../professions/profession_art';
+import { buildAttunementPreview } from '../professions/profession_identity_view';
 import { isStationMasterNpc } from '../vendor/train_view';
 import { isWarfareVendorNpc } from '../vendor/warfare_vendor_view';
 import { gossipMenuIsEmpty } from './gossip_menu';
@@ -53,7 +55,10 @@ export interface QuestDialogControllerDeps {
   openFocusTrap(root: () => HTMLElement | null): FocusTrapHandle;
   closeTransient(): void;
   hideTooltip(): void;
-  itemIcon(item: ItemDef): string;
+  /** The PainterHostPresentation.itemIcon signature, named from the seam
+   *  rather than re-typed; the quality parameter is shape uniformity only
+   *  here, since no copy payload reaches this surface, and is never passed. */
+  itemIcon: PainterHostPresentation['itemIcon'];
   itemTooltip(item: ItemDef): string;
   attachTooltip(element: HTMLElement, html: () => string): void;
   openChronicles(): void;
@@ -66,6 +71,7 @@ export interface QuestDialogControllerDeps {
   // to <body> without an explicit, still-live element handed in.
   openVendor(npcId: number, opener?: HTMLElement | null): void;
   openHeroicVendor(npcId: number, opener?: HTMLElement | null): void;
+  openCrucibleVendor(npcId: number, opener?: HTMLElement | null): void;
   /** The WARFARE quartermaster's sectioned honor shop. Same opener handoff as
    *  openVendor above: the dialog is hidden before the route fires. */
   openWarfareVendor(npcId: number, opener?: HTMLElement | null): void;
@@ -76,7 +82,6 @@ export interface QuestDialogControllerDeps {
   openCrafting(craftId: string): void;
   openMarket(): void;
   openDelveBoard(npcId: number): void;
-  openValeCup(): void;
   openCardDuel(): void;
   onOpenChange(open: boolean): void;
   voice: {
@@ -117,7 +122,9 @@ export class QuestDialogController {
     const world = this.deps.world();
     const npc = world.entities.get(npcId);
     if (npc?.kind !== 'npc') return;
-    if (NPCS[npc.templateId]?.banker) {
+    // The banker and the Riftwright both short-circuit the gossip menu: the
+    // sim's interact emits the window-opening event, identical on every host.
+    if (NPCS[npc.templateId]?.banker || NPCS[npc.templateId]?.riftForge) {
       world.targetEntity(npc.id);
       world.interact();
       return;
@@ -374,11 +381,19 @@ export class QuestDialogController {
     const hasTraining = isStationMasterNpc(npc.templateId, world.stationPlacements);
     const hasMarket = !!definition?.market;
     const hasHeroicVendor = !!definition?.heroicVendor;
+    const hasCrucibleVendor = !!definition?.crucibleVendor;
     const hasDelveBoard = Object.values(DELVES).some(
       (delve) => delve.boardNpcId === npc.templateId,
     );
-    const hasValeCup = npc.templateId === 'groundskeeper_bram';
     const hasCardMaster = !!definition?.cardMaster;
+    // A farmer NPC (the farming go-live) offers the husk-to-compost trade,
+    // the one UI affordance that sends convert_husks; gated on the NpcDef
+    // flag like the card master, never on an id. STATIC BY CONTRACT: the row
+    // sits outside the gossip-row write-elision signature (gossipRowSig reads
+    // the quest rows only), which is sound only while its predicate is this
+    // content flag. Gate it on live state (a husk count, the farmer range)
+    // and it must join the signature or the row goes stale between refreshes.
+    const hasFarmer = definition?.farmer === true;
     if (
       closeIfEmpty &&
       gossipMenuIsEmpty({
@@ -387,11 +402,12 @@ export class QuestDialogController {
         hasVendor,
         hasMarket,
         hasHeroicVendor,
+        hasCrucibleVendor,
         hasWarfareVendor,
         hasDelveBoard,
-        hasVcup: hasValeCup,
         hasCardMaster,
         hasTraining,
+        hasFarmer,
       })
     ) {
       this.close();
@@ -421,6 +437,10 @@ export class QuestDialogController {
         }),
       )}</div>`;
     }
+    // The Proving Shore's press-this-next glow: on the island every quest row
+    // pulses gold so a brand-new player never hunts for the next click
+    // (styles/components.css .qd-coach; the coach card family's island gate).
+    const coachClass = this.coachGlow() ? ' qd-coach' : '';
     for (const { questId, kind } of interesting) {
       const icon =
         kind === 'ready'
@@ -435,7 +455,7 @@ export class QuestDialogController {
           : kind === 'repeat'
             ? t('questUi.dialog.repeatableQuestAria', { name: title })
             : t('questUi.dialog.availableQuestAria', { name: title });
-      html += `<button type="button" class="qd-list-item" data-quest="${esc(questId)}" aria-label="${esc(aria)}">${icon}${esc(title)}</button>`;
+      html += `<button type="button" class="qd-list-item${coachClass}" data-quest="${esc(questId)}" aria-label="${esc(aria)}">${icon}${esc(title)}</button>`;
     }
     for (const questId of discussionQuests) {
       const title = this.deps.text.questTitle(questId);
@@ -476,6 +496,11 @@ export class QuestDialogController {
     if (hasHeroicVendor) {
       html += `<button type="button" class="qd-list-item" data-heroic-shop="1" aria-label="${esc(t('questUi.dialog.browseGoodsAria', { name: npcName }))}">${heroicMarkIconHtml()} ${esc(t('questUi.dialog.browseGoods'))}</button>`;
     }
+    if (hasCrucibleVendor) {
+      // Its OWN label and accessible name (the hasWarfareVendor rule): a sigil
+      // redemption counter never reads as generic "Browse Goods".
+      html += `<button type="button" class="qd-list-item" data-crucible-shop="1" aria-label="${esc(t('crucibleShop.browseAria', { name: npcName }))}"><span class="gold">${svgIcon('crafting')}</span> ${esc(t('crucibleShop.browse'))}</button>`;
+    }
     if (hasWarfareVendor) {
       // Its OWN label and accessible name: this row sits beside the generic
       // goods row above at a flagged NPC, so it can never reuse "Browse Goods".
@@ -486,11 +511,14 @@ export class QuestDialogController {
       const label = delve ? this.deps.text.delveName(delve.id) : t('delveUi.board.openDelve');
       html += `<button type="button" class="qd-list-item" data-delve-board="1" aria-label="${esc(t('delveUi.board.openDelveAria', { name: npcName }))}"><span class="gold">${svgIcon('skull')}</span> ${esc(label)}</button>`;
     }
-    if (hasValeCup) {
-      html += `<button type="button" class="qd-list-item" data-vcup="1" aria-label="${esc(t('hudChrome.vcup.gossipOpenAria'))}"><span class="gold">${svgIcon('ball')}</span> ${esc(t('hudChrome.vcup.gossipOpen'))}</button>`;
-    }
     if (hasCardMaster) {
       html += `<button type="button" class="qd-list-item" data-card-duel="1" aria-label="${esc(t('cardDuel.title'))}"><span class="gold">&#9824;</span> ${esc(t('cardDuel.title'))}</button>`;
+    }
+    if (hasFarmer) {
+      // The trade's feedback is the sim's own: the farmHusksConverted line
+      // and the farmDenied toasts (farm_event_feedback.ts), so the row sends
+      // and closes like the market row rather than opening a window.
+      html += `<button type="button" class="qd-list-item" data-husk-trade="1" aria-label="${esc(t('hudChrome.farming.huskTradeAria', { name: npcName }))}"><span class="gold">${svgIcon('crafting')}</span> ${esc(t('hudChrome.farming.huskTrade'))}</button>`;
     }
     this.deps.element.innerHTML = html;
     this.deps.element.querySelectorAll<HTMLElement>('[data-quest]').forEach((item) => {
@@ -506,6 +534,9 @@ export class QuestDialogController {
     });
     this.bindRoute('[data-vendor]', (opener) => this.deps.openVendor(npc.id, opener));
     this.bindRoute('[data-heroic-shop]', (opener) => this.deps.openHeroicVendor(npc.id, opener));
+    this.bindRoute('[data-crucible-shop]', (opener) =>
+      this.deps.openCrucibleVendor(npc.id, opener),
+    );
     this.bindRoute('[data-warfare-shop]', (opener) => this.deps.openWarfareVendor(npc.id, opener));
     this.bindRoute('[data-train]', () => this.deps.openTrain(npc.id));
     if (masterCraft !== null) {
@@ -514,8 +545,20 @@ export class QuestDialogController {
     this.bindRoute('[data-unbind]', () => this.deps.openUnbind(npc.id));
     this.bindRoute('[data-market]', this.deps.openMarket);
     this.bindRoute('[data-delve-board]', () => this.deps.openDelveBoard(npc.id));
-    this.bindRoute('[data-vcup]', this.deps.openValeCup);
     this.bindRoute('[data-card-duel]', this.deps.openCardDuel);
+    // The husk trade goes straight to the world (IWorldFarming.convertHusks,
+    // both worlds; online it is the convert_husks command): no new dep, no
+    // window. The live world is read at click time, never captured at render.
+    // The husk trade opens NO successor window (the sim's own event lines are
+    // the feedback), so it is deliberately NOT a bindRoute consumer: that
+    // family closes with release(false) because it hands the trap opener to a
+    // successor window that restores focus when IT closes; with no successor
+    // that chain would drop keyboard focus to <body>. Send, then close WITH
+    // the trap's own focus restore.
+    this.deps.element.querySelector('[data-husk-trade]')?.addEventListener('click', () => {
+      this.deps.world().convertHusks();
+      this.close(true);
+    });
     this.bindClose();
     this.showAndFocus();
   }
@@ -649,6 +692,9 @@ export class QuestDialogController {
     this.attachRewardTooltip(questId);
     if (state === 'available') {
       const button = this.makeButton(t('questUi.dialog.accept'));
+      // Island Accept glows gold: the same press-this-next treatment as the
+      // gossip rows, so the accept step reads as the obvious next click.
+      if (this.coachGlow()) button.classList.add('qd-coach');
       if (quest.completionEffect && professionTargets.length === 0) button.disabled = true;
       button.addEventListener('click', () => {
         const liveWorld = this.deps.world();
@@ -665,6 +711,7 @@ export class QuestDialogController {
       this.deps.element.appendChild(button);
     } else if (state === 'ready') {
       const button = this.makeButton(t('questUi.dialog.completeQuest'));
+      if (this.coachGlow()) button.classList.add('qd-coach');
       button.addEventListener('click', () => {
         const liveWorld = this.deps.world();
         liveWorld.turnInQuest(questId);
@@ -709,6 +756,13 @@ export class QuestDialogController {
     button.type = 'button';
     button.textContent = label;
     return button;
+  }
+
+  /** The Proving Shore's press-this-next gate: island dialogs pulse their
+   *  quest rows and accept step gold (styles/components.css .qd-coach). */
+  private coachGlow(): boolean {
+    const player = this.deps.world().player;
+    return !!player && isOnProvingShore(player.pos.x, player.pos.z);
   }
 
   private paintProfessionPreview(element: HTMLElement, content: ProfessionPreviewContent): void {

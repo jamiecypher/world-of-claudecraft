@@ -5,11 +5,13 @@ import { addRimGlow, sharedUniforms } from '../src/render/gfx';
 import {
   installPbrPointLightShaderPruning,
   patchPbrRimGlowFragmentShader,
+  RIM_GLOW_DEFAULT_COLOR,
 } from '../src/render/pbr_fragment_shader';
 
 const RIM_DECLARATION = `      // WOC_PBR_RIM_REUSE
-      uniform float uRimBoost;`;
-const RIM_TERM = `      totalEmissiveRadiance += vec3(0.5, 0.6, 0.8) * 0.12 * uRimBoost *
+      uniform float uRimBoost;
+      uniform vec3 uRimColor;`;
+const RIM_TERM = `      totalEmissiveRadiance += uRimColor * 0.12 * uRimBoost *
         pow(1.0 - saturate(dot(normal, geometryViewDir)), 3.0);`;
 
 describe('PBR point-light fragment pruning', () => {
@@ -56,7 +58,11 @@ describe('PBR point-light fragment pruning', () => {
     const init = gfx.indexOf('export function initGfxTier');
     const install = gfx.indexOf('installPbrPointLightShaderPruning();', init);
     const probe = gfx.indexOf('const hints =', init);
-    const rendererCreated = renderer.indexOf('this.webgl = new THREE.WebGLRenderer');
+    // The context is created through the power-preference fallback
+    // (src/render/webgl_context_fallback.ts); the renderer still owns the site.
+    const rendererCreated = renderer.indexOf(
+      'const created = createRendererWebGL(canvas, createdContext);',
+    );
     const rendererInit = renderer.indexOf('initGfxTier(this.webgl)', rendererCreated);
     const firstCompile = renderer.indexOf('this.webgl.compile', rendererCreated);
     const firstRender = renderer.indexOf('this.webgl.render', rendererCreated);
@@ -85,6 +91,7 @@ describe('PBR character rim fragment pruning', () => {
     expect(rim).toBeGreaterThan(lights);
     expect(patched).not.toContain('dot(normal, normalize(vViewPosition))');
     expect(patched.match(/uRimBoost/g)).toHaveLength(2);
+    expect(patched.match(/uRimColor/g)).toHaveLength(2);
     expect(patched.match(/#include <emissivemap_fragment>/g)).toHaveLength(
       source.match(/#include <emissivemap_fragment>/g)?.length ?? 0,
     );
@@ -101,6 +108,8 @@ describe('PBR character rim fragment pruning', () => {
     material.onBeforeCompile(shader, {} as THREE.WebGLRenderer);
 
     expect(shader.uniforms.uRimBoost).toBe(sharedUniforms.uRimBoost);
+    expect(shader.uniforms.uRimColor).toBe(sharedUniforms.uRimColor);
+    expect(sharedUniforms.uRimColor.value.getHex()).toBe(RIM_GLOW_DEFAULT_COLOR);
     expect(shader.fragmentShader).toContain(RIM_TERM);
   });
 

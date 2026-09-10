@@ -76,12 +76,17 @@ export const GRAPHICS_DIAL_KEYS: readonly GraphicsDialKey[] = Object.freeze(
  *   (the exact medium-tier map size).
  * - high: the documented "Advanced-Medium" profile settingsFor's high tier
  *   copies (basic worn surface, reduced carpet, cavity relief) + the full
- *   high-tier post stack (SMAA + bloom + half-res AO) and 4096 shadows.
+ *   high-tier post stack (SMAA + bloom + half-res AO). The shadow dial's top
+ *   rung is one of the differences that cannot round-trip: the high TIER
+ *   renders a 2560 map, while the dial's High rung is the 4096 showcase
+ *   allocation, and no rung expresses "2560 WITH terrain-cast shadows" (the
+ *   Medium rung sheds those). The seed keeps the top rung, so a High-preset
+ *   mix carried into Advanced keeps terrain casting and buys the finer map.
  * - ultra: full relief/carpet/worn layers at the ultra execution, full-res
  *   AO, the 128-cell water field.
  * - insane: ultra plus the 4-tap full-clamp worn walk and the 8yd vista grid
- *   (shadows top out at High's 4096 map everywhere: the shadow dial is
- *   capped at level 1 and the retired 8192 rung clamps down to it).
+ *   (shadows top out at the dial's 4096 rung everywhere: it is capped at
+ *   level 1 and the retired 8192 rung clamps down to it).
  * The per-effect binaries (antiAliasing, bloomQuality, characterDetail) read
  * 0 Off / 1 On; ambientOcclusion adds the 0.5 half-resolution middle; the
  * viewDistance and waterQuality ladders map 0/0.5/1/2 onto whole render
@@ -109,7 +114,10 @@ const ADVANCED_DIAL_SEEDS: Readonly<Record<number, Readonly<Record<GraphicsDialK
     surfaceDetail: 0,
     effectsQuality: 0,
     shadowQuality: 0.5,
-    antiAliasing: 0,
+    // On at Medium, off at Low: the medium tier's own AA is the FXAA fused
+    // into the grade pass, which the grade-only effects level above keeps and
+    // the low tier (no grade pass, and a policy of no post AA) never had.
+    antiAliasing: 1,
     bloomQuality: 0,
     ambientOcclusion: 0,
     viewDistance: 0.5,

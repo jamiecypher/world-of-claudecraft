@@ -492,8 +492,10 @@ describe('Thornhollow field lights ride the renderer point-light budget', () => 
     // registry, the build must not register after a teardown won the race, and
     // dispose must unregister BEFORE it disposes the lights.
     const renderer = readFileSync(`${ROOT}src/render/renderer.ts`, 'utf8');
-    const buildStart = renderer.indexOf('buildBattleground(o, this.sim.cfg.seed, {');
-    const buildEnd = renderer.indexOf('this.bgViews.set(i, view);', buildStart);
+    // The registry hand-off lives in the host the renderer gives
+    // battleground_views.ts, which builds the copies (the branch was extracted).
+    const buildStart = renderer.indexOf('private battlegroundViewHost(): BattlegroundViewHost {');
+    const buildEnd = renderer.indexOf('compileGate:', buildStart);
     expect(buildStart).toBeGreaterThan(-1);
     expect(buildEnd).toBeGreaterThan(buildStart);
     const construction = renderer.slice(buildStart, buildEnd);
@@ -592,8 +594,9 @@ describe('the band fog is view distance, tier-identical (source pin)', () => {
   it('the battleground fog branch sets fixed values and reads no tier knob', () => {
     // A tier-conditional fog here would be a live see-farther exploit: pin
     // that the branch is unconditional and its values are the view-distance
-    // pair the design names.
-    const src = readFileSync(`${ROOT}src/render/renderer.ts`, 'utf8');
+    // pair the design names. The branch lives in fog_scene_state.ts (the
+    // renderer's extracted fog presets), which never reads a tier knob.
+    const src = readFileSync(`${ROOT}src/render/fog_scene_state.ts`, 'utf8');
     const start = src.indexOf("desired === 'battleground'");
     expect(start).toBeGreaterThan(-1);
     const branch = src.slice(start, src.indexOf('} else if', start + 1));
@@ -601,5 +604,17 @@ describe('the band fog is view distance, tier-identical (source pin)', () => {
     expect(branch).toContain('fog.far = 210');
     expect(branch).not.toContain('lowGfx');
     expect(branch).not.toContain('Governor');
+    // The renderer keeps the settle edge; a tier-conditional override added
+    // there after applyFogScenePreset returns would sit outside the module
+    // scan above, so pin that block knob-free too (its lowGfx guard is the
+    // pre-existing light-rig arm, not fog).
+    const rendererSrc = readFileSync(`${ROOT}src/render/renderer.ts`, 'utf8');
+    const settleStart = rendererSrc.indexOf('if (desired !== this.fogState) {');
+    expect(settleStart).toBeGreaterThan(-1);
+    const settle = rendererSrc.slice(settleStart, rendererSrc.indexOf('return;', settleStart));
+    expect(settle).toContain('applyFogScenePreset(desired, fog,');
+    expect(settle).not.toContain('fxLevel');
+    expect(settle).not.toContain('Governor');
+    expect(settle).not.toContain('dataset');
   });
 });

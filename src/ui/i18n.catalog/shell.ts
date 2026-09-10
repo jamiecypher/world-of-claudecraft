@@ -42,6 +42,8 @@ export const shellStrings = {
       connectingRealm: 'Connecting to world...',
       assetsFailed: 'Asset loading failed: try reloading. {error}',
       rendererFailed: 'Could not start the renderer: try reloading. {error}',
+      rendererContextLost:
+        'The 3D renderer lost its graphics context and could not recover. Please reload.',
       enterTimeout: 'Could not enter world. The connection timed out. Is the game server running?',
       connectionLost: 'Connection to the server was lost.',
       reconnectingAttempt:
@@ -56,6 +58,8 @@ export const shellStrings = {
         'Too many connections to this world are coming from your network. Please close extra game windows or try again in a few minutes.',
       messageRateExceeded:
         'You were disconnected for sending actions too quickly. Please wait a moment and log back in.',
+      // The admin-panel kick: {reason} is the operator's free text, interpolated verbatim.
+      kickedByModerator: 'A moderator has disconnected you: {reason}',
       tips: {
         classes:
           'Tip: each of the 9 classes plays differently. Try a few before committing to one.',
@@ -156,6 +160,13 @@ export const shellStrings = {
         quit: 'Quit',
         fatalBody: 'World of ClaudeCraft hit an unexpected error and needs to close.',
       },
+      // Borderless-mode title-bar control (index.html / play.html pre-game
+      // headers): the only way out when the shell hides the native window
+      // controls. Namespaced `titlebar`, never `window`, so the key never reads
+      // as a browser-global reach in the src/ui purity sweep.
+      titlebar: {
+        exitGame: 'Exit Game',
+      },
     },
     // Software-rendering notice (src/ui/gpu_notice_toast.ts): shown once when
     // the session runs on a software rasterizer (WARP/SwiftShader). Two body
@@ -177,6 +188,12 @@ export const shellStrings = {
         'This session is rendering on the integrated (power-saving) GPU. If this computer also has a discrete gaming GPU, set your browser to High performance under Settings > System > Display > Graphics, then restart it. The desktop app picks the discrete GPU automatically.',
       hybridBodyLinux:
         'This session is rendering on the integrated (power-saving) GPU. If this computer also has a discrete gaming GPU, your browser or graphics driver may offer its own GPU selection setting, or your distribution may offer a GPU switching tool (such as PRIME or optimus-manager). The desktop app picks the discrete GPU automatically.',
+      // The Linux desktop app could not start on the backend the player picked
+      // (Graphics > System) and rescued the session onto a lower one. Says what
+      // happened and that the game is fine, because it is: the fallback costs
+      // loading smoothness, never playability.
+      bodyRequestedBackend:
+        'The game could not start on the graphics backend you picked, so it is running on OpenGL instead. Everything works; loading and the first minutes may stutter more. You can pick a backend again under Options, Graphics, System.',
       hybridBodyOther:
         'This session is rendering on the integrated (power-saving) GPU. If this computer also has a discrete gaming GPU, check your browser and operating system graphics settings to enable it. The desktop app picks the discrete GPU automatically.',
       dismiss: 'Dismiss',

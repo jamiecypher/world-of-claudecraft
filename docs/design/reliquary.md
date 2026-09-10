@@ -170,17 +170,47 @@ repeat at every growth. It owes a release-note line whenever a growth ships.
 
 | Surface | Notes |
 |---|---|
-| Reliquary window | Primary; DESIGN.md window grammar; mobile full-bleed. |
-| HUD tracker | Always-on pinned-page strip beside the deed tracker; pins persist per character. |
+| Reliquary window | Primary; DESIGN.md window grammar; mobile full-bleed. The All / Catalogued / Missing chip row is ONE shared state painted on both the shelf list and the open page: on a shelf, Catalogued keeps illuminated pages and Missing hides them (`shelfPagePassesOwnedFilter` in `src/ui/reliquary_view.ts`), so a completionist can read only what remains without opening every page. The rail and shelf-card totals never move under a chip. |
+| HUD tracker | Pinned-page strip beside the deed tracker, on by default behind the `showReliquaryTracker` master switch; pins persist per character (visibility and seat: the subsection below). |
 | Live toast / combat log | Relic logged; page Illumination; rank up. All four emitters are node-built and clickable, deep-linking to the page. |
-| Book of Deeds | Unchanged; optional soft links from collection deeds. Also hosts the "Titles and Borders" shelf where a border is picked. |
-| Nameplate and portrait rings | The active border renders in-world as a slug-keyed accent (cosmetic only; carries no actionable information). |
-| Inspect card | Curator standing line, border accent, and the rank-5 Curator sigil (identity-wire note below). |
+| Book of Deeds | Optional soft links from collection deeds, plus the "Titles and Borders" shelf. Earned heraldry options show their canonical seal and material sample; hover and focus preview the world and interaction forms without equipping. |
+| World and unit frames | Active Deed Heraldry renders as a compact forged seal plus name ribbon in the world. The player frame and valid player targets reuse the seal at the circular portrait/name joint and pattern only the name header. No gameplay bar or non-player frame inherits it. |
+| Inspect card | Curator standing line, the compact Deed Heraldry banner with the localized granting-deed name, and the rank-5 Curator sigil (identity-wire note below). |
 | Character sheet / public sheet | Completion pair, Curator rank (labeled set/scope), and the capped recent-finds strip (ids and kinds; privacy note below). |
 | Wiki `/wiki` | Spoiler-safe catalog of pages and relic names, with the rule-7 outside-completion label (Retired / Personal tag plus note) on flagged pages; no personal progress. Also indexed by guide search. |
 | Population rarity | Two optional lines (relic tooltip, page header) served from an anonymous aggregate endpoint; online only, absent offline (section below). |
 | Discord / marquee | Optional marquee only for full-page Illumination or high Curator ranks; never spam per-relic. |
 | Steam / Epic achievements | Mapped ids mirror the Reliquary deeds to linked storefront profiles (see the mirror note below). |
+
+### HUD tracker visibility and seat
+
+The strip is on by default behind one persisted bool, `showReliquaryTracker`
+(`src/game/settings.ts`), which two controls share through the options seam:
+the eye toggle on the window's summary band (`aria-pressed`, pressed means
+shown, the paperdoll helm/playtime eye idiom) and the "Show Reliquary Tracker"
+row in Interface options. A hidden strip pays for no world reads (the view
+core early-outs before any completion or ownership-signature read, and clears
+its previous-build table so a later re-show never flashes fills that landed
+while hidden); pinning a page while it is hidden turns the switch back on (the
+classic objective-tracker convention: the pin expresses "I want this on my
+screen"), and unpinning never touches it. The whole `#right-tracker-stack`
+seats below the minimap column's measured bottom
+(`src/ui/tracker_stack_anchor.ts` over the `tracker_stack_anchor_core.ts`
+math, slow band plus coalesced resize, elided write), never a per-tier CSS
+constant; the stylesheet `top` values are only the no-JS first-paint seat.
+The tracker is DESKTOP ONLY: `body.mobile-touch` hides `#reliquary-tracker`
+outright, because the one line it still painted under the folded list crowded
+the band the minimap and the deed tracker share on touch. The Reliquary window
+itself stays reachable on touch from the More tray's `#mobile-reliquary`
+button, and the window's eye toggle plus the Interface options row still write
+`showReliquaryTracker` there (a cross-device setting that takes visible effect
+on desktop). The compact-tier count chip the stylesheet still declares for both
+trackers therefore renders only for `#deed-tracker` on touch: a small chip
+under the minimap cluster whose 40px tap floor is carried by an invisible hit
+extension (DESIGN.md 10.1) rather than the chip's own box. Pinned by
+`tests/reliquary_tracker_view.test.ts`, `tests/reliquary_tracker_hud.test.ts`,
+`tests/reliquary_window_behavior.test.ts`, and
+`tests/tracker_stack_anchor.test.ts`.
 
 ### Public sheet exposure (privacy note)
 
@@ -313,12 +343,12 @@ Book completion pair, and its title stays off the titles page (the
 non-terminating self-reference).
 
 The rank 5 bridge deed's border reward (`reliquary_gilt`, Eternal Spoils) is
-wearable in-world: one active border per character, selected in the Book of
-Deeds beside the title picker, rendered as a slug-keyed accent on the
-wearer's nameplate and on the player and target portrait rings (the deeds
-design doc owns the border reward definition; palettes live in
-`src/ui/deed_border_view.ts`). The rank-up banner and the Overview note say
-so at rank 5, and every LIVE border deed unlock logs a wear hint. Retro
+wearable Deed Heraldry: one active reward per character, selected in the Book
+of Deeds beside the title picker. Its forged seal and material appear on the
+world name ribbon, the player and valid-player-target headers, the inspect
+banner, and the picker previews. `src/ui/deed_border_view.ts` owns the single
+slug-to-palette-and-motif mapping for every form. The rank-up banner and the
+Overview note say so at rank 5, and every LIVE border deed unlock logs a wear hint. Retro
 back-credits (the on-join catch-up) log no hint at all, by the same rule that
 keeps them free of banners and celebration audio; the pure unlock plan is what
 draws that line, and `tests/deeds_view.test.ts` pins it.
@@ -465,12 +495,30 @@ evaluated over the ownership options.
   weapon skins are `store`. The **Rift gear exclusion is permanent**: derived
   tier-mirror pools paid out as one uniform pick are not a route a player can
   aim at a single relic, so they are not listed. The reins ladder IS such a
-  route and is listed.
+  route and is listed. The **recipe-pattern exclusion is likewise permanent**
+  (Phase 11 of the Masterwrought packet): `kind: 'recipe'` pattern items are
+  repeatable, tradable, consumed-on-learn knowledge, not conquerable unique
+  loot, so no pattern takes a page; the derivation-side carve-out and its
+  exactly-matching vacuity guard live in `tests/reliquary_content.test.ts`.
 - **Obtain counts omit at zero, widened.** A movement grant at ANY clear-meter
   value must not stamp a clear count. A market buy at 12 clears must never
   print "first found on clear 12": that is the same fabricated-provenance class
   the zero case refuses. Both the tooltip and the aria line drop together when
   the stamp is absent.
+- **A player-named legendary INSTANCE takes no page and no rung.** The
+  promotion that raises a Perfected copy stamps `rolled.quality: 'legendary'`
+  and a player-chosen name on ONE copy and mints no item def, while Reliquary
+  state is def-keyed and mark-keyed by construction (rules 3 and 5, and
+  `serializeReliquaryState`), so a rung keyed on the named copy sits outside
+  the model rather than merely unbuilt. The Book of Deeds carries the whole
+  cosmetic record with two credits, `col_first_legendary` and
+  `prog_legendmaker`. A bounded instance-CLASS mark is declined on the same
+  ruling: it would say only that a promotion happened, which both deeds already
+  say. Note the ground, which is the def-keyed model and NOT a conquerability
+  claim: an earlier decline of a crafted item rested on conquerability and was
+  right for the wrong reason, since this shelf does catalogue crafted uniques.
+  Masterwrought ruling `qr-19-named-legendary-instance-reliquary-page`
+  (2026-09-01) settled this instance-versus-definition boundary.
 
 ## Migration hazards (one-way contracts)
 
@@ -521,14 +569,26 @@ intentional and pinned by a test.
   rows in those lists; the suite cannot catch an author opting itself out.
 - **Uncatalogued rare-plus items remain** repo-wide, all of them open-world or
   Rift sourced. That is a known backlog, not a drift bug.
-- **Three catalog slots are permanently unfillable today** and keep 100 percent
+- **Two catalog slots are permanently unfillable today** and keep 100 percent
   catalog completion (and therefore the whole-catalog capstone deed)
-  unreachable: the engineering masterwork mark (every engineering recipe
-  produces a slotless, statless tool, so the masterwork proc can never fire)
-  and two mount reins (one with no acquisition path, one dev-grant only). This
-  is why the capstone deed is marked as a feat and kept out of the Book
-  completion pair. See "Open owner calls" for the consequence that is still
-  undecided.
+  unreachable: two mount reins (one with no acquisition path, one dev-grant
+  only). The engineering masterwork mark was the third until masterwrought
+  Phase 11o (2026-08-25): its un-pend condition was met by copperlens_ocular,
+  a stats-bearing non-masterwrought engineering output, so craftIsGearCapable
+  flipped through the live gate rather than through the Phase 12 suppression
+  move the earlier note predicted, and the mark is earnable and hinted. R1
+  masterwork suppression still stands for the APEX def (craftBonusStatsFor in
+  crafting.ts returns null for masterwrought defs; gyrelens_array bakes
+  nothing). AMENDED 2026-08-26 (Masterwrought Phase 12): the effect-gate move
+  landed. A proc on an apex craft now grants a Perfecting head start
+  (perfectingHeadStart in resolveCraftForRecipe, stamping
+  ItemInstancePayload.perfecting) and reports CraftResult.masterwork, so the
+  masterwork mark family credits apex procs too; craftBonusStatsFor itself is
+  byte-unchanged (an apex def still bakes nothing), so the craftIsGearCapable
+  derivation and its pins do not move.
+  The two mount slots are why the capstone deed is marked as a feat and kept
+  out of the Book completion pair. See "Open owner calls" for the consequence
+  that is still undecided.
 - **Re-acquiring an already-discovered mount's reins never runs the completion
   ladder live**, because first-discovery fires once while mount ownership is
   possession-based. A player whose last missing relic is reins they once owned
@@ -548,7 +608,7 @@ intentional and pinned by a test.
   shipping binary, because the join-time retro pass grants every qualifying
   rank deed in the same session that then feeds the reconcile push.
   - **HOLD the registration of the whole-catalog capstone achievement** until
-    the three unfillable slots above land. The deed is unearnable until then,
+    the two unfillable slots above land. The deed is unearnable until then,
     and a registered impossible achievement is player-visible on both
     storefronts as a permanent 0.0 percent unlock rate.
   - Both mirrors default OFF, so nothing is live until they are enabled.
@@ -597,9 +657,14 @@ None of these is a defect. Each is a product decision with no ruling yet.
   (both pages hold earnable relics). The clean shapes are a per-relic
   unearnable flag that the nearly-complete rule skips, or landing the three
   slots. Recorded rather than fixed, because it is a product call.
-- **Compact-tier mobile collision.** On the compact mobile tier the minimap
-  coordinate readout and clock overprint the tracker chip. Raised during the
-  packet and never ruled on; it ships as-is.
+- **Compact-tier mobile collision (FIXED, kept for the record).** On the
+  compact mobile tier the minimap coordinate readout and clock used to
+  overprint the tracker chip, because the stack's seat was a per-tier CSS
+  constant that could not see the compact transform or a wrapping zone label.
+  Fixed by seating `#right-tracker-stack` below the minimap column's measured
+  bottom (`src/ui/tracker_stack_anchor.ts` over the
+  `tracker_stack_anchor_core.ts` math; `tests/tracker_stack_anchor.test.ts`),
+  with the stylesheet constants kept only as the no-JS first-paint seat.
 - **The Overview shared-uniques note is now imprecise.** It tells the player
   that shelf and page counts list every slot, so a relic on two pages is
   counted by each. Since the outside-completion pages landed, shelf totals skip

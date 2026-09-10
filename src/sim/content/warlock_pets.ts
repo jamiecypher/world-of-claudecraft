@@ -3,7 +3,7 @@ import type { MobTemplate } from '../types';
 // Warlock demon pets. Summoned (never tamed) demons owned by a warlock; they
 // follow/assist exactly like hunter pets (see Sim.updatePet) but never go feral.
 // A slain or dismissed demon unravels. The Emberkin is a ranged Felbolt damage
-// pet; the Gloomshade is a sturdy melee tank that taunts to hold threat.
+// pet; the Duskmurk is a sturdy melee tank that taunts to hold threat.
 // Created at the owner's level (createMob reads the passed level, not
 // minLevel/maxLevel).
 export const WARLOCK_PET_MOBS: Record<string, MobTemplate> = {
@@ -13,13 +13,14 @@ export const WARLOCK_PET_MOBS: Record<string, MobTemplate> = {
     minLevel: 1,
     maxLevel: 60,
     family: 'demon',
-    // squishy ranged caster: low health and armor, steady Felbolt damage
-    hpBase: 30,
-    hpPerLevel: 12,
-    dmgBase: 5,
-    dmgPerLevel: 1.1,
+    // Ranged caster: still less durable than Gloomshade, but sturdy enough to
+    // survive ordinary solo pulls and contribute meaningful Felbolt damage.
+    hpBase: 40,
+    hpPerLevel: 17,
+    dmgBase: 6,
+    dmgPerLevel: 1.25,
     attackSpeed: 2.0,
-    armorPerLevel: 8,
+    armorPerLevel: 12,
     moveSpeed: 5.2,
     aggroRadius: 8,
     loot: [],
@@ -41,7 +42,7 @@ export const WARLOCK_PET_MOBS: Record<string, MobTemplate> = {
   },
   gloomshade: {
     id: 'gloomshade',
-    name: 'Gloomshade',
+    name: 'Duskmurk',
     minLevel: 1,
     maxLevel: 60,
     family: 'demon',

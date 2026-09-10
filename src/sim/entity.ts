@@ -1,8 +1,11 @@
+import { resetCraftedCollectionState } from './combat/crafted_collection_effects';
 import { BATTLE_STANCE, buildStanceAura } from './combat/warrior_stances';
+import { crucibleCollectionFamilyForSet } from './content/crucible_collections';
 import type { TalentModifiers } from './content/talents';
 import { resolveActiveWeaponSkin } from './content/weapon_skin_rules';
 import { aggregateSetBonuses, CLASSES, ITEMS, MOBS, type NpcDef } from './data';
 import { canDualWield, isShieldItem } from './equipment_rules';
+import { activeItemInstanceStats } from './item_instance_stats';
 import { meetsLevelRequirement } from './item_level_req';
 import { pvpFractionsFromRatings } from './pvp';
 import type {
@@ -72,6 +75,7 @@ function baseEntity(id: number, pos: Vec3): Entity {
     attackPower: 0,
     rangedPower: 0,
     spellPower: 0,
+    healPower: 0,
     meleeHaste: 0,
     rangedHaste: 0,
     spellHaste: 0,
@@ -136,6 +140,7 @@ function baseEntity(id: number, pos: Vec3): Entity {
     queuedOnSwing: null,
     queuedCastAbility: null,
     queuedCastAim: null,
+    queuedCastTargetId: null,
     fiveSecondRule: 99,
     comboPoints: 0,
     comboUntil: -1,
@@ -200,8 +205,10 @@ function baseEntity(id: number, pos: Vec3): Entity {
     evadeStall: 0,
     chaseStall: 0,
     evadeEpoch: 0,
-    combatExitHoldUntil: 0,
     chainPullInbound: false,
+    // The instance combat hold's pin clock: present from birth (undefined) so a
+    // mob's shape never forks on its first pin or release.
+    evadeInPlace: undefined,
     fleeTimer: 0,
     fleeReturnTimer: 0,
     hasFled: false,
@@ -234,9 +241,12 @@ function baseEntity(id: number, pos: Vec3): Entity {
     offhandItemId: null,
     weaponSkinLoadout: {},
     weaponSkinId: null,
+    mountSkinId: null,
     equippedItems: {},
     equippedInstances: {},
     guild: '',
+    pledgeGuild: '',
+    guildTier: 0,
     title: null,
     border: null,
   };
@@ -248,6 +258,7 @@ export function createPlayer(id: number, cls: PlayerClass, pos: Vec3, name: stri
   e.kind = 'player';
   e.templateId = cls;
   e.name = name;
+  e.dungeonEntrySeq = 0;
   e.level = 1;
   e.resourceType = def.resourceType;
   e.color = def.color;
@@ -316,6 +327,7 @@ export function recalcPlayerStats(
   };
   const setCounts = new Map<string, number>();
   let bonusSp = 0; // flat Spell Power from gear affixes + buff_spellpower auras
+  let bonusHealPower = 0; // flat Healing Power from gear affixes (heals only)
   let bonusCritRating = 0;
   let bonusHasteRating = 0;
   let bonusHitRating = 0;
@@ -334,6 +346,7 @@ export function recalcPlayerStats(
     if (!meetsLevelRequirement(lvl, item)) continue;
     if (item.set) setCounts.set(item.set, (setCounts.get(item.set) ?? 0) + 1);
     bonusSp += item.spellPower ?? 0;
+    bonusHealPower += item.healPower ?? 0;
     bonusCritRating += item.critRating ?? 0;
     bonusHasteRating += item.hasteRating ?? 0;
     bonusHitRating += item.hitRating ?? 0;
@@ -353,7 +366,7 @@ export function recalcPlayerStats(
     // rolled.stats as its authoritative aggregate). The equip path carries the
     // consumed inventory instance into equipmentInstance, so every source applies.
     // A plain piece has no entry here, so this is a no-op for the common case.
-    const rolled = equipmentInstance?.[slot]?.rolled?.stats;
+    const rolled = activeItemInstanceStats(equipmentInstance?.[slot]);
     if (rolled) {
       s.str += Number.isFinite(rolled.str) ? rolled.str : 0;
       s.agi += Number.isFinite(rolled.agi) ? rolled.agi : 0;
@@ -364,12 +377,19 @@ export function recalcPlayerStats(
       bonusSp += Number.isFinite(rolled.spellPower) ? rolled.spellPower : 0;
       bonusCritRating += Number.isFinite(rolled.critRating) ? rolled.critRating : 0;
       bonusHasteRating += Number.isFinite(rolled.hasteRating) ? rolled.hasteRating : 0;
+      // A Riftbound band's verdant gem line (rift/band_ladder.ts); no other
+      // per-copy writer authors hit, so a plain copy stays a no-op here too.
+      bonusHitRating += Number.isFinite(rolled.hitRating) ? rolled.hitRating : 0;
     }
   }
   // Item-set bonuses from equipped pieces. Flat primary stats join the gear
   // totals so they feed every derivation below; AP/crit/pushback fold in at
   // their own steps (bonusAp, critChance, castPushbackReduction, knockbackResistance).
   const setEff = aggregateSetBonuses(setCounts);
+  resetCraftedCollectionState(
+    e,
+    [...setCounts].find(([id, count]) => count >= 2 && crucibleCollectionFamilyForSet(id))?.[0],
+  );
   s.str += setEff.str;
   s.agi += setEff.agi;
   s.sta += setEff.sta;
@@ -403,6 +423,7 @@ export function recalcPlayerStats(
     else if (a.kind === 'debuff_ap') bonusAp -= a.value;
     else if (a.kind === 'buff_armor') flatAuraArmor += a.value;
     else if (a.kind === 'buff_int') s.int += a.value;
+    else if (a.kind === 'buff_str') s.str += a.value;
     else if (a.kind === 'buff_agi') s.agi += a.value;
     else if (a.kind === 'buff_spi') s.spi += a.value;
     else if (a.kind === 'buff_sta') s.sta += a.value;
@@ -495,6 +516,12 @@ export function recalcPlayerStats(
     // band while the bear owns the classic big-pool identity. Leather peaks
     // ~1700-2100 armor vs the warrior's 2861; the form multiplier still fakes
     // the missing plate tier, the Dire Bear logic.
+    // Provenance (qr-19-ref-armor-calibration-constant, 2026-09-01): the
+    // warrior figure quoted above is a PINNED calibration constant from the
+    // floor suites, not a live catalog read. The committed max-armour kit pins
+    // at 4085 (tests/heroic_difficulty_floors.test.ts), and whether 2861 was
+    // ever the raw kit armour or a prot-mastery-folded reading is UNSETTLED, so
+    // it is not re-based here and rides the packet's R5 re-measure.
     s.armor = Math.round(s.armor * 2.1);
     bonusAp += 15 + Math.round(s.agi * 1.5);
   }
@@ -628,6 +655,9 @@ export function recalcPlayerStats(
   // Spell Power: Intellect converted via SPELL_POWER_PER_INT plus flat Spell Power
   // from gear/buffs. Floored at 0 so an Intellect-draining debuff can't go negative.
   e.spellPower = Math.max(0, Math.round(s.int * SPELL_POWER_PER_INT + bonusSp));
+  // Healing Power rides ON TOP of Spell Power (spell power adds to healing;
+  // healing power never adds to damage): heal/HoT/absorb riders read this.
+  e.healPower = Math.max(0, e.spellPower + bonusHealPower + setEff.healPower);
   e.critRating = bonusCritRating + setEff.critRating;
   e.hasteRating = bonusHasteRating + setEff.hasteRating;
   // Hit rating (gear + set bonuses) folds into a hit fraction that combat subtracts
@@ -667,7 +697,13 @@ export function recalcPlayerStats(
   e.critDmgSpellBonus = mods?.global.critDmgSpellPct ?? 0;
   e.critDmgPhysBonus = mods?.global.critDmgPhysPct ?? 0;
   e.critDmgHealBonus = mods?.global.critDmgHealPct ?? 0;
-  e.castPushbackReduction = setEff.castPushbackReduction;
+  // Stat-set and talent-seam pushback sources MAX-combine (never sum past
+  // immunity); the set aggregation already clamped its own side to 0..1 and
+  // the talent side is authored 0..1 (the Crucible caster/healer 2pc rider).
+  e.castPushbackReduction = Math.min(
+    1,
+    Math.max(setEff.castPushbackReduction, mods?.global.castPushbackReduction ?? 0),
+  );
   e.knockbackResistance = setEff.knockbackResistance;
   e.ccDurationReduction = setEff.ccDurationReduction;
   // Floored at 0: an off-balance debuff (negative buff_dodge) can drive dodge to nothing.
@@ -758,6 +794,9 @@ export function createMob(id: number, template: MobTemplate, level: number, pos:
   const dmgMult = template.elite ? 1.5 : 1;
   e.maxHp = Math.round((template.hpBase + template.hpPerLevel * (level - 1)) * hpMult);
   e.hp = e.maxHp;
+  if (template.damageFloorPct !== undefined) {
+    e.damageFloorHp = Math.ceil(e.maxHp * template.damageFloorPct);
+  }
   const dmg = (template.dmgBase + template.dmgPerLevel * (level - 1)) * dmgMult;
   e.weapon = {
     min: Math.round(dmg * 0.8),
@@ -773,6 +812,8 @@ export function createMob(id: number, template: MobTemplate, level: number, pos:
   e.swingTimer = 0;
   // Telegraph the first War Stomp: delay it one full interval after engage.
   if (template.stomp) e.stompTimer = template.stomp.every;
+  // Telegraph the first pulse blast the same way: one full interval after engage.
+  if (template.aoePulse) e.pulseTimer = template.aoePulse.every;
   // Telegraph the first Banshee's Wail the same way: one full interval after engage.
   if (template.terrify) e.terrifyTimer = template.terrify.every;
   // Telegraph the first Howling Gale the same way: one full interval after engage.
@@ -802,6 +843,15 @@ export function createMob(id: number, template: MobTemplate, level: number, pos:
   // path: the camp loop, a brood egg hatching a whelp at runtime, a dev spawn. Draws
   // no rng itself, so no spawn's draw position moves.
   if (template.offStreamIdle) e.offStreamRng = true;
+  // A friendly practice dummy is an ALLY: it spawns non-hostile and carries the
+  // entity flag sim.isFriendlyTo reads to open it to heals. Set here rather than
+  // at one spawn site so every path (camp loop, dev spawn, editor) agrees. Its
+  // health and armor are stamped separately from the reference kit
+  // (mob/practice_dummies.ts), which cannot be reached from this module.
+  if (template.friendlyPracticeTarget) {
+    e.hostile = false;
+    e.friendlyPracticeTarget = true;
+  }
   return e;
 }
 

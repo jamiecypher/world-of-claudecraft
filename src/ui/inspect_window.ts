@@ -19,7 +19,13 @@ import type { EquipSlot, ItemInstancePayload, PlayerClass, SkinCatalog } from '.
 import { attachAvatarFallback } from './avatar_fallback';
 import type { PaperdollSlot } from './char_view';
 import { CURATOR_SIGIL_GLOW, curatorSigilBadgeClass, curatorSigilDataUrl } from './curator_sigil';
-import { deedTitleText } from './deed_i18n';
+import {
+  DEED_HERALDRY_ATTR,
+  DEED_HERALDRY_MOTIF_ATTR,
+  deedHeraldryMotifSvg,
+  deedHeraldryStyle,
+} from './deed_border_view';
+import { deedName, deedTitleText } from './deed_i18n';
 import {
   devCardBadgeClass,
   devTierBadgeDataUrl,
@@ -38,7 +44,7 @@ import {
   holderTierDisplayName,
 } from './holder_tier';
 import { formatNumber, t } from './i18n';
-import { iconDataUrl, QUALITY_COLOR } from './icons';
+import { iconDataUrl } from './icons';
 import {
   buildInspectRemoteView,
   buildInspectView,
@@ -47,6 +53,7 @@ import {
   type InspectCuratorModel,
   type InspectDevModel,
   type InspectDiscordModel,
+  type InspectHeaderModel,
   type InspectHolderModel,
 } from './inspect_view';
 import type { PainterHostPresentation } from './painter_host';
@@ -54,6 +61,7 @@ import { hydratePortraits, portraitChipHtml } from './portrait_chip';
 import { qualityGlowShadow } from './quality_glow';
 import { curatorRankNameKey } from './reliquary_view';
 import { svgIcon } from './ui_icons';
+import { wornItemCellParts } from './worn_item_cell_view';
 
 /** The inspected entity fields the painter reads (a structural subset of the
  *  live EntityView / ClientWorld mirror; all already client-side). */
@@ -158,6 +166,11 @@ export class InspectWindow {
     e: InspectEntity,
     now: number,
     selfStanding?: { curatorRank: number; owned: number; total: number } | null,
+    // The viewer's own LIVE worn payloads (IWorld.equipmentInstances), passed
+    // only for self-inspect, same doctrine as selfStanding: the entity mirror
+    // is eqi-shaped ONLINE (no perfected), so without this the self card's
+    // Unique-Equipped tag would diverge between hosts (2026-08-27 ruling).
+    selfEquippedInstances?: Partial<Record<EquipSlot, ItemInstancePayload>>,
   ): void {
     const cls = e.templateId as PlayerClass;
     const el = this.deps.root();
@@ -172,11 +185,13 @@ export class InspectWindow {
         skinCatalog: e.skinCatalog ?? 'class',
         deedTitleText: e.title ? deedTitleText(e.title) : '',
         border: e.border ?? null,
+        borderDeedName: e.border ? deedName(e.border) : '',
         curatorRank: e.curatorRank ?? 0,
         relicsOwned: typeof e.relicsOwned === 'number' ? e.relicsOwned : null,
         relicsTotal: typeof e.relicsTotal === 'number' ? e.relicsTotal : null,
         selfStanding: selfStanding ?? null,
         equippedItems: e.equippedItems,
+        equippedInstances: selfEquippedInstances ?? e.equippedInstances,
         holderTier: e.holderTier ?? 0,
         holderBalance: e.holderBalance ?? null,
         discordTier: e.discordTier ?? 0,
@@ -194,25 +209,23 @@ export class InspectWindow {
     );
     markDialogRoot(el, { labelledBy: 'inspect-window-title' });
     const { header } = model;
-    const titleHtml = header.deedTitle
-      ? `<div class="inspect-title">${esc(header.deedTitle)}</div>`
-      : '';
-    el.innerHTML =
-      this.panelTitleHtml() +
-      `<div class="inspect-card">` +
-      `<div class="inspect-name"${this.borderAttrs(header.border)}>${esc(header.name)}</div>` +
-      titleHtml +
-      `<div class="inspect-meta">${esc(
-        t('itemUi.equipment.levelClass', {
-          level: formatNumber(header.level, { maximumFractionDigits: 0 }),
-          className: classDisplayName(cls),
-        }),
-      )}</div>` +
-      this.curatorLineHtml(model.curator) +
+    const standingHtml = `<div class="inspect-meta">${esc(
+      t('itemUi.equipment.levelClass', {
+        level: formatNumber(header.level, { maximumFractionDigits: 0 }),
+        className: classDisplayName(cls),
+      }),
+    )}</div>${this.curatorLineHtml(model.curator)}`;
+    const honorHtml =
       this.holderHtml(model.badges.holder) +
       this.discordHtml(model.badges.discord) +
       this.devHtml(model.badges.dev) +
-      this.curatorHtml(model.badges.curator) +
+      this.curatorHtml(model.badges.curator);
+    el.innerHTML =
+      this.panelTitleHtml() +
+      `<div class="inspect-card">` +
+      this.headerHtml(header) +
+      `<div class="inspect-standing-row">${standingHtml}</div>` +
+      (honorHtml ? `<div class="inspect-honor-rail">${honorHtml}</div>` : '') +
       `</div>` +
       // The class-colored model stage, delivered as a CSS custom property so the
       // stylesheet paints the border / glow / haze in the inspected player's hue.
@@ -237,10 +250,8 @@ export class InspectWindow {
     }
     const leftCol = el.querySelector('#inspect-equip-left');
     const rightCol = el.querySelector('#inspect-equip-right');
-    for (const cell of model.gear.left)
-      leftCol?.appendChild(this.buildSlotRow(cell, e.equippedInstances[cell.slot]));
-    for (const cell of model.gear.right)
-      rightCol?.appendChild(this.buildSlotRow(cell, e.equippedInstances[cell.slot]));
+    for (const cell of model.gear.left) leftCol?.appendChild(this.buildSlotRow(cell));
+    for (const cell of model.gear.right) rightCol?.appendChild(this.buildSlotRow(cell));
     const stage = el.querySelector<HTMLElement>('#inspect-model-preview');
     if (stage) {
       this.deps.mountPreview(stage, {
@@ -292,44 +303,62 @@ export class InspectWindow {
 
   // One read-only equipment row for the inspect window: icon, slot name, and the
   // equipped item (quality-tinted, quality-glow socket) with its tooltip. No
-  // unequip / drag affordances (another player's gear is view-only).
-  private buildSlotRow(cell: PaperdollSlot, instance?: ItemInstancePayload): HTMLElement {
-    const { slot, item } = cell;
+  // unequip / drag affordances (another player's gear is view-only). Like the
+  // character sheet's buildSlotRow, the row describes the worn COPY (the
+  // all-surfaces item-cell rule): the cell's eqi-projected instance drives the
+  // effective quality (row color, icon rim, glow) and a promoted copy's
+  // player-chosen name replaces the def name. The chosen name is
+  // player-authored text, so it is esc'd raw, never through t().
+  private buildSlotRow(cell: PaperdollSlot): HTMLElement {
+    const { slot, item, instance } = cell;
     const row = document.createElement('div');
     row.className = 'equip-slot';
-    const qColor = item ? (QUALITY_COLOR[item.quality ?? 'common'] ?? '') : '';
+    const parts = item ? wornItemCellParts(item, instance) : null;
+    const wornName = parts ? parts.name : null;
+    const qColor = parts ? parts.color : '';
     const icon = item
-      ? this.deps.itemIcon(item)
+      ? this.deps.itemIcon(item, parts?.quality)
       : `<img class="item-icon" src="${iconDataUrl('item', 'slot_empty')}" alt="" draggable="false">`;
-    row.innerHTML = `${icon}<div><div class="slot-name">${esc(this.deps.slotName(slot))}</div><div class="slot-item"${item ? ` style="color:${qColor}"` : ''}>${item ? esc(itemDisplayName(item)) : esc(t('itemUi.equipment.empty'))}</div></div>`;
+    row.innerHTML = `${icon}<div><div class="slot-name">${esc(this.deps.slotName(slot))}</div><div class="slot-item"${item ? ` style="color:${qColor}"` : ''}>${wornName !== null ? esc(wornName) : esc(t('itemUi.equipment.empty'))}</div></div>`;
     if (item) {
       const iconEl = row.querySelector<HTMLImageElement>('.item-icon');
       if (iconEl) iconEl.style.boxShadow = qualityGlowShadow(qColor);
-      this.deps.attachTooltip(row, () => this.deps.itemTooltip(item, instance));
+      this.deps.attachTooltip(row, () => this.deps.itemTooltip(item, instance ?? undefined));
     }
     return row;
   }
 
-  // The Book of Deeds border accent on the header name row: the cold-window twin
-  // of the unit-frame portrait ring, and the resting form of the same cartouche
-  // the overhead nameplate draws around a name. The SLUG rides in data-border
-  // (the stylesheet gates on a non-empty value) and the palette in the SAME three
-  // custom properties the ring uses, so one treatment and zero per-slug colors
-  // live in CSS. The pure core already gated the slug on the palette, so a
-  // borderless / stale / title-reward / drifted id arrives null and paints
-  // nothing at all, exactly like paintPortraitBorder writing ''.
+  private headerHtml(header: InspectHeaderModel): string {
+    const titleHtml = header.deedTitle
+      ? `<div class="inspect-title">${esc(header.deedTitle)}</div>`
+      : '';
+    const border = header.border;
+    if (!border) return `<div class="inspect-name">${esc(header.name)}</div>${titleHtml}`;
+    return (
+      `<div class="inspect-heraldry-banner"${this.borderAttrs(border)}>` +
+      `<div class="inspect-heraldry-face deed-heraldry-plaque deed-heraldry-plaque-ceremonial"${this.borderIdentityAttrs(border)}>` +
+      deedHeraldryMotifSvg(border.motif, 'deed-heraldry-pattern') +
+      `<div class="inspect-heraldry-copy">` +
+      `<div class="inspect-name">${esc(header.name)}</div>` +
+      titleHtml +
+      `</div></div>` +
+      `<span class="deed-heraldry-seal" aria-hidden="true">${deedHeraldryMotifSvg(border.motif, 'deed-heraldry-seal-art')}</span>` +
+      `<div class="inspect-heraldry-deed deed-heraldry-plaque deed-heraldry-plaque-tab"${this.borderIdentityAttrs(border)}>${esc(border.deedName)}</div>` +
+      `</div>`
+    );
+  }
+
+  // The pure core already palette-gated the slug. One shared style builder
+  // carries the exact material tokens every cold heraldry surface consumes.
   private borderAttrs(border: InspectBorderModel | null): string {
     if (!border) return '';
-    // The three palette values are escaped like the slug on the line above.
-    // Honest scope: esc() blocks an attribute BREAKOUT (quotes, angle
-    // brackets), which is the exploitable hole; it does NOT neutralize CSS
-    // declaration syntax inside the attribute. Today that distinction is moot
-    // (values come from the frozen deed_border_view palette and the core nulls
-    // unknown slugs); if a palette source ever becomes dynamic, validate the
-    // values against a hex pattern instead of leaning on this escape.
+    return `${this.borderIdentityAttrs(border)} style="${esc(deedHeraldryStyle(border))}"`;
+  }
+
+  private borderIdentityAttrs(border: InspectBorderModel): string {
     return (
-      ` data-border="${esc(border.slug)}"` +
-      ` style="--border-accent-frame:${esc(border.frame)};--border-accent-edge:${esc(border.edge)};--border-accent-glow:${esc(border.glow)}"`
+      ` ${DEED_HERALDRY_ATTR}="${esc(border.slug)}"` +
+      ` ${DEED_HERALDRY_MOTIF_ATTR}="${border.motif}"`
     );
   }
 

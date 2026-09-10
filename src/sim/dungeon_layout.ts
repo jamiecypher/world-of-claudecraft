@@ -5,6 +5,7 @@
 // the old hand-mirroring between renderer geometry and collider literals.
 // Sim layer: no three.js imports.
 import type { Collider } from './colliders';
+import { IGNIVAR_ARENA_SHELL_POLYGON } from './ignivar_arena';
 import {
   type AuthoredDecor,
   type AuthoredDoor,
@@ -236,41 +237,169 @@ export const SANCTUM_LAYOUT: DungeonLayout = (() => {
   };
 })();
 
-// Nythraxis' Abandoned Crypt raid room: a long dark nave ending in one large
-// fighting arena. It stays within the shared wall-width contract, but leaves the
-// central floor open so ten players can spread, stack, and reach three wardstones.
-export const NYTHRAXIS_LAYOUT: DungeonLayout = (() => {
-  const pillars: GridPoint[] = [];
-  for (const z of [18, 38, 60, 82, 106]) {
-    for (const x of [-90, -45, 45, 90]) pillars.push({ x, z });
-  }
-  return {
-    zMin: -19,
-    zMax: 126,
-    sideWallZ: 53.5,
-    sideWallHd: 73,
-    wallX: 230,
-    endWallHw: 231,
-    floorHalfX: 228,
-    pillars,
-    tombs: [
-      { x: -210, z: 20 },
-      { x: 210, z: 20 },
-      { x: -210, z: 42 },
-      { x: 210, z: 42 },
-      { x: -210, z: 64 },
-      { x: 210, z: 64 },
-    ],
-    stubs: [],
-    dais: { x: 0, z: 96, r: 13.5 },
-  };
-})();
+// Nythraxis' Abandoned Crypt raid room: one fighting hall, about 100 yd wide
+// by 100 deep (owner decision 2026-09-04, twice the first compact cut: the old
+// 460 by 145 hall let the raid stand still; the redo's floor hazards, the sigil
+// drag, and Bone Storm want a floor the raid has to share but can still run
+// across). The boss dais keeps its local position (0, 96) with 20 yd behind
+// it so the encounter's spawn-relative geometry is unchanged; six pillars sit
+// well off the centre line so the middle stays open for the drag and the
+// charges, and the tombs sit in the wall line.
+export const NYTHRAXIS_LAYOUT: DungeonLayout = {
+  zMin: 16,
+  zMax: 116,
+  sideWallZ: 66,
+  sideWallHd: 50,
+  wallX: 51,
+  endWallHw: 52,
+  floorHalfX: 50,
+  pillars: [
+    { x: -32, z: 40 },
+    { x: 32, z: 40 },
+    { x: -32, z: 62 },
+    { x: 32, z: 62 },
+    { x: -32, z: 84 },
+    { x: 32, z: 84 },
+  ],
+  tombs: [
+    { x: -48.5, z: 30 },
+    { x: 48.5, z: 30 },
+    { x: -48.5, z: 50 },
+    { x: 48.5, z: 50 },
+    { x: -48.5, z: 70 },
+    { x: 48.5, z: 70 },
+    { x: -48.5, z: 90 },
+    { x: 48.5, z: 90 },
+  ],
+  stubs: [],
+  dais: { x: 0, z: 96, r: 10 },
+};
 
 // The Drowned Temple (interior 'temple'): a two-part flooded temple — a long
 // antechamber, a single chamber-waist arch at z 66 (10u centre passage), then
 // the moon-sanctum with Ysolei's great altar dais. Side walls at |x|=23 like
 // the crypt so the KayKit wall modules fit unchanged; wall-side slots carry
 // drowned reliquary altars instead of sarcophagi.
+// The Halls of the First Tempering: a long, clipped forge nave broken into
+// three readable workshops by pillar pairs. The open centre aisle keeps each
+// guardian pull and the final gate visible from the preceding chamber.
+export const IGNIVAR_FORGE_APPROACH_LAYOUT: DungeonLayout = {
+  zMin: -58,
+  zMax: 58,
+  sideWallZ: 0,
+  sideWallHd: 58,
+  wallX: 28,
+  endWallHw: 28,
+  floorHalfX: 28,
+  doorZ: -58,
+  pillars: [
+    { x: -18, z: -31 },
+    { x: 18, z: -31 },
+    { x: -18, z: -4 },
+    { x: 18, z: -4 },
+    { x: -18, z: 23 },
+    { x: 18, z: 23 },
+  ],
+  tombs: [],
+  stubs: [],
+  dais: { x: 0, z: 49, r: 7 },
+  shellPolygon: [
+    { x: -16, z: -58 },
+    { x: 16, z: -58 },
+    { x: 28, z: -46 },
+    { x: 28, z: 46 },
+    { x: 16, z: 58 },
+    { x: -16, z: 58 },
+    { x: -28, z: 46 },
+    { x: -28, z: -46 },
+  ],
+  shellPole: { x: 0, z: 0 },
+};
+
+/** The Forge-Lift: the raid's first room, a sealed 20x16 car with its own
+ *  portal in (the keep facade's teleport) and portal out (the exit gate,
+ *  locked through the ride, then an ordinary dungeon_door to the Halls).
+ *  The two pillar points carry torch rigs so the car is lit. */
+export const IGNIVAR_LIFT_LAYOUT: DungeonLayout = {
+  zMin: -8,
+  zMax: 8,
+  sideWallZ: 0,
+  sideWallHd: 8,
+  wallX: 10,
+  endWallHw: 10,
+  floorHalfX: 10,
+  doorZ: 8,
+  pillars: [
+    { x: -7, z: -3 },
+    { x: 7, z: -3 },
+  ],
+  tombs: [],
+  stubs: [],
+  dais: { x: 0, z: 0, r: 0 },
+  shellPolygon: [
+    { x: -10, z: -8 },
+    { x: 10, z: -8 },
+    { x: 10, z: 8 },
+    { x: -10, z: 8 },
+  ],
+  shellPole: { x: 0, z: 0 },
+};
+
+// Ignivar's Crucible: a flat octagonal raid room centered on the sealed heart.
+// The clipped corners give the four diagonal water conduits their own readable
+// stations while the entire fighting floor stays free of line-of-sight blockers.
+// The polygon is the one source for both rendered walls and collision.
+export const IGNIVAR_LAYOUT: DungeonLayout = {
+  zMin: -33,
+  zMax: 33,
+  sideWallZ: 0,
+  sideWallHd: 33,
+  wallX: 33,
+  endWallHw: 33,
+  floorHalfX: 33,
+  doorZ: -33,
+  pillars: [],
+  tombs: [],
+  stubs: [],
+  dais: { x: 0, z: 0, r: 8 },
+  shellPolygon: [...IGNIVAR_ARENA_SHELL_POLYGON],
+  shellPole: { x: 0, z: 0 },
+};
+
+// The raid's second encounter room. It stays mechanically neutral until its boss
+// is authored: a larger twelve-sided floor, no pillars, and no line-of-sight
+// blockers. The extra space leaves room for a future encounter without changing
+// Ignivar's carefully tuned arena geometry.
+export const IGNIVAR_SECOND_WING_LAYOUT: DungeonLayout = {
+  zMin: -40,
+  zMax: 40,
+  sideWallZ: 0,
+  sideWallHd: 40,
+  wallX: 40,
+  endWallHw: 40,
+  floorHalfX: 40,
+  doorZ: -40,
+  pillars: [],
+  tombs: [],
+  stubs: [],
+  dais: { x: 0, z: 0, r: 10 },
+  shellPolygon: [
+    { x: -16, z: -40 },
+    { x: 16, z: -40 },
+    { x: 32, z: -32 },
+    { x: 40, z: -16 },
+    { x: 40, z: 16 },
+    { x: 32, z: 32 },
+    { x: 16, z: 40 },
+    { x: -16, z: 40 },
+    { x: -32, z: 32 },
+    { x: -40, z: 16 },
+    { x: -40, z: -16 },
+    { x: -32, z: -32 },
+  ],
+  shellPole: { x: 0, z: 0 },
+};
+
 export const TEMPLE_LAYOUT: DungeonLayout = (() => {
   const pillars: GridPoint[] = [];
   for (const z of [10, 25, 40, 55, 80, 95, 110]) {

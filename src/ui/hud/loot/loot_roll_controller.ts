@@ -6,7 +6,7 @@ import { esc } from '../../esc';
 import { formatNumber, t } from '../../i18n';
 import { itemNameColor } from '../../item_name_color';
 import { knownItemDef } from '../../known_item';
-import type { PainterHostWriters } from '../../painter_host';
+import type { PainterHostPresentation, PainterHostWriters } from '../../painter_host';
 import { unknownItemIconHtml } from '../../unknown_item_icon';
 import { reconcileLootRolls } from './loot_roll_reconcile';
 import {
@@ -38,7 +38,10 @@ export interface LootRollControllerDeps {
   world(): LootRollWorld;
   now(): number;
   isMobileLayout(): boolean;
-  itemIcon(item: ItemDef): string;
+  /** The PainterHostPresentation.itemIcon signature, named from the seam
+   *  rather than re-typed; the quality parameter is shape uniformity only
+   *  here, since no copy payload reaches this surface, and is never passed. */
+  itemIcon: PainterHostPresentation['itemIcon'];
   itemTooltip(item: ItemDef): string;
   attachTooltip(element: HTMLElement, html: () => string): void;
   // Dismisses the shared #tooltip box immediately. render() tears down and
@@ -58,6 +61,15 @@ const MASTER_LOOT_DURATION_MS = 300_000;
 // live-roster lookup falling back to the roll's open-time snapshot.
 function candidateKey(candidates: { pid: number; name: string }[]): string {
   return candidates.map((candidate) => `${candidate.pid}:${candidate.name}`).join('|');
+}
+
+// The bind-on-pickup note under the item name on a roll prompt (need/greed
+// and the master curate row alike): the player is choosing whether to take a
+// soulbound drop, so the binding consequence must be readable BEFORE the win.
+// A stale-client unknown def renders nothing rather than guessing.
+function bindsOnPickupNoteHtml(item: ItemDef | undefined): string {
+  if (!item?.soulbound) return '';
+  return `<div class="loot-roll-bind">${esc(t('itemUi.lootRoll.bindsOnPickup'))}</div>`;
 }
 
 /** Owns loot-roll prompt state, authoritative reconciliation, timers, and DOM. */
@@ -463,6 +475,7 @@ export class LootRollController {
           <div class="loot-roll-copy">
             <div class="loot-roll-title">${esc(t('itemUi.lootRoll.title'))}</div>
             <div class="loot-roll-name" style="color:${nameColor}">${esc(itemName)}</div>
+            ${bindsOnPickupNoteHtml(item)}
           </div>
         </div>
         <div class="loot-roll-timer" aria-hidden="true"><span></span></div>
@@ -540,6 +553,7 @@ export class LootRollController {
         <div class="loot-roll-copy">
           <div class="loot-roll-title">${esc(t('hudChrome.masterLoot.assignPrompt', { item: itemName }))}</div>
           <div class="loot-roll-name" style="color:${nameColor}">${esc(itemName)}</div>
+          ${bindsOnPickupNoteHtml(item)}
         </div>
       </div>
       <div class="loot-roll-timer" aria-hidden="true"><span></span></div>

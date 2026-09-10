@@ -22,21 +22,22 @@ import {
 } from '../data';
 import { layoutColliders } from '../dungeon_layout';
 import { createGroundObject, createMob } from '../entity';
-import {
-  COMBAT_EXIT_MEMORY_SECONDS,
-  type CombatExitThreatEntry,
-  recordCombatExit,
-  takeCombatExit,
-} from '../instance_exit_memory';
 import type { LootTier } from '../lockpick';
 import { RIFT_MECHANIC_SPACING_SEC } from '../mob/mechanic_spacing';
-import { retargetMob } from '../mob/targeting';
+import {
+  awardRiftFirstClearMaterials,
+  grantRiftClearEmbers,
+} from '../professions/masterwrought_materials';
 import { cancelProfessionSessionOnDisplacement } from '../professions/session_teardown';
 import type { SimContext } from '../sim_context';
-import { DT, dist2d, type Entity, type Vec3 } from '../types';
+import { DT, dist2d, type Entity, type SimEvent, type Vec3 } from '../types';
 import { isInWaterBody } from '../world';
 import { riftFx } from './fx';
-import { closeNaturalRiftPortal, RIFT_MIN_LEVEL, RIFT_TIER_INFO } from './portals';
+import {
+  RIFT_LOOT_RECOVERY_GRACE,
+  RIFT_MIN_LEVEL,
+  sealNaturalRiftPortalForRecovery,
+} from './portals';
 import { addRiftClearGearLoot, addRiftProgressionLoot } from './progression';
 import { claimRiftFirstClear, markRiftEventActive } from './race';
 import {
@@ -88,6 +89,12 @@ function inIceZone(
 // out-of-combat run, enterRift's death rules): portals sit anywhere in the
 // world, so a 60s window regularly stranded corpses behind a freed slot.
 const RIFT_EMPTY_TIMEOUT = 180;
+// A WON run's corpse and its loot linger for the same window its portal does
+// (RIFT_LOOT_RECOVERY_GRACE): a clean kill that wipes the whole party, with
+// nobody left to resurrect, must not be an unrecoverable total loss. Every
+// other outcome (still active, or lost the race) keeps the shorter timeout
+// above so an abandoned or non-winning run frees its slot promptly.
+const RIFT_WON_EMPTY_TIMEOUT = RIFT_LOOT_RECOVERY_GRACE;
 
 // Deterministic per-channel colour jitter (server-side; the result rides the
 // entity snapshot to the client, so it need not be client-reproducible).
@@ -209,7 +216,14 @@ export function riftRecoveryPointSafe(ctx: SimContext, p: Entity, pos: Vec3): bo
   return true;
 }
 
-function emitRiftState(ctx: SimContext, pid: number, inst: RiftInstance, active: boolean): void {
+type RiftStateEvent = Extract<SimEvent, { type: 'riftState' }>;
+
+function buildRiftStateEvent(
+  ctx: SimContext,
+  pid: number,
+  inst: RiftInstance,
+  active: boolean,
+): RiftStateEvent {
   const floor = floorForInstance(inst);
   const event =
     inst.eventId === null
@@ -224,7 +238,7 @@ function emitRiftState(ctx: SimContext, pid: number, inst: RiftInstance, active:
   // are "deliberately outside the global race").
   const expiresAtMs =
     event === null ? null : Math.round(ctx.lockoutNowMs() + (event.expiresAt - ctx.time) * 1000);
-  ctx.emit({
+  return {
     type: 'riftState',
     pid,
     active,
@@ -242,7 +256,27 @@ function emitRiftState(ctx: SimContext, pid: number, inst: RiftInstance, active:
     themeName: floor.themeName,
     tier: inst.tier,
     expiresAtMs,
-  });
+  };
+}
+
+function emitRiftState(ctx: SimContext, pid: number, inst: RiftInstance, active: boolean): void {
+  ctx.emit(buildRiftStateEvent(ctx, pid, inst, active));
+}
+
+/** The riftState descriptor for a player already living inside a rift instance
+ * (never a transition), or null if they are not currently in one. `enterRift`/
+ * `descendRift`/`leaveRift` are the only ordinary emit sites, and a resumed
+ * session (server/game.ts resumeSession) replays none of them: its fresh
+ * ClientWorld starts with riftFloor null, so without this the resumed client
+ * is blind to the floor geometry AND (since #3479) predicts movement with no
+ * lift/wall data until the next enter/descend/exit. Read-only: never mutates
+ * instance state, only re-describes it. */
+export function riftStateEventFor(ctx: SimContext, pid: number): RiftStateEvent | null {
+  const p = ctx.entities.get(pid);
+  if (!p || !isRiftPos(p.pos.x)) return null;
+  const inst = riftInstanceAtPos(ctx, p.pos);
+  if (!inst || !inst.memberIds.has(pid)) return null;
+  return buildRiftStateEvent(ctx, pid, inst, true);
 }
 
 // ---- Floor spawn / teardown -------------------------------------------------
@@ -468,12 +502,6 @@ function freeRiftFloorEntities(ctx: SimContext, inst: RiftInstance): void {
   inst.orbId = null;
   inst.orbActive = false;
   clearRiftBossDeathZones(ctx, inst);
-  // A floor's mobs are torn down here (descendRift, or a full teardown below):
-  // any remembered mid-combat exit still holding their ids can never resolve
-  // again once IDs are freed, but the map is inert only because `nextId` is
-  // monotonic. Clear it explicitly so a new floor's freshly spawned mobs can
-  // never accidentally collide with a stale entry.
-  inst.combatExitMemory = new Map();
 }
 
 function freeRiftInstance(ctx: SimContext, inst: RiftInstance): void {
@@ -496,7 +524,6 @@ function freeRiftInstance(ctx: SimContext, inst: RiftInstance): void {
   inst.rewarded = false;
   inst.progressed = false;
   inst.bossDeathZones = [];
-  inst.combatExitMemory = new Map();
   if (eventId !== null) {
     const event = ctx.riftEvents.find((candidate) => candidate.eventId === eventId);
     const anotherRun = ctx.riftInstances.some(
@@ -578,11 +605,14 @@ export function enterRift(
     candidate.partyKey !== null && candidate.outcome === 'active' && matchesEvent(candidate);
 
   if (eventId !== null && !deadEntry) {
-    // A resolved event denies every LIVING entrant outright. No re-entry
-    // exemption is needed: sealing or collapsing always deletes the portal
-    // entity in the same call chain, so this eventId path cannot even be
-    // reached once the event is cleared or collapsed, and mid-run groups
-    // simply keep playing inside their instance.
+    // A resolved event denies every LIVING entrant outright, no exemption. A
+    // COLLAPSED event's portal is always gone by the time this runs (dropped
+    // in the same call chain), but a CLEARED one is not: a won natural
+    // portal deliberately outlives its clear (sealNaturalRiftPortalForRecovery,
+    // RIFT_LOOT_RECOVERY_GRACE), so this check is exactly what stops a living
+    // stranger, or the still-alive winner, from walking back into a decided
+    // run for the whole grace window. Mid-run groups simply keep playing
+    // inside their own instance regardless.
     const event = ctx.riftEvents.find((candidate) => candidate.eventId === eventId);
     if (!event || event.status === 'cleared' || event.status === 'collapsed') {
       if (ctx.time >= (r.e.riftPoolFullAt ?? -Infinity) + POOL_FULL_NOTICE_COOLDOWN) {
@@ -687,9 +717,6 @@ export function enterRift(
         : (ctx.riftEvents.find((candidate) => candidate.eventId === eventId)?.upgrade ?? null);
     inst.seed = seed >>> 0;
     inst.baseLevel = Math.max(1, Math.min(60, Math.round(baseLevel)));
-    // Belt-and-suspenders with freeRiftInstance's clear: a freshly claimed slot
-    // must never carry a stale exit memory from whoever last held it.
-    inst.combatExitMemory = new Map();
     inst.floorIndex = 0;
     inst.floorCount = floorForInstance(inst, 0).floorCount;
     // Return spot: never inside the portal's walk-in radius, or leaving the
@@ -720,11 +747,6 @@ export function enterRift(
   }
 
   inst.memberIds.add(r.meta.entityId);
-  // A living return within the memory window resumes whatever mid-combat exit
-  // this player left behind in this exact run (issue #2653); a corpse-running
-  // ghost has nothing to resume (mobs never target the dead, and riftInstanceInCombat
-  // above already bars a ghost from re-entering while any mob is still engaged).
-  if (!deadEntry) resumeRememberedCombat(ctx, inst, r.meta.entityId);
 
   const origin = riftInstanceOrigin(inst.slot, inst.floorIndex);
   const floor = floorForInstance(inst);
@@ -848,15 +870,8 @@ export function leaveRift(ctx: SimContext, pid?: number): void {
   if (!inst) return;
   // Tear down any lock attempt in progress so a half-picked cache doesn't linger.
   if (inst.lockpick) riftLockpickAbort(ctx, inst, r.meta.entityId);
-  // Unlike the dungeon door, nothing here scrubs the leaver's threat directly:
-  // the mob keeps its target and simply chases the player's new (overworld)
-  // position, dragging itself past its own leash within a few seconds and
-  // evading home to a full, unengaged reset (issue #2653: the same net effect
-  // as the dungeon door's explicit scrub, just via the leash break instead of
-  // a direct drop). Snapshot whatever was genuinely being fought before that
-  // plays out, so a prompt return can resume the fight instead of walking into
-  // a fresh, unengaged pack.
-  snapshotCombatExit(ctx, inst, r.meta.entityId);
+  // The engaged pass drops out-of-range threat after this zone-out. With no
+  // remaining attacker, the mob evades home and resets to full health.
   forceExitRiftPlayer(ctx, inst, r.meta.entityId, false);
   ctx.emit({
     type: 'log',
@@ -986,172 +1001,180 @@ export function updateRiftTriggers(ctx: SimContext, p: Entity): void {
       p.riftSlideDirX = 0; // no ice on this floor: never leave a stale slide latched
       p.riftSlideDirZ = 0;
     }
-    // Ice-slide goal: sliding onto the Frost Sigil solves the floor.
-    if (floor.puzzle.kind === 'ice_slide' && !inst.puzzleSolved) {
-      const goal = floor.objects.find((o) => o.kind === 'ice_goal');
-      // Radius 4 so a straight north slide that skids to a halt just past the far
-      // edge still lands on the sigil (the glide can overshoot by up to one step).
-      if (goal && dist2d(p.pos, ctx.groundPos(origin.x + goal.x, origin.z + goal.z)) < 4) {
-        inst.puzzleSolved = true;
-        riftFx(ctx, origin.x + goal.x, origin.z + goal.z, 'frost', 'nova'); // the sigil blazes
-        for (const pid of instancePlayerIds(ctx, inst)) {
-          ctx.emit({
-            type: 'log',
-            text: 'The frost sigil blazes. The way stirs.',
-            color: '#adf',
-            pid,
-          });
-        }
-      }
-    }
-
-    // Strength boulders: shove an adjacent boulder one heading-step onto its socket.
-    for (const id of inst.boulderIds) {
-      const b = ctx.entities.get(id);
-      if (!b || dist2d(p.pos, b.pos) >= BOULDER_PUSH_RADIUS) continue;
-      const mvx = p.pos.x - p.prevPos.x;
-      const mvz = p.pos.z - p.prevPos.z;
-      const dirx = b.pos.x - p.pos.x;
-      const dirz = b.pos.z - p.pos.z;
-      // Only push when actually walking INTO the boulder.
-      if (mvx * dirx + mvz * dirz <= 0.0001) continue;
-      const dd = Math.hypot(dirx, dirz) || 1;
-      const dest = resolveMovement(
-        ctx.cfg.seed,
-        b.pos.x,
-        b.pos.z,
-        b.pos.x + (dirx / dd) * 1.4,
-        b.pos.z + (dirz / dd) * 1.4,
-        1.0,
-        false,
-        undefined,
-        undefined,
-        ctx.riftCollisionToken,
-      );
-      if (Math.hypot(dest.x - b.pos.x, dest.z - b.pos.z) > 0.05) {
-        b.pos = ctx.groundPos(dest.x, dest.z);
-        b.prevPos = { ...b.pos };
-        ctx.rebucket(b);
-        // Grinding dust as the boulder scrapes forward (throttled: it can move every
-        // tick while you lean on it, so cap the puffs to ~4/sec, deterministically).
-        if (ctx.tickCount % 5 === 0) riftFx(ctx, b.pos.x, b.pos.z, 'physical');
-      }
-    }
-
-    // Sequence: step the runes south-to-north; a wrong (skipped-ahead) step resets.
-    if (floor.puzzle.kind === 'sequence' && !inst.puzzleSolved) {
-      for (let i = 0; i < inst.seqRuneIds.length; i++) {
-        const rune = ctx.entities.get(inst.seqRuneIds[i]);
-        if (!rune || dist2d(p.pos, rune.pos) >= SEQ_TRIGGER_RADIUS) continue;
-        if (i === inst.seqStep) {
-          rune.templateId = 'rift_seq_rune_lit';
-          inst.seqStep++;
-          // A correct rune flares arcane; the last one blazes into a bright payoff.
-          const solved = inst.seqStep >= inst.seqRuneIds.length;
-          if (solved) inst.puzzleSolved = true;
-          riftFx(ctx, rune.pos.x, rune.pos.z, solved ? 'holy' : 'arcane', 'nova');
+    // Puzzle-progress triggers (ice-slide goal, strength boulders, sequence
+    // runes, rune pylons, the Blood Orb, the switch-gate) require a LIVING
+    // player: a released spirit still glides on ice, still gets shoved back by
+    // a closed gate, and can still walk the instance to reach its corpse or the
+    // beacon/exit above, it just cannot advance or manipulate puzzle state
+    // while intangible (reported live: a boulder pushed from ghost form).
+    if (!p.dead) {
+      // Ice-slide goal: sliding onto the Frost Sigil solves the floor.
+      if (floor.puzzle.kind === 'ice_slide' && !inst.puzzleSolved) {
+        const goal = floor.objects.find((o) => o.kind === 'ice_goal');
+        // Radius 4 so a straight north slide that skids to a halt just past the far
+        // edge still lands on the sigil (the glide can overshoot by up to one step).
+        if (goal && dist2d(p.pos, ctx.groundPos(origin.x + goal.x, origin.z + goal.z)) < 4) {
+          inst.puzzleSolved = true;
+          riftFx(ctx, origin.x + goal.x, origin.z + goal.z, 'frost', 'nova'); // the sigil blazes
           for (const pid of instancePlayerIds(ctx, inst)) {
             ctx.emit({
               type: 'log',
-              text: `The runes answer in turn (${inst.seqStep}/${inst.seqRuneIds.length}).`,
+              text: 'The frost sigil blazes. The way stirs.',
               color: '#adf',
               pid,
             });
           }
-        } else if (i > inst.seqStep) {
-          // A wrong (skipped-ahead) step wipes the progress. Announce a real
-          // wipe always, but rate limit the no-progress case: a player simply
-          // STANDING on a later rune re-enters this branch every tick, and the
-          // un-throttled version chanted "begin again" 20 times a second.
-          const hadProgress = inst.seqStep > 0;
-          if (hadProgress) {
-            inst.seqStep = 0;
-            for (const rid of inst.seqRuneIds) {
-              const rr = ctx.entities.get(rid);
-              if (rr) rr.templateId = 'rift_seq_rune';
-            }
-          }
-          const throttled = ctx.time < inst.seqResetAt + SEQ_RESET_NOTICE_COOLDOWN;
-          if (hadProgress || !throttled) {
-            inst.seqResetAt = ctx.time;
-            riftFx(ctx, rune.pos.x, rune.pos.z, 'shadow'); // the runes snuff out
+        }
+      }
+
+      // Strength boulders: shove an adjacent boulder one heading-step onto its socket.
+      for (const id of inst.boulderIds) {
+        const b = ctx.entities.get(id);
+        if (!b || dist2d(p.pos, b.pos) >= BOULDER_PUSH_RADIUS) continue;
+        const mvx = p.pos.x - p.prevPos.x;
+        const mvz = p.pos.z - p.prevPos.z;
+        const dirx = b.pos.x - p.pos.x;
+        const dirz = b.pos.z - p.pos.z;
+        // Only push when actually walking INTO the boulder.
+        if (mvx * dirx + mvz * dirz <= 0.0001) continue;
+        const dd = Math.hypot(dirx, dirz) || 1;
+        const dest = resolveMovement(
+          ctx.cfg.seed,
+          b.pos.x,
+          b.pos.z,
+          b.pos.x + (dirx / dd) * 1.4,
+          b.pos.z + (dirz / dd) * 1.4,
+          1.0,
+          false,
+          undefined,
+          undefined,
+          ctx.riftCollisionToken,
+        );
+        if (Math.hypot(dest.x - b.pos.x, dest.z - b.pos.z) > 0.05) {
+          b.pos = ctx.groundPos(dest.x, dest.z);
+          b.prevPos = { ...b.pos };
+          ctx.rebucket(b);
+          // Grinding dust as the boulder scrapes forward (throttled: it can move every
+          // tick while you lean on it, so cap the puffs to ~4/sec, deterministically).
+          if (ctx.tickCount % 5 === 0) riftFx(ctx, b.pos.x, b.pos.z, 'physical');
+        }
+      }
+
+      // Sequence: step the runes south-to-north; a wrong (skipped-ahead) step resets.
+      if (floor.puzzle.kind === 'sequence' && !inst.puzzleSolved) {
+        for (let i = 0; i < inst.seqRuneIds.length; i++) {
+          const rune = ctx.entities.get(inst.seqRuneIds[i]);
+          if (!rune || dist2d(p.pos, rune.pos) >= SEQ_TRIGGER_RADIUS) continue;
+          if (i === inst.seqStep) {
+            rune.templateId = 'rift_seq_rune_lit';
+            inst.seqStep++;
+            // A correct rune flares arcane; the last one blazes into a bright payoff.
+            const solved = inst.seqStep >= inst.seqRuneIds.length;
+            if (solved) inst.puzzleSolved = true;
+            riftFx(ctx, rune.pos.x, rune.pos.z, solved ? 'holy' : 'arcane', 'nova');
             for (const pid of instancePlayerIds(ctx, inst)) {
               ctx.emit({
                 type: 'log',
-                text: 'The runes go dark. Begin again.',
+                text: `The runes answer in turn (${inst.seqStep}/${inst.seqRuneIds.length}).`,
+                color: '#adf',
+                pid,
+              });
+            }
+          } else if (i > inst.seqStep) {
+            // A wrong (skipped-ahead) step wipes the progress. Announce a real
+            // wipe always, but rate limit the no-progress case: a player simply
+            // STANDING on a later rune re-enters this branch every tick, and the
+            // un-throttled version chanted "begin again" 20 times a second.
+            const hadProgress = inst.seqStep > 0;
+            if (hadProgress) {
+              inst.seqStep = 0;
+              for (const rid of inst.seqRuneIds) {
+                const rr = ctx.entities.get(rid);
+                if (rr) rr.templateId = 'rift_seq_rune';
+              }
+            }
+            const throttled = ctx.time < inst.seqResetAt + SEQ_RESET_NOTICE_COOLDOWN;
+            if (hadProgress || !throttled) {
+              inst.seqResetAt = ctx.time;
+              riftFx(ctx, rune.pos.x, rune.pos.z, 'shadow'); // the runes snuff out
+              for (const pid of instancePlayerIds(ctx, inst)) {
+                ctx.emit({
+                  type: 'log',
+                  text: 'The runes go dark. Begin again.',
+                  color: '#a9c',
+                  pid,
+                });
+              }
+            }
+          }
+          break;
+        }
+      }
+
+      // Walk-on rune pylons.
+      for (const id of inst.pylonIds) {
+        if (inst.litPylons.has(id)) continue;
+        const pylon = ctx.entities.get(id);
+        if (pylon && dist2d(p.pos, pylon.pos) < PYLON_TRIGGER_RADIUS) {
+          inst.litPylons.add(id);
+          pylon.templateId = 'rift_pylon_lit';
+          // The pylon flares as it lights; the last one blazes the brighter payoff.
+          const all = inst.litPylons.size >= inst.pylonTotal;
+          riftFx(ctx, pylon.pos.x, pylon.pos.z, all ? 'holy' : 'arcane', 'nova');
+          ctx.emit({
+            type: 'log',
+            text: `A rune pylon flares to life (${inst.litPylons.size}/${inst.pylonTotal}).`,
+            color: '#adf',
+            pid: p.id,
+          });
+        }
+      }
+      // Blood Orb (authored citadel): dormant while its miniboss lives; once armed,
+      // touching it grinds the temple portcullis open for good. The orb IS the gate's
+      // switch on an `openOnOrb` floor, so no pressure plate is ever placed.
+      if (inst.orbId !== null) {
+        const orb = ctx.entities.get(inst.orbId);
+        if (orb && dist2d(p.pos, orb.pos) < ORB_TRIGGER_RADIUS) {
+          if (!inst.orbActive) {
+            if (ctx.time >= (p.riftOrbNoticeAt ?? -Infinity) + ORB_NOTICE_COOLDOWN) {
+              p.riftOrbNoticeAt = ctx.time;
+              ctx.emit({
+                type: 'log',
+                text: 'The orb is sealed by the ritual below.',
                 color: '#a9c',
+                pid: p.id,
+              });
+            }
+          } else if (floor.gate && !inst.gateOpen) {
+            inst.gateOpen = true;
+            const gate = inst.gateId !== null ? ctx.entities.get(inst.gateId) : null;
+            if (gate) gate.templateId = 'rift_gate_open';
+            riftFx(ctx, orb.pos.x, orb.pos.z, 'fire', 'nova');
+            if (gate) riftFx(ctx, gate.pos.x, gate.pos.z, 'holy', 'nova', 'rift_gate_grind');
+            for (const pid of instancePlayerIds(ctx, inst)) {
+              ctx.emit({
+                type: 'log',
+                text: 'The Blood Orb flares. The gates of the temple grind open.',
+                color: '#f97',
                 pid,
               });
             }
           }
         }
-        break;
       }
-    }
-
-    // Walk-on rune pylons.
-    for (const id of inst.pylonIds) {
-      if (inst.litPylons.has(id)) continue;
-      const pylon = ctx.entities.get(id);
-      if (pylon && dist2d(p.pos, pylon.pos) < PYLON_TRIGGER_RADIUS) {
-        inst.litPylons.add(id);
-        pylon.templateId = 'rift_pylon_lit';
-        // The pylon flares as it lights; the last one blazes the brighter payoff.
-        const all = inst.litPylons.size >= inst.pylonTotal;
-        riftFx(ctx, pylon.pos.x, pylon.pos.z, all ? 'holy' : 'arcane', 'nova');
-        ctx.emit({
-          type: 'log',
-          text: `A rune pylon flares to life (${inst.litPylons.size}/${inst.pylonTotal}).`,
-          color: '#adf',
-          pid: p.id,
-        });
-      }
-    }
-    // Blood Orb (authored citadel): dormant while its miniboss lives; once armed,
-    // touching it grinds the temple portcullis open for good. The orb IS the gate's
-    // switch on an `openOnOrb` floor, so no pressure plate is ever placed.
-    if (inst.orbId !== null) {
-      const orb = ctx.entities.get(inst.orbId);
-      if (orb && dist2d(p.pos, orb.pos) < ORB_TRIGGER_RADIUS) {
-        if (!inst.orbActive) {
-          if (ctx.time >= (p.riftOrbNoticeAt ?? -Infinity) + ORB_NOTICE_COOLDOWN) {
-            p.riftOrbNoticeAt = ctx.time;
-            ctx.emit({
-              type: 'log',
-              text: 'The orb is sealed by the ritual below.',
-              color: '#a9c',
-              pid: p.id,
-            });
-          }
-        } else if (floor.gate && !inst.gateOpen) {
+      // Switch-gate: stepping the plate raises the linked portcullis for good.
+      if (floor.gate && !inst.gateOpen) {
+        const sw = inst.switchId !== null ? ctx.entities.get(inst.switchId) : null;
+        if (sw && dist2d(p.pos, sw.pos) < SWITCH_TRIGGER_RADIUS) {
           inst.gateOpen = true;
+          sw.templateId = 'rift_switch_on';
           const gate = inst.gateId !== null ? ctx.entities.get(inst.gateId) : null;
           if (gate) gate.templateId = 'rift_gate_open';
-          riftFx(ctx, orb.pos.x, orb.pos.z, 'fire', 'nova');
+          riftFx(ctx, sw.pos.x, sw.pos.z, 'arcane', 'nova');
           if (gate) riftFx(ctx, gate.pos.x, gate.pos.z, 'holy', 'nova', 'rift_gate_grind');
           for (const pid of instancePlayerIds(ctx, inst)) {
-            ctx.emit({
-              type: 'log',
-              text: 'The Blood Orb flares. The gates of the temple grind open.',
-              color: '#f97',
-              pid,
-            });
+            ctx.emit({ type: 'log', text: 'The gate grinds open.', color: '#adf', pid });
           }
-        }
-      }
-    }
-    // Switch-gate: stepping the plate raises the linked portcullis for good.
-    if (floor.gate && !inst.gateOpen) {
-      const sw = inst.switchId !== null ? ctx.entities.get(inst.switchId) : null;
-      if (sw && dist2d(p.pos, sw.pos) < SWITCH_TRIGGER_RADIUS) {
-        inst.gateOpen = true;
-        sw.templateId = 'rift_switch_on';
-        const gate = inst.gateId !== null ? ctx.entities.get(inst.gateId) : null;
-        if (gate) gate.templateId = 'rift_gate_open';
-        riftFx(ctx, sw.pos.x, sw.pos.z, 'arcane', 'nova');
-        if (gate) riftFx(ctx, gate.pos.x, gate.pos.z, 'holy', 'nova', 'rift_gate_grind');
-        for (const pid of instancePlayerIds(ctx, inst)) {
-          ctx.emit({ type: 'log', text: 'The gate grinds open.', color: '#adf', pid });
         }
       }
     }
@@ -1375,6 +1398,10 @@ function completeRiftClear(ctx: SimContext, inst: RiftInstance, boss: Entity | n
   creditRiftClearDeeds(ctx, inst, participants);
   const claim = claimRiftFirstClear(ctx, inst, participants);
   if (!claim.won) {
+    // Masterwrought (phase 04): losing the race forfeits the first-clear
+    // cores, but an A/S clear still counts as the week's eligible endgame
+    // completion for the Maker's Ember keystone. Draw-free.
+    grantRiftClearEmbers(ctx, riftRankForBaseLevel(inst.baseLevel), participants, inst.eventId);
     completeLosingRun(ctx, inst);
     return true;
   }
@@ -1386,11 +1413,14 @@ function completeRiftClear(ctx: SimContext, inst: RiftInstance, boss: Entity | n
   // guaranteed themed rare + coin, B/A/S the epic ladder. No Heroic Marks.
   if (boss) addRiftClearGearLoot(ctx, boss, inst.baseLevel);
 
-  // A cleared rift seals its way in: the entry portal despawns, so a finished
-  // run can never be walked into and re-farmed. Ranked natural portals seal
-  // through the race claim below (closeNaturalRiftPortal); this arm covers
-  // portals outside the race (dev portals), whose entity would otherwise stay
-  // open forever.
+  // A cleared rift seals its way in: no LIVING entrant may ever walk into a
+  // finished run and farm it (enterRift denies every one the moment the event
+  // reads 'cleared'). Ranked natural portals seal through the race claim
+  // below (sealNaturalRiftPortalForRecovery), which keeps the entrance itself
+  // standing a while longer so the winning party's dead can still walk back
+  // in for their corpse loot; this arm covers portals outside the race (dev
+  // portals), which carry no such recovery window and whose entity would
+  // otherwise stay open forever.
   if (!claim.event && inst.portalId !== null) {
     if (ctx.entities.has(inst.portalId)) ctx.dropEntity(inst.portalId);
     inst.portalId = null;
@@ -1408,8 +1438,18 @@ function completeRiftClear(ctx: SimContext, inst: RiftInstance, boss: Entity | n
         inst.upgrade?.rewards.craftingMaterialBias,
       );
     }
+    // Masterwrought (phase 04): A/S first-clear cores (daily-gated per
+    // character, ruling R9) plus the weekly ember check. Deliberately outside
+    // the boss guard: the grant pays the CLEAR, not the corpse, and it draws
+    // no rng, honoring addRiftProgressionLoot's draw-free contract above.
+    // Rank from baseLevel, the creditRiftClearDeeds precedent above, so the
+    // winning and losing ember arms can never disagree on a clear's rank.
+    awardRiftFirstClearMaterials(ctx, riftRankForBaseLevel(inst.baseLevel), participants);
     const portalId = claim.event.portalId ?? inst.portalId;
-    if (portalId !== null) closeNaturalRiftPortal(ctx, portalId, 'sealed');
+    // False means the portal's own RIFT_PORTAL_LIFETIME already collapsed it
+    // out from under an unusually long clear (the entity is long gone): never
+    // promise the party a standing entrance that does not exist.
+    const recoveryOpen = portalId !== null && sealNaturalRiftPortalForRecovery(ctx, portalId);
     const firstClear = claim.event.firstClear;
     const winnerNames = firstClear?.memberNames ?? [];
     const clearTime = firstClear?.duration ?? Math.max(0, ctx.time - inst.startedAt);
@@ -1423,6 +1463,16 @@ function completeRiftClear(ctx: SimContext, inst: RiftInstance, boss: Entity | n
         winnerNames,
         clearTime,
       });
+      // Tell the winners directly: a wipe here is not a total loss, the way
+      // in still stands for the loot they just earned.
+      if (recoveryOpen) {
+        ctx.emit({
+          type: 'log',
+          text: "The rift's entrance will hold a while yet: should your party fall, you may still walk back for what you earned.",
+          color: '#adf',
+          pid,
+        });
+      }
     }
     ctx.emit({
       type: 'riftRaceWorld',
@@ -1440,52 +1490,6 @@ function completeRiftClear(ctx: SimContext, inst: RiftInstance, boss: Entity | n
     // race and complete as losers when their boss falls (completeLosingRun).
   }
   return true;
-}
-
-// Snapshot pid's dropped threat for the run's memory (issue #2653), same
-// eligibility rule as the dungeon-door scrub: only a mob that was genuinely
-// `inCombat` with real threat on the leaver counts, so an out-of-combat beacon
-// walk-out (nothing pulled, or the pack already dead) leaves no memory entry.
-function snapshotCombatExit(ctx: SimContext, inst: RiftInstance, pid: number): void {
-  const mobThreat: CombatExitThreatEntry[] = [];
-  for (const id of inst.mobIds) {
-    const mob = ctx.entities.get(id);
-    if (!mob || mob.dead || !mob.inCombat) continue;
-    const threat = mob.threat.get(pid);
-    if (threat !== undefined && threat > 0) {
-      mobThreat.push([id, threat, mob.evadeEpoch]);
-      // Hold this mob's evade-home reset open until the memory window lapses
-      // (issue #2653), same as the dungeon-door scrub: the leash break that is
-      // about to happen must not heal or clear the hate table out from under a
-      // same-run re-entry. Extends rather than shortens an already-live hold.
-      mob.combatExitHoldUntil = Math.max(
-        mob.combatExitHoldUntil,
-        ctx.time + COMBAT_EXIT_MEMORY_SECONDS,
-      );
-    }
-  }
-  recordCombatExit(inst.combatExitMemory, pid, ctx.time, mobThreat);
-}
-
-// Reapply a still-live mid-combat exit snapshot: if pid left this SAME run while
-// genuinely fighting within the memory window, restore the exact threat scrubbed
-// at the beacon/exit and force any mob that lost its target back into the fight,
-// instead of leaving it idle/evading until manually re-pulled. A lapsed or
-// absent memory entry is a no-op: the run resets exactly as before.
-//
-// Safe to restore unconditionally (no evadeEpoch check needed): resetEvadingMob
-// defers on `combatExitHoldUntil` for exactly this window, so a mob this snapshot
-// covers cannot have evade-reset or been re-pulled by anyone else in the meantime
-// (an 'evade' mob is damage-immune, see combat/damage.ts).
-function resumeRememberedCombat(ctx: SimContext, inst: RiftInstance, pid: number): void {
-  const rec = takeCombatExit(inst.combatExitMemory, pid, ctx.time);
-  if (!rec) return;
-  for (const [mobId, threat] of rec.mobThreat) {
-    const mob = ctx.entities.get(mobId);
-    if (!mob || mob.dead) continue;
-    mob.threat.set(pid, threat);
-    if (mob.aggroTargetId === null) retargetMob(ctx, mob);
-  }
 }
 
 /** True while any living mob of the instance is engaged: the window in which
@@ -1819,9 +1823,21 @@ export function updateRiftInstances(ctx: SimContext): void {
     const occupied = instancePlayerIds(ctx, inst).length > 0;
     if (occupied) {
       inst.emptyFor = 0;
+      // A won run's entrance shares this same clock while someone is
+      // actually back inside recovering loot: without this, a staggered
+      // multi-member corpse run (one ghost makes it back, others are still
+      // running) could have its portal expire out from under the stragglers
+      // even though the instance itself just had its own countdown reset.
+      if (inst.outcome === 'won' && inst.eventId !== null) {
+        const portal = ctx.naturalRiftPortals.find(
+          (candidate) => candidate.eventId === inst.eventId && candidate.recoveryOnly,
+        );
+        if (portal) portal.expiresAt = ctx.time + RIFT_LOOT_RECOVERY_GRACE;
+      }
     } else {
       inst.emptyFor += 1;
-      if (inst.emptyFor >= RIFT_EMPTY_TIMEOUT) freeRiftInstance(ctx, inst);
+      const emptyTimeout = inst.outcome === 'won' ? RIFT_WON_EMPTY_TIMEOUT : RIFT_EMPTY_TIMEOUT;
+      if (inst.emptyFor >= emptyTimeout) freeRiftInstance(ctx, inst);
     }
   }
 

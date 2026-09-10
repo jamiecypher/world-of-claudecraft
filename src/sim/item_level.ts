@@ -11,7 +11,8 @@
 // tests import it directly.
 //
 // Two distinct outputs:
-//   - itemLevel(item): the tier number shown in the tooltip ("Item Level 10").
+//   - itemLevel(item): the definition's baseline tier. itemInstanceLevel adds
+//     an earned Perfected collection tier for the tooltip, never cosmetic rarity.
 //   - primaryStatBudget(...): the total primary-stat points an item of that tier
 //     SHOULD grant. normalizePrimaryStats() distributes that budget back across an
 //     item's existing stats so two drops from the same place carry the same total
@@ -19,6 +20,7 @@
 //     str/sta, a mage cloth piece stays int/spi). itemScore() is the realized
 //     power (stats + armor + weapon dps) for at-a-glance comparison.
 
+import { crucibleCollectionForItem } from './content/crucible_collections';
 import {
   HEROIC_BOSS_LOOT,
   HEROIC_LOOT_SOURCE_LEVEL,
@@ -26,6 +28,7 @@ import {
   NYTHRAXIS_RAID_LOOT_SOURCE_LEVEL,
 } from './content/heroic_loot';
 import { HEROIC_VENDOR_STOCK } from './content/heroic_vendor';
+import { IGNIVAR_LOOT_ITEM_IDS, IGNIVAR_RAID_LOOT_SOURCE_LEVEL } from './content/ignivar_loot';
 import { FURY_STOCK, WARFARE_SOURCE_LEVEL } from './content/pvp_honor';
 import {
   RIFT_EPIC_ITEM_IDS,
@@ -53,7 +56,8 @@ import {
   TWOHAND_STAT_MULT,
   WORN_OFFHAND_STAT_MULT,
 } from './item_budget';
-import type { ItemDef } from './types';
+import { COLLECTION_PERFECTING_SOURCE_INCREASE } from './professions/perfecting_bonus';
+import type { ItemDef, ItemInstancePayload } from './types';
 
 export {
   HEROIC_VARIANT_SOURCE_LEVEL,
@@ -202,14 +206,15 @@ function buildSourceIndex(): Map<string, ItemSource> {
   // five-man epic pieces read item level 31 (25 + the epic bump). The 10-player
   // raid (Heroic Nythraxis) is one tier ABOVE the five-mans: its heroic-only
   // weapons register at NYTHRAXIS_RAID_LOOT_SOURCE_LEVEL (27) so they land at
-  // item level 33.
+  // item level 33. Migrated base-table paths preserve their original source
+  // index; listing them in the shared heroic slot must not increase their level.
   for (const [bossId, entries] of Object.entries(HEROIC_BOSS_LOOT)) {
     const src =
       bossId === NYTHRAXIS_RAID_BOSS_ID
         ? NYTHRAXIS_RAID_LOOT_SOURCE_LEVEL
         : HEROIC_LOOT_SOURCE_LEVEL;
     for (const entry of entries) {
-      if (entry.itemId) bump(entry.itemId, src, false);
+      if (entry.itemId && !entry.preserveSourceTier) bump(entry.itemId, src, false);
     }
   }
   // Heroic upgraded drop variants (content/heroic_variants.ts): the "Heroic X"
@@ -229,6 +234,14 @@ function buildSourceIndex(): Map<string, ItemSource> {
       : HEROIC_VARIANT_SOURCE_LEVEL;
     bump(item.id, src, false);
   }
+  // Ignivar raid loot (content/ignivar_loot.ts): the whole Crucible table reads
+  // source 26 with the raid flag, so every gear piece lands at item level 35
+  // (26 + epic 6 + raid 3). The explicit registration is load-bearing twice
+  // over: the sigil-redeemed set pieces never appear on a mob loot table at
+  // all, and the direct boss drops would otherwise be priced by the level-20
+  // boss mobs (bump() is highest-level-wins, so this overrides that). Sigils
+  // are kind 'tool' with no slot and stay item-level ineligible.
+  for (const id of IGNIVAR_LOOT_ITEM_IDS) bump(id, IGNIVAR_RAID_LOOT_SOURCE_LEVEL, true);
   // Rift-only clear-time epics and legendaries: gated behind B+/A/S final-boss
   // kills (addRiftClearGearLoot), they never appear on static mob loot tables, so
   // the mob-loot block above never registers them. The epics register at
@@ -252,12 +265,75 @@ function buildSourceIndex(): Map<string, ItemSource> {
   // no derivable item level: the budget gates below skip it and the tooltip's item
   // level/score lines never show. Not a raid source.
   for (const recipe of ALL_RECIPES) bump(recipe.resultItemId, recipe.level, false);
+  // The 2026-08-30 ilvl-honesty round: four hand-authored weapon lines sat
+  // above the dps curve their derived item level priced. Players own these
+  // items, so the LINES stay exactly as shipped and the item level rises to
+  // the level each line actually occupies (dps on weaponDpsBudget), giving
+  // future itemization an honest ruler to price against. Sources are stated
+  // so ilvl lands exactly (ilvl = source + quality bonus, + 3 when raid).
+  // Equip gates are unchanged: explicit requiredLevel wins (the shiv freezes
+  // its old gate in content), and the epic/legendary gates clamp at MAX_LEVEL.
+  // tests/twohand_rebudget.test.ts sweeps every weapon against its curve.
+  bump('boneglass_shiv', 18, false); // 12.9 dps: ilvl 21 (was 17)
+  bump('duskwhisper', 22, false); // 15.0 dps: ilvl 28 (was 26)
+  bump('marrowpoint', 23, false); // 15.3 dps: ilvl 29 (was 26)
+  bump('deathless_heartwood', 22, true); // 17.19 dps: ilvl 35 (was 33)
+  bump('kingsbane_last_oath', 36, true); // 21.43 dps: ilvl 49 (was 33)
+  bump('heroic_kingsbane_last_oath', 40, true); // retained line + seed: ilvl 53
+  // The three-tier legendary ladder (maintainer, 2026-08-30): bases 49,
+  // heroic mints 53 (the +70/+30 seed is worth 3-4 levels at the rating
+  // conversions, not 1), the new raid's pair 55 budget-true.
+  // The legendary band (maintainer direction, same round): every legendary is
+  // BUFFED budget-true to the Thronebane tier and labeled there. Bases 49,
+  // heroic mints and the heroic-raid pair 50; the rift pair is non-raid so its
+  // source carries the whole distance.
+  bump('deathless_heartwood', 36, true); // 49
+  bump('heroic_deathless_heartwood', 40, true); // 53 (the heroic legendary tier)
+  bump('varkhul_forgebreaker', 42, true); // 55 (the new-raid legendary tier)
+  bump('varkhul_emberward', 42, true); // 55 (the new-raid legendary tier)
+  bump('voidsong_dirk', 39, false); // 49
+  bump('heart_of_the_rift', 39, false); // 49
   return idx;
 }
 
 function sourceIndexOf(): Map<string, ItemSource> {
   if (!sourceIndex) sourceIndex = buildSourceIndex();
   return sourceIndex;
+}
+
+// itemId -> "this drops from the HEROIC Nythraxis raid", the question the raid
+// flag above cannot answer. The heroic raid's loot registers raid: false on
+// purpose: its source level IS the raid tier (27), so OR-ing the raid bonus in
+// would price it a second time. Two arms, the two ways a heroic raid pays:
+// the heroic-ONLY extras on the boss's own heroic table (the three bespoke
+// weapons), and the heroic variants of the boss's normal drops, which the
+// claim swaps in. Built once, lazily, from the same static tables, and reset
+// with the source index.
+let heroicRaidIndex: Set<string> | null = null;
+
+function buildHeroicRaidIndex(): Set<string> {
+  const idx = new Set<string>();
+  for (const entry of HEROIC_BOSS_LOOT[NYTHRAXIS_RAID_BOSS_ID] ?? []) {
+    if (entry.itemId) idx.add(entry.itemId);
+  }
+  const raidBases = new Set(
+    (MOBS[NYTHRAXIS_RAID_BOSS_ID]?.loot ?? []).flatMap((e) => (e.itemId ? [e.itemId] : [])),
+  );
+  for (const item of Object.values(ITEMS)) {
+    if (item.heroicOf && raidBases.has(item.heroicOf)) idx.add(item.id);
+  }
+  return idx;
+}
+
+// Whether the HEROIC Nythraxis raid is a source for this item. Separate from
+// itemFromRaid because the two answer different questions: that one drives the
+// item-level raid bonus (which the heroic tier already prices into its source
+// level), this one says the piece was won in a raid encounter. Sundering is
+// the consumer: the Phase 05 QA ruling admits heroic-raid epics, and reading
+// the source here keeps that eligibility flip out of the item-level math.
+export function itemFromHeroicRaid(itemId: string): boolean {
+  if (!heroicRaidIndex) heroicRaidIndex = buildHeroicRaidIndex();
+  return heroicRaidIndex.has(itemId);
 }
 
 // The level of the content an item drops from, or undefined for items with no
@@ -291,6 +367,19 @@ export function itemLevel(item: ItemDef): number | undefined {
   const bonus = QUALITY_ILVL_BONUS[item.quality ?? 'common'] ?? 0;
   const raid = src.raid ? RAID_ILVL_BONUS : 0;
   return Math.max(1, src.level + bonus + raid);
+}
+
+/** Display a copy's earned tier without repricing static budgets or cosmetic
+ *  promotion. Only the new collections earn three item levels when Perfected;
+ *  their partial ranks and the 17 legacy Masterwrought items keep the base tier. */
+export function itemInstanceLevel(
+  item: ItemDef,
+  instance?: ItemInstancePayload,
+): number | undefined {
+  const level = itemLevel(item);
+  return level !== undefined && instance?.perfected === true && crucibleCollectionForItem(item.id)
+    ? level + COLLECTION_PERFECTING_SOURCE_INCREASE
+    : level;
 }
 
 // The budget an item is expected to carry given its own source/quality/slot, or
@@ -331,4 +420,5 @@ export function itemScore(item: ItemDef): number {
 export function resetItemLevelCache(): void {
   sourceIndex = null;
   encounterIndex = null;
+  heroicRaidIndex = null;
 }

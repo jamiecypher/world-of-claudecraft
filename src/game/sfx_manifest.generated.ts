@@ -19,8 +19,8 @@ export interface SfxEntry {
   hash: string;
   variants: readonly SfxVariant[];
 }
-export const SFX_CATALOG_HASH = 'be86aaaf2434ad83794f61f36b322b2fca4f1bdacd46d405acb21d3f110470a8';
-export const SFX_FIXED_CATALOG_KEYS = ["amb_birds","amb_campfire","amb_dungeon","amb_forge","amb_rain","amb_snow","amb_water","amb_wind_marsh","amb_wind_peaks","amb_wind_vale","ambush","arcane_blast","backstab","battle_shout","blind","blink","blizzard","buff_apply","cast_arcane","cast_chain_heal","cast_fire","cast_frost","cast_holy","cast_lightning_bolt","cast_nature","cast_shadow","cheap_shot","cloak_of_shadows","combat_block","combat_crit","combat_dodge","combat_parry","debuff_apply","defiant_bellow","demoralizing_shout","emboldening_roar","entangling_roots","eviscerate","fear","fear_shout","flamestrike","foot_dirt","foot_grass","foot_snow","foot_stone","foot_water","foot_wood","frost_nova","frozen_orb","garrote","glacial_spike","hammer_of_justice","heal_impact","ice_block","impact_arcane","impact_bone","impact_fire","impact_flesh","impact_frost","impact_holy","impact_leather","impact_metal","impact_nature","impact_shadow","intimidating_shout","lockpick_advanced_1","lockpick_advanced_2","lockpick_advanced_3","lockpick_advanced_4","lockpick_begin","lockpick_bind","lockpick_bonus","lockpick_end","lockpick_fail","lockpick_page_cleared","lockpick_retry","lockpick_slip","lockpick_success","lockpick_trap","melee_bow","melee_swing_blade","melee_swing_heavy","melee_swing_light","melee_unarmed","meteor","mob_beast_aggro","mob_beast_attack","mob_beast_death","mob_beast_hurt","mob_beast_idle","mob_boar_aggro","mob_boar_attack","mob_boar_death","mob_boar_hurt","mob_boar_idle","mob_burrower_aggro","mob_burrower_attack","mob_burrower_death","mob_burrower_hurt","mob_burrower_idle","mob_demon_aggro","mob_demon_attack","mob_demon_death","mob_demon_hurt","mob_demon_idle","mob_dragonkin_aggro","mob_dragonkin_attack","mob_dragonkin_death","mob_dragonkin_hurt","mob_dragonkin_idle","mob_elemental_aggro","mob_elemental_attack","mob_elemental_death","mob_elemental_hurt","mob_elemental_idle","mob_humanoid_aggro","mob_humanoid_attack","mob_humanoid_death","mob_humanoid_hurt","mob_humanoid_idle","mob_mudfin_aggro","mob_mudfin_attack","mob_mudfin_death","mob_mudfin_hurt","mob_mudfin_idle","mob_ogre_aggro","mob_ogre_attack","mob_ogre_death","mob_ogre_hurt","mob_ogre_idle","mob_reptile_aggro","mob_reptile_attack","mob_reptile_death","mob_reptile_hurt","mob_reptile_idle","mob_spider_aggro","mob_spider_attack","mob_spider_death","mob_spider_hurt","mob_spider_idle","mob_troll_aggro","mob_troll_attack","mob_troll_death","mob_troll_hurt","mob_troll_idle","mob_undead_aggro","mob_undead_attack","mob_undead_death","mob_undead_hurt","mob_undead_idle","mount_flap_avian_strider","mount_jump_avian_strider","mount_land_avian_strider","mount_run_aether_hover_cycle","mount_run_avian_strider","mount_run_drakemaw_raptor","mount_run_grag_bear","mount_run_shadowjump_toad","mount_run_stalkglider_snail","mount_run_stormfeather_griffin","mount_run_terrorspark_groundshaker","mount_run_terrorspark_groundshaker_start","mount_run_terrorspark_groundshaker_stop","mount_run_thunderstrut_gobbler","mount_run_valorsteed","mount_squawk_avian_strider","mount_summon_avian_strider","move_jump","move_land","move_splash","move_swim","player_death","player_drink_potion","player_drink_water","player_eat_food","player_hurt","proj_arcane","proj_fire","proj_frost","proj_holy","proj_nature","proj_shadow","pyroblast","quest_accept","quest_complete","quest_ready","rallying_cry","rift_boulder_impact","rift_boulder_roll","rift_gate_grind","rift_ice_glide","rift_ice_start","rift_ice_stop","rift_lava_tick","rift_portal_drone","rift_portal_enter","rift_portal_spawn","sap","scorch","shadowstep","sinister_strike","spell_nova","stealth","temporal_clock","ui_achievement","ui_arena_loss","ui_bag_close","ui_bag_open","ui_card_play","ui_card_reveal","ui_card_round_push","ui_card_shuffle","ui_click","ui_coin","ui_cosmetic_unlock","ui_craft_alchemy","ui_craft_armorcrafting","ui_craft_cast","ui_craft_cooking","ui_craft_disenchant","ui_craft_enchanting","ui_craft_engineering","ui_craft_inscription","ui_craft_jewelcrafting","ui_craft_leatherworking","ui_craft_salvage","ui_craft_tailoring","ui_craft_weaponcrafting","ui_death","ui_duel_challenge","ui_duel_countdown","ui_duel_end","ui_duel_start","ui_error","ui_fiesta_augment","ui_fiesta_down","ui_fiesta_revive","ui_fiesta_score_mine","ui_fiesta_score_other","ui_fiesta_wave","ui_fiesta_word_0","ui_fiesta_word_1","ui_fiesta_word_2","ui_fiesta_word_3","ui_fish_bite","ui_fish_cast","ui_fish_reel","ui_gather_cast","ui_gather_cast_herb","ui_gather_cast_ore","ui_gather_cast_wood","ui_gather_epic","ui_gather_herb","ui_gather_legendary","ui_gather_ore","ui_gather_rare","ui_gather_wood","ui_level_up","ui_loot_item","ui_masterwork","ui_quest_done","ui_ready_check","ui_sheep","ui_vcup_kickoff","ui_weapon_sheathe","ui_weapon_unsheathe","ui_whisper","vanish","wand_arcane","wand_holy","wand_shadow"] as const;
+export const SFX_CATALOG_HASH = '431d12c5d5512f03935d26a6cf5d50ad24bca3d305b105545fd3e2fb151e95e7';
+export const SFX_FIXED_CATALOG_KEYS = ["amb_birds","amb_campfire","amb_dungeon","amb_forge","amb_rain","amb_snow","amb_water","amb_wind_marsh","amb_wind_peaks","amb_wind_vale","ambush","arcane_blast","backstab","battle_shout","blind","blink","blizzard","buff_apply","cast_arcane","cast_chain_heal","cast_fire","cast_frost","cast_holy","cast_lightning_bolt","cast_nature","cast_shadow","cheap_shot","cloak_of_shadows","combat_block","combat_crit","combat_dodge","combat_parry","debuff_apply","defiant_bellow","demoralizing_shout","emboldening_roar","entangling_roots","eviscerate","fear","fear_shout","flamestrike","foot_dirt","foot_grass","foot_snow","foot_stone","foot_water","foot_wood","frost_nova","frozen_orb","garrote","glacial_spike","hammer_of_justice","heal_impact","ice_block","impact_arcane","impact_bone","impact_fire","impact_flesh","impact_frost","impact_holy","impact_leather","impact_metal","impact_nature","impact_shadow","intimidating_shout","lockpick_advanced_1","lockpick_advanced_2","lockpick_advanced_3","lockpick_advanced_4","lockpick_begin","lockpick_bind","lockpick_bonus","lockpick_end","lockpick_fail","lockpick_page_cleared","lockpick_retry","lockpick_slip","lockpick_success","lockpick_trap","melee_bow","melee_swing_blade","melee_swing_heavy","melee_swing_light","melee_unarmed","meteor","mob_beast_aggro","mob_beast_attack","mob_beast_death","mob_beast_hurt","mob_beast_idle","mob_boar_aggro","mob_boar_attack","mob_boar_death","mob_boar_hurt","mob_boar_idle","mob_burrower_aggro","mob_burrower_attack","mob_burrower_death","mob_burrower_hurt","mob_burrower_idle","mob_demon_aggro","mob_demon_attack","mob_demon_death","mob_demon_hurt","mob_demon_idle","mob_dragonkin_aggro","mob_dragonkin_attack","mob_dragonkin_death","mob_dragonkin_hurt","mob_dragonkin_idle","mob_elemental_aggro","mob_elemental_attack","mob_elemental_death","mob_elemental_hurt","mob_elemental_idle","mob_humanoid_aggro","mob_humanoid_attack","mob_humanoid_death","mob_humanoid_hurt","mob_humanoid_idle","mob_mudfin_aggro","mob_mudfin_attack","mob_mudfin_death","mob_mudfin_hurt","mob_mudfin_idle","mob_ogre_aggro","mob_ogre_attack","mob_ogre_death","mob_ogre_hurt","mob_ogre_idle","mob_reptile_aggro","mob_reptile_attack","mob_reptile_death","mob_reptile_hurt","mob_reptile_idle","mob_spider_aggro","mob_spider_attack","mob_spider_death","mob_spider_hurt","mob_spider_idle","mob_troll_aggro","mob_troll_attack","mob_troll_death","mob_troll_hurt","mob_troll_idle","mob_undead_aggro","mob_undead_attack","mob_undead_death","mob_undead_hurt","mob_undead_idle","mount_flap_avian_strider","mount_idle_mech_bird","mount_jump_avian_strider","mount_jump_mech_bird","mount_jump_rallycart_rxt","mount_land_avian_strider","mount_land_mech_bird","mount_land_rallycart_rxt","mount_loop_rickshaw_mount","mount_run_aether_hover_cycle","mount_run_avian_strider","mount_run_drakemaw_raptor","mount_run_goblin_rocket_sled","mount_run_goblin_rocket_sled_reverse","mount_run_goblin_rocket_sled_reverse_start","mount_run_goblin_rocket_sled_reverse_stop","mount_run_goblin_rocket_sled_start","mount_run_goblin_rocket_sled_stop","mount_run_grag_bear","mount_run_mech_bird","mount_run_rallycart_rxt","mount_run_rallycart_rxt_idle","mount_run_rallycart_rxt_reverse","mount_run_rallycart_rxt_reverse_start","mount_run_rallycart_rxt_reverse_stop","mount_run_rallycart_rxt_start","mount_run_rallycart_rxt_stop","mount_run_shadowjump_toad","mount_run_stalkglider_snail","mount_run_stormfeather_griffin","mount_run_terrorspark_groundshaker","mount_run_terrorspark_groundshaker_start","mount_run_terrorspark_groundshaker_stop","mount_run_thunderstrut_gobbler","mount_run_valorsteed","mount_squawk_avian_strider","mount_summon_avian_strider","mount_summon_goblin_rocket_sled","mount_summon_rallycart_rxt","mount_summon_rickshaw_mount","move_jump","move_land","move_splash","move_swim","player_death","player_death_female","player_drink_potion","player_drink_water","player_eat_food","player_hurt","player_hurt_female","proj_arcane","proj_fire","proj_frost","proj_holy","proj_nature","proj_shadow","pyroblast","quest_accept","quest_complete","quest_ready","rallying_cry","rift_boulder_impact","rift_boulder_roll","rift_gate_grind","rift_ice_glide","rift_ice_start","rift_ice_stop","rift_lava_tick","rift_portal_drone","rift_portal_enter","rift_portal_spawn","sap","scorch","shadowstep","sinister_strike","spell_nova","stealth","temporal_clock","ui_achievement","ui_arena_loss","ui_bag_close","ui_bag_open","ui_card_play","ui_card_reveal","ui_card_round_push","ui_card_shuffle","ui_click","ui_coin","ui_cosmetic_unlock","ui_craft_alchemy","ui_craft_armorcrafting","ui_craft_cast","ui_craft_cooking","ui_craft_disenchant","ui_craft_enchanting","ui_craft_engineering","ui_craft_inscription","ui_craft_jewelcrafting","ui_craft_leatherworking","ui_craft_salvage","ui_craft_tailoring","ui_craft_weaponcrafting","ui_death","ui_duel_challenge","ui_duel_countdown","ui_duel_end","ui_duel_start","ui_error","ui_farm_feast","ui_farm_golden","ui_farm_harvest","ui_farm_plant","ui_farm_ready","ui_farm_withered","ui_fiesta_augment","ui_fiesta_down","ui_fiesta_revive","ui_fiesta_score_mine","ui_fiesta_score_other","ui_fiesta_wave","ui_fiesta_word_0","ui_fiesta_word_1","ui_fiesta_word_2","ui_fiesta_word_3","ui_fish_bite","ui_fish_cast","ui_fish_reel","ui_gather_cast","ui_gather_cast_herb","ui_gather_cast_ore","ui_gather_cast_wood","ui_gather_epic","ui_gather_herb","ui_gather_legendary","ui_gather_ore","ui_gather_rare","ui_gather_wood","ui_legendary_forged","ui_level_up","ui_loot_item","ui_masterwork","ui_perfecting_attempt","ui_perfecting_success","ui_quest_done","ui_ready_check","ui_sheep","ui_sunder_complete","ui_weapon_sheathe","ui_weapon_unsheathe","ui_whisper","vanish","wand_arcane","wand_holy","wand_shadow"] as const;
 export const SFX_MOB_EXTENSION_FAMILIES = ["beast","boar","burrower","demon","dragonkin","elemental","humanoid","mudfin","ogre","reptile","spider","troll","undead"] as const;
 export const SFX_MOB_EXTENSION_KEY_SOURCE = "^mob_([a-z0-9]+)_([a-z0-9]+(?:_[a-z0-9]+)*)_(aggro|attack|death|hurt|idle)$";
 export const SFX_RUNTIME_PACK_URL = '/audio/sfx/runtime-pack.json';
@@ -28,7 +28,7 @@ export const SFX_MAX_TRACKS_PER_KEY = 8;
 export const SFX_MAX_TRACK_BYTES = 4194304;
 export const SFX_MAX_TOTAL_AUDIO_BYTES = 134217728;
 export const SFX_MAX_RUNTIME_PACK_BYTES = 524288;
-export const SFX_GAIN_LIMITS = {"amb_birds":1,"amb_campfire":1,"amb_dungeon":1,"amb_forge":1.778279,"amb_rain":1,"amb_snow":1,"amb_water":1,"amb_wind_marsh":1,"amb_wind_peaks":1,"amb_wind_vale":1,"ambush":1.798871,"arcane_blast":1.995262,"backstab":1.819701,"battle_shout":2.041738,"blind":2.018366,"blink":2.041738,"blizzard":1.949845,"buff_apply":2.483133,"cast_arcane":1,"cast_chain_heal":1.678804,"cast_fire":1,"cast_frost":1,"cast_holy":1,"cast_lightning_bolt":1.778279,"cast_nature":1,"cast_shadow":1,"cheap_shot":1.840772,"cloak_of_shadows":2.041738,"combat_block":1.717908,"combat_crit":3.273407,"combat_dodge":1.840772,"combat_parry":1.819701,"debuff_apply":2.018366,"defiant_bellow":1.819701,"demoralizing_shout":1.819701,"emboldening_roar":2.041738,"entangling_roots":1.883649,"eviscerate":1.798871,"fear":2.238721,"fear_shout":2.06538,"flamestrike":2.041738,"foot_dirt":1.819701,"foot_grass":1.798871,"foot_snow":1.819701,"foot_stone":1.819701,"foot_water":1.819701,"foot_wood":1.819701,"frost_nova":2.041738,"frozen_orb":2.018366,"garrote":1.862087,"glacial_spike":1.972423,"hammer_of_justice":2.06538,"heal_impact":2.018366,"ice_block":2.06538,"impact_arcane":2.06538,"impact_bone":2.018366,"impact_fire":2.041738,"impact_flesh":1.995262,"impact_frost":1.949845,"impact_holy":2.113489,"impact_leather":2.06538,"impact_metal":1.927525,"impact_nature":2.06538,"impact_shadow":2.018366,"intimidating_shout":2.041738,"lockpick_advanced_1":1.698244,"lockpick_advanced_2":1.717908,"lockpick_advanced_3":1.678804,"lockpick_advanced_4":1.717908,"lockpick_begin":1.798871,"lockpick_bind":1.698244,"lockpick_bonus":1.698244,"lockpick_end":1.778279,"lockpick_fail":1.678804,"lockpick_page_cleared":1.778279,"lockpick_retry":1.757924,"lockpick_slip":1.698244,"lockpick_success":1.757924,"lockpick_trap":1.737801,"melee_bow":1.819701,"melee_swing_blade":1.819701,"melee_swing_heavy":1.819701,"melee_swing_light":1.798871,"melee_unarmed":1.819701,"meteor":2.041738,"mob_beast_aggro":1.840772,"mob_beast_attack":1.840772,"mob_beast_death":2.06538,"mob_beast_hurt":1.840772,"mob_beast_idle":2.985383,"mob_beast_wolf_aggro":1,"mob_beast_wolf_attack":1,"mob_beast_wolf_death":1,"mob_beast_wolf_hurt":1,"mob_beast_wolf_idle":1,"mob_boar_aggro":1.905461,"mob_boar_attack":1.840772,"mob_boar_death":2.041738,"mob_boar_hurt":2.137962,"mob_boar_idle":1.819701,"mob_burrower_aggro":1.819701,"mob_burrower_attack":1.819701,"mob_burrower_death":1.840772,"mob_burrower_hurt":1.819701,"mob_burrower_idle":1.840772,"mob_demon_aggro":2.317395,"mob_demon_attack":2.317395,"mob_demon_death":2.317395,"mob_demon_hurt":2.317395,"mob_demon_idle":2.041738,"mob_dragonkin_aggro":2.041738,"mob_dragonkin_attack":1.819701,"mob_dragonkin_death":2.041738,"mob_dragonkin_hurt":2.041738,"mob_dragonkin_idle":2.290868,"mob_elemental_aggro":1.819701,"mob_elemental_attack":1.840772,"mob_elemental_death":2.041738,"mob_elemental_hurt":2.041738,"mob_elemental_idle":1.840772,"mob_humanoid_aggro":1.883649,"mob_humanoid_attack":1.972423,"mob_humanoid_death":2.041738,"mob_humanoid_hurt":2.041738,"mob_humanoid_idle":1.819701,"mob_mudfin_aggro":1.840772,"mob_mudfin_attack":1.819701,"mob_mudfin_death":1.819701,"mob_mudfin_hurt":1.840772,"mob_mudfin_idle":1.819701,"mob_ogre_aggro":1.883649,"mob_ogre_attack":1.819701,"mob_ogre_death":2.06538,"mob_ogre_hurt":2.238721,"mob_ogre_idle":1.840772,"mob_reptile_aggro":1.717908,"mob_reptile_attack":1.819701,"mob_reptile_death":2.041738,"mob_reptile_hurt":1.905461,"mob_reptile_idle":2.60016,"mob_spider_aggro":1.819701,"mob_spider_attack":1.819701,"mob_spider_death":1.819701,"mob_spider_hurt":1.840772,"mob_spider_idle":2.317395,"mob_troll_aggro":1.819701,"mob_troll_attack":1.840772,"mob_troll_death":2.041738,"mob_troll_hurt":2.041738,"mob_troll_idle":2.290868,"mob_undead_aggro":1.698244,"mob_undead_attack":1.840772,"mob_undead_death":2.041738,"mob_undead_hurt":2.187762,"mob_undead_idle":2.187762,"mob_undead_skeleton_aggro":1,"mob_undead_skeleton_attack":1,"mob_undead_skeleton_death":1,"mob_undead_skeleton_hurt":1,"mob_undead_skeleton_idle":1,"mount_flap_avian_strider":1.757924,"mount_jump_avian_strider":1.778279,"mount_land_avian_strider":1.778279,"mount_run_aether_hover_cycle":1.819701,"mount_run_avian_strider":1.737801,"mount_run_drakemaw_raptor":1.819701,"mount_run_grag_bear":1.840772,"mount_run_shadowjump_toad":1.840772,"mount_run_stalkglider_snail":1.840772,"mount_run_stormfeather_griffin":1.819701,"mount_run_terrorspark_groundshaker":2.041738,"mount_run_terrorspark_groundshaker_start":1.840772,"mount_run_terrorspark_groundshaker_stop":1.840772,"mount_run_thunderstrut_gobbler":1.819701,"mount_run_valorsteed":1.819701,"mount_squawk_avian_strider":1.717908,"mount_summon_avian_strider":2.238721,"move_jump":1.698244,"move_land":1.717908,"move_splash":1.995262,"move_swim":2.018366,"player_death":2.06538,"player_drink_potion":2.851018,"player_drink_water":2.06538,"player_eat_food":2.06538,"player_hurt":1.819701,"proj_arcane":2.018366,"proj_fire":2.041738,"proj_frost":1.972423,"proj_holy":1.905461,"proj_nature":2.018366,"proj_shadow":1.949845,"pyroblast":2.041738,"quest_accept":2.238721,"quest_complete":2.06538,"quest_ready":4.570882,"rallying_cry":1.840772,"rift_boulder_impact":1.778279,"rift_boulder_roll":1.698244,"rift_gate_grind":2.041738,"rift_ice_glide":2.041738,"rift_ice_start":1.819701,"rift_ice_stop":1.840772,"rift_lava_tick":2.42661,"rift_portal_drone":8.317638,"rift_portal_enter":2.660725,"rift_portal_spawn":3.935501,"sap":1.927525,"scorch":1.840772,"shadowstep":1.840772,"sinister_strike":2.660725,"spell_nova":2.113489,"stealth":2.162719,"temporal_clock":1.757924,"ui_achievement":1.757924,"ui_arena_loss":2.344229,"ui_bag_close":1.798871,"ui_bag_open":1.778279,"ui_card_play":1.778279,"ui_card_reveal":1.737801,"ui_card_round_push":1.778279,"ui_card_shuffle":1.778279,"ui_click":1.778279,"ui_coin":1.927525,"ui_cosmetic_unlock":1.949845,"ui_craft_alchemy":1.778279,"ui_craft_armorcrafting":1.778279,"ui_craft_cast":1,"ui_craft_cooking":1.798871,"ui_craft_disenchant":2.089296,"ui_craft_enchanting":1.757924,"ui_craft_engineering":1.757924,"ui_craft_inscription":1.778279,"ui_craft_jewelcrafting":1.778279,"ui_craft_leatherworking":1.778279,"ui_craft_salvage":1.819701,"ui_craft_tailoring":1.757924,"ui_craft_weaponcrafting":1.778279,"ui_death":1,"ui_duel_challenge":1.840772,"ui_duel_countdown":1.778279,"ui_duel_end":1.717908,"ui_duel_start":1.717908,"ui_error":1.778279,"ui_fiesta_augment":1,"ui_fiesta_down":1,"ui_fiesta_revive":1,"ui_fiesta_score_mine":1,"ui_fiesta_score_other":1,"ui_fiesta_wave":1,"ui_fiesta_word_0":1,"ui_fiesta_word_1":1,"ui_fiesta_word_2":1,"ui_fiesta_word_3":1,"ui_fish_bite":1.819701,"ui_fish_cast":1.840772,"ui_fish_reel":1.840772,"ui_gather_cast":1,"ui_gather_cast_herb":1.840772,"ui_gather_cast_ore":1.819701,"ui_gather_cast_wood":1.819701,"ui_gather_epic":2.660725,"ui_gather_herb":1.905461,"ui_gather_legendary":2.041738,"ui_gather_ore":1.819701,"ui_gather_rare":1.883649,"ui_gather_wood":1.840772,"ui_level_up":1.798871,"ui_loot_item":1.778279,"ui_masterwork":1.737801,"ui_quest_done":1,"ui_ready_check":1.717908,"ui_sheep":1.798871,"ui_vcup_kickoff":1,"ui_weapon_sheathe":1.778279,"ui_weapon_unsheathe":1.798871,"ui_whisper":1.717908,"vanish":2.06538,"wand_arcane":2.398833,"wand_holy":2.851018,"wand_shadow":2.187762} as const satisfies Record<string, number>;
+export const SFX_GAIN_LIMITS = {"amb_birds":1,"amb_campfire":1,"amb_dungeon":1,"amb_forge":1.778279,"amb_rain":1,"amb_snow":1,"amb_water":1,"amb_wind_marsh":1,"amb_wind_peaks":1,"amb_wind_vale":1,"ambush":1.798871,"arcane_blast":1.995262,"backstab":1.819701,"battle_shout":2.041738,"blind":2.018366,"blink":2.041738,"blizzard":1.949845,"buff_apply":2.483133,"cast_arcane":1,"cast_chain_heal":1.678804,"cast_fire":1,"cast_frost":1,"cast_holy":1,"cast_lightning_bolt":1.778279,"cast_nature":1,"cast_shadow":1,"cheap_shot":1.840772,"cloak_of_shadows":2.041738,"combat_block":1.717908,"combat_crit":3.273407,"combat_dodge":1.840772,"combat_parry":1.819701,"debuff_apply":2.018366,"defiant_bellow":1.819701,"demoralizing_shout":1.819701,"emboldening_roar":2.041738,"entangling_roots":1.883649,"eviscerate":1.798871,"fear":2.238721,"fear_shout":2.06538,"flamestrike":2.041738,"foot_dirt":1.819701,"foot_grass":1.798871,"foot_snow":1.819701,"foot_stone":1.819701,"foot_water":1.819701,"foot_wood":1.819701,"frost_nova":2.041738,"frozen_orb":2.018366,"garrote":1.862087,"glacial_spike":1.972423,"hammer_of_justice":2.06538,"heal_impact":2.018366,"ice_block":2.06538,"impact_arcane":2.06538,"impact_bone":2.018366,"impact_fire":2.041738,"impact_flesh":1.995262,"impact_frost":1.949845,"impact_holy":2.113489,"impact_leather":2.06538,"impact_metal":1.927525,"impact_nature":2.06538,"impact_shadow":2.018366,"intimidating_shout":2.041738,"lockpick_advanced_1":1.698244,"lockpick_advanced_2":1.717908,"lockpick_advanced_3":1.678804,"lockpick_advanced_4":1.717908,"lockpick_begin":1.798871,"lockpick_bind":1.698244,"lockpick_bonus":1.698244,"lockpick_end":1.778279,"lockpick_fail":1.678804,"lockpick_page_cleared":1.778279,"lockpick_retry":1.757924,"lockpick_slip":1.698244,"lockpick_success":1.757924,"lockpick_trap":1.737801,"melee_bow":1.819701,"melee_swing_blade":1.819701,"melee_swing_heavy":1.819701,"melee_swing_light":1.798871,"melee_unarmed":1.819701,"meteor":2.041738,"mob_beast_aggro":1.840772,"mob_beast_attack":1.840772,"mob_beast_death":2.06538,"mob_beast_hurt":1.840772,"mob_beast_idle":2.985383,"mob_beast_wolf_aggro":1.840772,"mob_beast_wolf_attack":1.840772,"mob_beast_wolf_death":1.840772,"mob_beast_wolf_hurt":1.840772,"mob_beast_wolf_idle":1.819701,"mob_boar_aggro":1.905461,"mob_boar_attack":1.840772,"mob_boar_death":2.041738,"mob_boar_hurt":2.137962,"mob_boar_idle":1.819701,"mob_burrower_aggro":1.819701,"mob_burrower_attack":1.819701,"mob_burrower_death":1.840772,"mob_burrower_hurt":1.819701,"mob_burrower_idle":1.840772,"mob_demon_aggro":2.317395,"mob_demon_attack":2.317395,"mob_demon_death":2.317395,"mob_demon_hurt":2.317395,"mob_demon_idle":2.041738,"mob_dragonkin_aggro":2.041738,"mob_dragonkin_attack":1.819701,"mob_dragonkin_death":2.041738,"mob_dragonkin_hurt":2.041738,"mob_dragonkin_idle":2.290868,"mob_elemental_aggro":1.819701,"mob_elemental_attack":1.840772,"mob_elemental_death":2.041738,"mob_elemental_hurt":2.041738,"mob_elemental_idle":1.840772,"mob_elemental_ignivar_aggro":2.041738,"mob_elemental_ignivar_attack":1.995262,"mob_elemental_ignivar_death":2.041738,"mob_elemental_ignivar_hurt":1.798871,"mob_elemental_ignivar_idle":1.678804,"mob_elemental_varkhul_aggro":2.722701,"mob_elemental_varkhul_attack":2.290868,"mob_elemental_varkhul_death":2.540973,"mob_elemental_varkhul_hurt":1.905461,"mob_elemental_varkhul_idle":2.041738,"mob_humanoid_aggro":1.883649,"mob_humanoid_attack":1.972423,"mob_humanoid_death":2.041738,"mob_humanoid_hurt":2.041738,"mob_humanoid_idle":1.819701,"mob_mudfin_aggro":1.840772,"mob_mudfin_attack":1.819701,"mob_mudfin_death":1.819701,"mob_mudfin_hurt":1.840772,"mob_mudfin_idle":1.819701,"mob_ogre_aggro":1.883649,"mob_ogre_attack":1.819701,"mob_ogre_death":2.06538,"mob_ogre_hurt":2.238721,"mob_ogre_idle":1.840772,"mob_reptile_aggro":1.717908,"mob_reptile_attack":1.819701,"mob_reptile_death":2.041738,"mob_reptile_hurt":1.905461,"mob_reptile_idle":2.60016,"mob_spider_aggro":1.819701,"mob_spider_attack":1.819701,"mob_spider_death":1.819701,"mob_spider_hurt":1.840772,"mob_spider_idle":2.317395,"mob_troll_aggro":1.819701,"mob_troll_attack":1.840772,"mob_troll_death":2.041738,"mob_troll_hurt":2.041738,"mob_troll_idle":2.290868,"mob_undead_aggro":1.698244,"mob_undead_attack":1.840772,"mob_undead_death":2.041738,"mob_undead_hurt":2.187762,"mob_undead_idle":2.187762,"mob_undead_skeleton_aggro":1.819701,"mob_undead_skeleton_attack":1.840772,"mob_undead_skeleton_death":1.840772,"mob_undead_skeleton_hurt":1.840772,"mob_undead_skeleton_idle":1.883649,"mount_flap_avian_strider":1.757924,"mount_idle_mech_bird":2.985383,"mount_jump_avian_strider":1.778279,"mount_jump_mech_bird":2.917427,"mount_jump_rallycart_rxt":1.778279,"mount_land_avian_strider":1.778279,"mount_land_mech_bird":2.985383,"mount_land_rallycart_rxt":1.778279,"mount_loop_rickshaw_mount":1.778279,"mount_run_aether_hover_cycle":1.819701,"mount_run_avian_strider":1.737801,"mount_run_drakemaw_raptor":1.819701,"mount_run_goblin_rocket_sled":2.722701,"mount_run_goblin_rocket_sled_reverse":2.06538,"mount_run_goblin_rocket_sled_reverse_start":2.06538,"mount_run_goblin_rocket_sled_reverse_stop":1.995262,"mount_run_goblin_rocket_sled_start":2.018366,"mount_run_goblin_rocket_sled_stop":2.06538,"mount_run_grag_bear":1.840772,"mount_run_mech_bird":2.290868,"mount_run_rallycart_rxt":2.06538,"mount_run_rallycart_rxt_idle":5.128614,"mount_run_rallycart_rxt_reverse":5.128614,"mount_run_rallycart_rxt_reverse_start":5.754399,"mount_run_rallycart_rxt_reverse_stop":5.248075,"mount_run_rallycart_rxt_start":2.317395,"mount_run_rallycart_rxt_stop":2.213095,"mount_run_shadowjump_toad":1.840772,"mount_run_stalkglider_snail":1.840772,"mount_run_stormfeather_griffin":1.819701,"mount_run_terrorspark_groundshaker":2.041738,"mount_run_terrorspark_groundshaker_start":1.840772,"mount_run_terrorspark_groundshaker_stop":1.840772,"mount_run_thunderstrut_gobbler":1.819701,"mount_run_valorsteed":1.819701,"mount_squawk_avian_strider":1.717908,"mount_summon_avian_strider":2.238721,"mount_summon_goblin_rocket_sled":2.041738,"mount_summon_rallycart_rxt":2.691535,"mount_summon_rickshaw_mount":2.06538,"move_jump":1.698244,"move_land":1.717908,"move_splash":1.995262,"move_swim":2.018366,"player_death":2.06538,"player_death_female":1.819701,"player_drink_potion":2.851018,"player_drink_water":2.06538,"player_eat_food":2.06538,"player_hurt":1.819701,"player_hurt_female":1.819701,"proj_arcane":2.018366,"proj_fire":2.041738,"proj_frost":1.972423,"proj_holy":1.905461,"proj_nature":2.018366,"proj_shadow":1.949845,"pyroblast":2.041738,"quest_accept":2.238721,"quest_complete":2.06538,"quest_ready":4.570882,"rallying_cry":1.840772,"rift_boulder_impact":1.778279,"rift_boulder_roll":1.698244,"rift_gate_grind":2.041738,"rift_ice_glide":2.041738,"rift_ice_start":1.819701,"rift_ice_stop":1.840772,"rift_lava_tick":2.42661,"rift_portal_drone":8.317638,"rift_portal_enter":2.660725,"rift_portal_spawn":3.935501,"sap":1.927525,"scorch":1.840772,"shadowstep":1.840772,"sinister_strike":2.660725,"spell_nova":2.113489,"stealth":2.162719,"temporal_clock":1.757924,"ui_achievement":1.757924,"ui_arena_loss":2.344229,"ui_bag_close":1.798871,"ui_bag_open":1.778279,"ui_card_play":1.778279,"ui_card_reveal":1.737801,"ui_card_round_push":1.778279,"ui_card_shuffle":1.778279,"ui_click":1.778279,"ui_coin":1.927525,"ui_cosmetic_unlock":1.949845,"ui_craft_alchemy":1.778279,"ui_craft_armorcrafting":1.778279,"ui_craft_cast":1,"ui_craft_cooking":1.798871,"ui_craft_disenchant":2.089296,"ui_craft_enchanting":1.757924,"ui_craft_engineering":1.757924,"ui_craft_inscription":1.778279,"ui_craft_jewelcrafting":1.778279,"ui_craft_leatherworking":1.778279,"ui_craft_salvage":1.819701,"ui_craft_tailoring":1.757924,"ui_craft_weaponcrafting":1.778279,"ui_death":1,"ui_duel_challenge":1.840772,"ui_duel_countdown":1.778279,"ui_duel_end":1.717908,"ui_duel_start":1.717908,"ui_error":1.778279,"ui_farm_feast":1,"ui_farm_golden":1,"ui_farm_harvest":1,"ui_farm_plant":1,"ui_farm_ready":1,"ui_farm_withered":1,"ui_fiesta_augment":1,"ui_fiesta_down":1,"ui_fiesta_revive":1,"ui_fiesta_score_mine":1,"ui_fiesta_score_other":1,"ui_fiesta_wave":1,"ui_fiesta_word_0":1,"ui_fiesta_word_1":1,"ui_fiesta_word_2":1,"ui_fiesta_word_3":1,"ui_fish_bite":1.819701,"ui_fish_cast":1.840772,"ui_fish_reel":1.840772,"ui_gather_cast":1,"ui_gather_cast_herb":1.840772,"ui_gather_cast_ore":1.819701,"ui_gather_cast_wood":1.819701,"ui_gather_epic":2.660725,"ui_gather_herb":1.905461,"ui_gather_legendary":2.041738,"ui_gather_ore":1.819701,"ui_gather_rare":1.883649,"ui_gather_wood":1.840772,"ui_legendary_forged":1,"ui_level_up":1.798871,"ui_loot_item":1.778279,"ui_masterwork":1.737801,"ui_perfecting_attempt":1,"ui_perfecting_success":1,"ui_quest_done":1,"ui_ready_check":1.717908,"ui_sheep":1.798871,"ui_sunder_complete":1,"ui_weapon_sheathe":1.778279,"ui_weapon_unsheathe":1.798871,"ui_whisper":1.717908,"vanish":2.06538,"wand_arcane":2.398833,"wand_holy":2.851018,"wand_shadow":2.187762} as const satisfies Record<string, number>;
 export const SFX_CLIPS =
 {
   "amb_birds": {
@@ -2977,6 +2977,292 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "mob_elemental_ignivar_aggro": {
+    "url": "/audio/sfx/mob_elemental_ignivar_aggro_1.mp3?v=d9c35f4a7b2c",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.041738,
+    "playbackRate": 1,
+    "bytes": 90322,
+    "hash": "d9c35f4a7b2c",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_ignivar_aggro_1.mp3?v=d9c35f4a7b2c",
+        "bytes": 90322,
+        "sha256": "d9c35f4a7b2c4d8279ac2194fa3810aa00cce26233251e133cd034696c03e045"
+      }
+    ]
+  },
+  "mob_elemental_ignivar_attack": {
+    "url": "/audio/sfx/mob_elemental_ignivar_attack_1.mp3?v=7092bb488cde",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.995262,
+    "playbackRate": 1,
+    "bytes": 45138,
+    "hash": "7092bb488cde",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_ignivar_attack_1.mp3?v=7092bb488cde",
+        "bytes": 45138,
+        "sha256": "7092bb488cde68442a06a55486b1ba9c969ab99146f3c83ab5345d1377f0bdb8"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mob_elemental_ignivar_attack_2.mp3?v=ddcf75358d9f",
+        "bytes": 43257,
+        "sha256": "ddcf75358d9f9fe0dda27a4a86b327360cc52962a78b4ea2a1ebe4361884be70"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/mob_elemental_ignivar_attack_3.mp3?v=e342ef94b701",
+        "bytes": 45182,
+        "sha256": "e342ef94b70170c5bdc0103ed3b046124da9ef2262535e9c0d04f32e16d2a293"
+      },
+      {
+        "id": "4",
+        "url": "/audio/sfx/mob_elemental_ignivar_attack_4.mp3?v=441fd90565e1",
+        "bytes": 52661,
+        "sha256": "441fd90565e1e79f5751d1a904aa73ac7759f9329be2f8e2c5c4387512c83c1f"
+      }
+    ]
+  },
+  "mob_elemental_ignivar_death": {
+    "url": "/audio/sfx/mob_elemental_ignivar_death_1.mp3?v=d3fc81b369d9",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.041738,
+    "playbackRate": 1,
+    "bytes": 79664,
+    "hash": "d3fc81b369d9",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_ignivar_death_1.mp3?v=d3fc81b369d9",
+        "bytes": 79664,
+        "sha256": "d3fc81b369d92e91dbf8f4dfca3465c7e20ac9f18d15b93f9963caae42da05fa"
+      }
+    ]
+  },
+  "mob_elemental_ignivar_hurt": {
+    "url": "/audio/sfx/mob_elemental_ignivar_hurt_1.mp3?v=b84156be8c44",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.798871,
+    "playbackRate": 1,
+    "bytes": 40750,
+    "hash": "b84156be8c44",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_ignivar_hurt_1.mp3?v=b84156be8c44",
+        "bytes": 40750,
+        "sha256": "b84156be8c44e8052d22d63409e6fd437178def73ec1db63815b287cbddddc9e"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mob_elemental_ignivar_hurt_2.mp3?v=764f2f8d0f50",
+        "bytes": 43257,
+        "sha256": "764f2f8d0f504339463622017d2abf4ce7c72603990ad0f471ab2083a47c284e"
+      }
+    ]
+  },
+  "mob_elemental_ignivar_idle": {
+    "url": "/audio/sfx/mob_elemental_ignivar_idle_1.mp3?v=9cc22896d5b6",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.678804,
+    "playbackRate": 1,
+    "bytes": 61439,
+    "hash": "9cc22896d5b6",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_ignivar_idle_1.mp3?v=9cc22896d5b6",
+        "bytes": 61439,
+        "sha256": "9cc22896d5b6e3779546f65d1f59fa69e3a7b417378137f727be9f656e05027d"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mob_elemental_ignivar_idle_2.mp3?v=8fe0d9d17e01",
+        "bytes": 91532,
+        "sha256": "8fe0d9d17e016532caf2e6a2f38eea2a246b2658b2ad1a503ddc0d7bf4ae1180"
+      }
+    ]
+  },
+  "mob_elemental_varkhul_aggro": {
+    "url": "/audio/sfx/mob_elemental_varkhul_aggro_1.mp3?v=59465693b82b",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.722701,
+    "playbackRate": 1,
+    "bytes": 88397,
+    "hash": "59465693b82b",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_varkhul_aggro_1.mp3?v=59465693b82b",
+        "bytes": 88397,
+        "sha256": "59465693b82b15facf31e8e03790ade6c1693aa6f22614a7e68b6bac5ae6a2d5"
+      }
+    ]
+  },
+  "mob_elemental_varkhul_attack": {
+    "url": "/audio/sfx/mob_elemental_varkhul_attack_1.mp3?v=303714db2dcc",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.290868,
+    "playbackRate": 1,
+    "bytes": 43257,
+    "hash": "303714db2dcc",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_1.mp3?v=303714db2dcc",
+        "bytes": 43257,
+        "sha256": "303714db2dcca162f13e4ed3299f19ec9d4350f5b5bc3b5eec8f446977835a29"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_2.mp3?v=b9c9b41177a1",
+        "bytes": 45138,
+        "sha256": "b9c9b41177a1052dac10af5fefad85462f48ee6b77a11b4746f1ff81604737c2"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_3.mp3?v=d4718db037f7",
+        "bytes": 42004,
+        "sha256": "d4718db037f791d11184cfed6ab56384c5eb589693d035e0ed982146ae9a3c61"
+      },
+      {
+        "id": "4",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_4.mp3?v=736dc8578664",
+        "bytes": 37615,
+        "sha256": "736dc857866428c369906daa88b2a618a855915b4248833c7f375257e6acf067"
+      },
+      {
+        "id": "5",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_5.mp3?v=6c4f7b345397",
+        "bytes": 48273,
+        "sha256": "6c4f7b3453972642ac13af16c67d080e1b17f7ecac58e27e95d4e1a509b87778"
+      },
+      {
+        "id": "6",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_6.mp3?v=26b5491ddc09",
+        "bytes": 40750,
+        "sha256": "26b5491ddc0979de32c5d9023ba10d9508649a546bdc14efc1d5719e25c80ab5"
+      },
+      {
+        "id": "7",
+        "url": "/audio/sfx/mob_elemental_varkhul_attack_7.mp3?v=871dadc004f2",
+        "bytes": 37615,
+        "sha256": "871dadc004f24163debbbd7e936baf91151f7e25a0894242d855de9beb886252"
+      }
+    ]
+  },
+  "mob_elemental_varkhul_death": {
+    "url": "/audio/sfx/mob_elemental_varkhul_death_1.mp3?v=71a2255aa1be",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.540973,
+    "playbackRate": 1,
+    "bytes": 85262,
+    "hash": "71a2255aa1be",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_varkhul_death_1.mp3?v=71a2255aa1be",
+        "bytes": 85262,
+        "sha256": "71a2255aa1be3c2c6260855fe20a4e456da13a61ee396f9f8a2d5336fcdc2dc4"
+      }
+    ]
+  },
+  "mob_elemental_varkhul_hurt": {
+    "url": "/audio/sfx/mob_elemental_varkhul_hurt_1.mp3?v=16d9188b6451",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.905461,
+    "playbackRate": 1,
+    "bytes": 37615,
+    "hash": "16d9188b6451",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_varkhul_hurt_1.mp3?v=16d9188b6451",
+        "bytes": 37615,
+        "sha256": "16d9188b6451e8700f339145e7cd36171958044799a14b1562674099194a1449"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mob_elemental_varkhul_hurt_2.mp3?v=9196bc3dff0d",
+        "bytes": 37615,
+        "sha256": "9196bc3dff0d2162cdb9b44f028f7bfbfc73e9ee728f802bc1f97a62024fb07a"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/mob_elemental_varkhul_hurt_3.mp3?v=1290c23ca84c",
+        "bytes": 34480,
+        "sha256": "1290c23ca84c126ab247245ed6c7de473c77d61c3e60241639a641b679e0a8a9"
+      },
+      {
+        "id": "4",
+        "url": "/audio/sfx/mob_elemental_varkhul_hurt_4.mp3?v=54df0d020466",
+        "bytes": 40750,
+        "sha256": "54df0d0204664d39a8f200391e8749a8448f7d4301ac36c78eff7453472468f6"
+      }
+    ]
+  },
+  "mob_elemental_varkhul_idle": {
+    "url": "/audio/sfx/mob_elemental_varkhul_idle_1.mp3?v=499d40034536",
+    "loop": false,
+    "category": "voices",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.041738,
+    "playbackRate": 1,
+    "bytes": 64617,
+    "hash": "499d40034536",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mob_elemental_varkhul_idle_1.mp3?v=499d40034536",
+        "bytes": 64617,
+        "sha256": "499d4003453657cb0d2cd52099be2805e2f3e4398737a2a2276f20ff6cd89c90"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mob_elemental_varkhul_idle_2.mp3?v=fa18d23fbd0d",
+        "bytes": 58304,
+        "sha256": "fa18d23fbd0dbea3a477211cafc1ee1f1225d21bef287d812687626028bdcbf6"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/mob_elemental_varkhul_idle_3.mp3?v=ebd550571127",
+        "bytes": 52661,
+        "sha256": "ebd5505711272f745dc1cec04765e618900219be7d35f4df803545cb896d270b"
+      }
+    ]
+  },
   "mob_humanoid_aggro": {
     "url": "/audio/sfx/mob_humanoid_aggro_1.mp3?v=2e8811af4b04",
     "loop": false,
@@ -4032,6 +4318,25 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "mount_idle_mech_bird": {
+    "url": "/audio/sfx/mount_idle_mech_bird.mp3?v=95b62ab97f76",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.202264,
+    "playbackRate": 1,
+    "bytes": 235772,
+    "hash": "95b62ab97f76",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_idle_mech_bird.mp3?v=95b62ab97f76",
+        "bytes": 235772,
+        "sha256": "95b62ab97f76cf832a15eed0d4fa9f9c6750e9bc350efde691ae1ff86963e994"
+      }
+    ]
+  },
   "mount_jump_avian_strider": {
     "url": "/audio/sfx/mount_jump_avian_strider.mp3?v=926cbef0c529",
     "loop": false,
@@ -4051,6 +4356,68 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "mount_jump_mech_bird": {
+    "url": "/audio/sfx/mount_jump_mech_bird.mp3?v=440a40bb3fbb",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.202264,
+    "playbackRate": 1,
+    "bytes": 17597,
+    "hash": "440a40bb3fbb",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_jump_mech_bird.mp3?v=440a40bb3fbb",
+        "bytes": 17597,
+        "sha256": "440a40bb3fbb7c0fb8e9600f95b29e69531af96c7d077f6ac1be0313034d81b3"
+      }
+    ]
+  },
+  "mount_jump_rallycart_rxt": {
+    "url": "/audio/sfx/mount_jump_rallycart_rxt_1.mp3?v=58abb8e6d4d4",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.318257,
+    "playbackRate": 1,
+    "bytes": 21359,
+    "hash": "58abb8e6d4d4",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mount_jump_rallycart_rxt_1.mp3?v=58abb8e6d4d4",
+        "bytes": 21359,
+        "sha256": "58abb8e6d4d4c8aa22fd44317ae1a565b49202103b306f83b7c7124e9e0a366a"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mount_jump_rallycart_rxt_2.mp3?v=6b92cc28a996",
+        "bytes": 17597,
+        "sha256": "6b92cc28a99689bab155d9e90c8a5135cfd1068bc8618b1b487a69593a2f6256"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/mount_jump_rallycart_rxt_3.mp3?v=2f33d5f3bbb9",
+        "bytes": 13835,
+        "sha256": "2f33d5f3bbb9811ee40d9edaf54a2f73894667798a3207dd0cd07d32c48c1fe3"
+      },
+      {
+        "id": "4",
+        "url": "/audio/sfx/mount_jump_rallycart_rxt_4.mp3?v=a101108db3f0",
+        "bytes": 19478,
+        "sha256": "a101108db3f07e68508bd4a57e0560fc7d52478a53b9b9427aa784d3349d8c06"
+      },
+      {
+        "id": "5",
+        "url": "/audio/sfx/mount_jump_rallycart_rxt_5.mp3?v=3eb062c62c63",
+        "bytes": 14462,
+        "sha256": "3eb062c62c633fb02094857a8b853d1cfc7fe02754bcc2c578dc388e62b8ec4a"
+      }
+    ]
+  },
   "mount_land_avian_strider": {
     "url": "/audio/sfx/mount_land_avian_strider.mp3?v=94218ba01507",
     "loop": false,
@@ -4067,6 +4434,81 @@ export const SFX_CLIPS =
         "url": "/audio/sfx/mount_land_avian_strider.mp3?v=94218ba01507",
         "bytes": 6939,
         "sha256": "94218ba01507857ad6673f7623b2534b177267282e4f52e8e1a01c70dcf1c4e8"
+      }
+    ]
+  },
+  "mount_land_mech_bird": {
+    "url": "/audio/sfx/mount_land_mech_bird.mp3?v=2012c70e4be4",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.202264,
+    "playbackRate": 1,
+    "bytes": 17597,
+    "hash": "2012c70e4be4",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_land_mech_bird.mp3?v=2012c70e4be4",
+        "bytes": 17597,
+        "sha256": "2012c70e4be4f913ac221ca7d921a19b64fa3a245e06bc90a497a98caa72ccb7"
+      }
+    ]
+  },
+  "mount_land_rallycart_rxt": {
+    "url": "/audio/sfx/mount_land_rallycart_rxt_1.mp3?v=59450641de9b",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.174898,
+    "playbackRate": 1,
+    "bytes": 15716,
+    "hash": "59450641de9b",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/mount_land_rallycart_rxt_1.mp3?v=59450641de9b",
+        "bytes": 15716,
+        "sha256": "59450641de9ba51a70965881e793129fa93902a2f83069982b22fe1c50c4e97e"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/mount_land_rallycart_rxt_2.mp3?v=c7224c0cebe1",
+        "bytes": 23239,
+        "sha256": "c7224c0cebe1217d81c7857c74c4c7ff8773846d101a40108c6774a3661f7a7f"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/mount_land_rallycart_rxt_3.mp3?v=1f0c8f73dc79",
+        "bytes": 25120,
+        "sha256": "1f0c8f73dc799db366bc48073c3881678dae7b15bffcf862c7655935e7a13ecc"
+      },
+      {
+        "id": "4",
+        "url": "/audio/sfx/mount_land_rallycart_rxt_4.mp3?v=c38aabefd4b1",
+        "bytes": 21985,
+        "sha256": "c38aabefd4b1121c397de9c2a8598b930379a2b162e15c3e56233637a594097d"
+      }
+    ]
+  },
+  "mount_loop_rickshaw_mount": {
+    "url": "/audio/sfx/mount_loop_rickshaw_mount.mp3?v=90fafb2c1bb7",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 187497,
+    "hash": "90fafb2c1bb7",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_loop_rickshaw_mount.mp3?v=90fafb2c1bb7",
+        "bytes": 187497,
+        "sha256": "90fafb2c1bb702068d31a596b5e2758605c089f4c2c0b95547eb5e520f824f00"
       }
     ]
   },
@@ -4157,6 +4599,120 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "mount_run_goblin_rocket_sled": {
+    "url": "/audio/sfx/mount_run_goblin_rocket_sled.mp3?v=fe904b695a1b",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 229502,
+    "hash": "fe904b695a1b",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_goblin_rocket_sled.mp3?v=fe904b695a1b",
+        "bytes": 229502,
+        "sha256": "fe904b695a1bba9f506e2afe81dabeee50a505a3947466e7839459e5b96a9651"
+      }
+    ]
+  },
+  "mount_run_goblin_rocket_sled_reverse": {
+    "url": "/audio/sfx/mount_run_goblin_rocket_sled_reverse.mp3?v=a3255ab4f547",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 253326,
+    "hash": "a3255ab4f547",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_goblin_rocket_sled_reverse.mp3?v=a3255ab4f547",
+        "bytes": 253326,
+        "sha256": "a3255ab4f547d4695b794ec4b394818c1f0bd54028f491637b7ba9e4aeda1142"
+      }
+    ]
+  },
+  "mount_run_goblin_rocket_sled_reverse_start": {
+    "url": "/audio/sfx/mount_run_goblin_rocket_sled_reverse_start.mp3?v=a4b1f4ab817d",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 31390,
+    "hash": "a4b1f4ab817d",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_goblin_rocket_sled_reverse_start.mp3?v=a4b1f4ab817d",
+        "bytes": 31390,
+        "sha256": "a4b1f4ab817dee74e06a14a38484b22b1cbde3f66235df99cbfe20cde77ee7e7"
+      }
+    ]
+  },
+  "mount_run_goblin_rocket_sled_reverse_stop": {
+    "url": "/audio/sfx/mount_run_goblin_rocket_sled_reverse_stop.mp3?v=6ffae886c567",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 28882,
+    "hash": "6ffae886c567",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_goblin_rocket_sled_reverse_stop.mp3?v=6ffae886c567",
+        "bytes": 28882,
+        "sha256": "6ffae886c567a7c1bd24640e6cd9528b777ffcc23acc27b26caf5912b6f4475e"
+      }
+    ]
+  },
+  "mount_run_goblin_rocket_sled_start": {
+    "url": "/audio/sfx/mount_run_goblin_rocket_sled_start.mp3?v=75dea337075c",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 34524,
+    "hash": "75dea337075c",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_goblin_rocket_sled_start.mp3?v=75dea337075c",
+        "bytes": 34524,
+        "sha256": "75dea337075cd04af8eff9681ece0b54dd49712e083608474d7e4b594b8205e2"
+      }
+    ]
+  },
+  "mount_run_goblin_rocket_sled_stop": {
+    "url": "/audio/sfx/mount_run_goblin_rocket_sled_stop.mp3?v=b8b5ced031ce",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 49571,
+    "hash": "b8b5ced031ce",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_goblin_rocket_sled_stop.mp3?v=b8b5ced031ce",
+        "bytes": 49571,
+        "sha256": "b8b5ced031ceddf26d4dbf06a26359093d1ae4d2ac35bb13a7aede905cdd8a54"
+      }
+    ]
+  },
   "mount_run_grag_bear": {
     "url": "/audio/sfx/mount_run_grag_bear.mp3?v=eba127f1f821",
     "loop": false,
@@ -4173,6 +4729,158 @@ export const SFX_CLIPS =
         "url": "/audio/sfx/mount_run_grag_bear.mp3?v=eba127f1f821",
         "bytes": 18224,
         "sha256": "eba127f1f8219e5d6a7512c4797735399e154e9f129bfc8c67a187941cb59fe7"
+      }
+    ]
+  },
+  "mount_run_mech_bird": {
+    "url": "/audio/sfx/mount_run_mech_bird.mp3?v=b341e1f75de8",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.202264,
+    "playbackRate": 1,
+    "bytes": 13835,
+    "hash": "b341e1f75de8",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_mech_bird.mp3?v=b341e1f75de8",
+        "bytes": 13835,
+        "sha256": "b341e1f75de88e3ed330390c84ddc84171fcb3e65c11a96e51da87b8f60e9091"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt.mp3?v=f450d96c33b2",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.333521,
+    "playbackRate": 1,
+    "bytes": 239533,
+    "hash": "f450d96c33b2",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt.mp3?v=f450d96c33b2",
+        "bytes": 239533,
+        "sha256": "f450d96c33b204dae13986f3dfd468b99ca104693ef3b45496c7f719ac53b8e2"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt_idle": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt_idle.mp3?v=6f4bbc6dd627",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.238721,
+    "playbackRate": 1,
+    "bytes": 316647,
+    "hash": "6f4bbc6dd627",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt_idle.mp3?v=6f4bbc6dd627",
+        "bytes": 316647,
+        "sha256": "6f4bbc6dd627206bbf3b6358dc250379dbcd4ff53d26713ac27ff54f77b1d0e7"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt_reverse": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt_reverse.mp3?v=4b25cb575704",
+    "loop": true,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 90950,
+    "hash": "4b25cb575704",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt_reverse.mp3?v=4b25cb575704",
+        "bytes": 90950,
+        "sha256": "4b25cb575704feff27d8cbdc1ed4c61cbbe834d29b62277b02aa3e11a1fe6255"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt_reverse_start": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt_reverse_start.mp3?v=f3a10bfc2037",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 24494,
+    "hash": "f3a10bfc2037",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt_reverse_start.mp3?v=f3a10bfc2037",
+        "bytes": 24494,
+        "sha256": "f3a10bfc20378a0510e5c1be0ff12836b57e666e292b56b91e8d267d2ffd8806"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt_reverse_stop": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt_reverse_stop.mp3?v=30c342fa3260",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 33898,
+    "hash": "30c342fa3260",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt_reverse_stop.mp3?v=30c342fa3260",
+        "bytes": 33898,
+        "sha256": "30c342fa32607256af0337c30b638c6f5b2e4d0b5e0a23e4cd2dba7815d76a0b"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt_start": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt_start.mp3?v=5b5652ae8b4f",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.333521,
+    "playbackRate": 1,
+    "bytes": 87814,
+    "hash": "5b5652ae8b4f",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt_start.mp3?v=5b5652ae8b4f",
+        "bytes": 87814,
+        "sha256": "5b5652ae8b4f479916513ab0abfdb8666f435de760af0c0c6d5255c84e65ccc4"
+      }
+    ]
+  },
+  "mount_run_rallycart_rxt_stop": {
+    "url": "/audio/sfx/mount_run_rallycart_rxt_stop.mp3?v=9f8e38ce4f6d",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1.496236,
+    "playbackRate": 1,
+    "bytes": 61483,
+    "hash": "9f8e38ce4f6d",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_run_rallycart_rxt_stop.mp3?v=9f8e38ce4f6d",
+        "bytes": 61483,
+        "sha256": "9f8e38ce4f6d6d34f18f9b48e0bf677bbc2055cea54efebc23cd56f41cf1412f"
       }
     ]
   },
@@ -4378,6 +5086,63 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "mount_summon_goblin_rocket_sled": {
+    "url": "/audio/sfx/mount_summon_goblin_rocket_sled.mp3?v=6b3c967d6c91",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 49571,
+    "hash": "6b3c967d6c91",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_summon_goblin_rocket_sled.mp3?v=6b3c967d6c91",
+        "bytes": 49571,
+        "sha256": "6b3c967d6c91bce90a64b28e678233f5640c3a88daa862adf5b0a3708d476720"
+      }
+    ]
+  },
+  "mount_summon_rallycart_rxt": {
+    "url": "/audio/sfx/mount_summon_rallycart_rxt.mp3?v=5a536c68dbb4",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.371374,
+    "playbackRate": 1,
+    "bytes": 55840,
+    "hash": "5a536c68dbb4",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_summon_rallycart_rxt.mp3?v=5a536c68dbb4",
+        "bytes": 55840,
+        "sha256": "5a536c68dbb4cc03da2f25af42e132d7fa71b59e4034d2f34e1a51d243cd9964"
+      }
+    ]
+  },
+  "mount_summon_rickshaw_mount": {
+    "url": "/audio/sfx/mount_summon_rickshaw_mount.mp3?v=4f9ba1123aa4",
+    "loop": false,
+    "category": "other",
+    "preload": "lazy",
+    "spatial": true,
+    "gain": 2.06538,
+    "playbackRate": 1,
+    "bytes": 38913,
+    "hash": "4f9ba1123aa4",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/mount_summon_rickshaw_mount.mp3?v=4f9ba1123aa4",
+        "bytes": 38913,
+        "sha256": "4f9ba1123aa480436c91e1222e9b55d2922b21f41d4ddc535df1475dc902560d"
+      }
+    ]
+  },
   "move_jump": {
     "url": "/audio/sfx/move_jump_1.mp3?v=9ad0a005bdaf",
     "loop": false,
@@ -4563,6 +5328,37 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "player_death_female": {
+    "url": "/audio/sfx/player_death_female_1.mp3?v=38149e3ea49a",
+    "loop": false,
+    "category": "voices",
+    "preload": "startup",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 15716,
+    "hash": "38149e3ea49a",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/player_death_female_1.mp3?v=38149e3ea49a",
+        "bytes": 15716,
+        "sha256": "38149e3ea49a7c013fcb91cf26bd6b7841877c3409a878c66dd12360597e665c"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/player_death_female_2.mp3?v=23417a064753",
+        "bytes": 16343,
+        "sha256": "23417a0647534a6b9c389dc6f53c86089106a67943db975d730bff9b98a6c1f1"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/player_death_female_3.mp3?v=280ce1bc8c52",
+        "bytes": 11954,
+        "sha256": "280ce1bc8c527f82530239a24abebd97755fb68c0cda6de915c5dfd0c6b3e74a"
+      }
+    ]
+  },
   "player_drink_potion": {
     "url": "/audio/sfx/player_drink_potion.mp3?v=81279812acbc",
     "loop": false,
@@ -4660,6 +5456,49 @@ export const SFX_CLIPS =
         "url": "/audio/sfx/player_hurt_5.mp3?v=91cc3fa9711a",
         "bytes": 19478,
         "sha256": "91cc3fa9711ab089a7df033284c2b7294c6f47a4acfda02304f0278daf2ab276"
+      }
+    ]
+  },
+  "player_hurt_female": {
+    "url": "/audio/sfx/player_hurt_female_1.mp3?v=ca0ee6e2fed4",
+    "loop": false,
+    "category": "voices",
+    "preload": "startup",
+    "spatial": true,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 8820,
+    "hash": "ca0ee6e2fed4",
+    "variants": [
+      {
+        "id": "1",
+        "url": "/audio/sfx/player_hurt_female_1.mp3?v=ca0ee6e2fed4",
+        "bytes": 8820,
+        "sha256": "ca0ee6e2fed4941ba2757cc2f67b6c1ff3ccb45d8433155986d5f2597c41ddfb"
+      },
+      {
+        "id": "2",
+        "url": "/audio/sfx/player_hurt_female_2.mp3?v=723bd54bb5b9",
+        "bytes": 8820,
+        "sha256": "723bd54bb5b98b53373effe57085b72a980ab0a0cb8fa205b3904506b5c4a40b"
+      },
+      {
+        "id": "3",
+        "url": "/audio/sfx/player_hurt_female_3.mp3?v=43e728e4618a",
+        "bytes": 6939,
+        "sha256": "43e728e4618a12becbb34d6424140e1557f37b0356b7b00997428272ab4e1d1d"
+      },
+      {
+        "id": "4",
+        "url": "/audio/sfx/player_hurt_female_4.mp3?v=352422af5d17",
+        "bytes": 21359,
+        "sha256": "352422af5d17c3f92112494a77f2b8cec120c0ff8c5a85d927858aee83d83065"
+      },
+      {
+        "id": "5",
+        "url": "/audio/sfx/player_hurt_female_5.mp3?v=8767c95081fa",
+        "bytes": 13835,
+        "sha256": "8767c95081fa43b18f854bfd16e4096d64ea60b4e59bd81208fe9960a4616b3c"
       }
     ]
   },
@@ -5807,6 +6646,120 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "ui_farm_feast": {
+    "url": "/audio/sfx/ui_farm_feast.mp3?v=37cc1b3013cb",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 18224,
+    "hash": "37cc1b3013cb",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_farm_feast.mp3?v=37cc1b3013cb",
+        "bytes": 18224,
+        "sha256": "37cc1b3013cb77d253fe4a94b960299164dae772c69f97cae9379121421b5064"
+      }
+    ]
+  },
+  "ui_farm_golden": {
+    "url": "/audio/sfx/ui_farm_golden.mp3?v=b05b80c6e0b4",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 18224,
+    "hash": "b05b80c6e0b4",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_farm_golden.mp3?v=b05b80c6e0b4",
+        "bytes": 18224,
+        "sha256": "b05b80c6e0b40ed6503ed353e0361ee743067703a9690bdebefd860ff7ac8f73"
+      }
+    ]
+  },
+  "ui_farm_harvest": {
+    "url": "/audio/sfx/ui_farm_harvest.mp3?v=c8f62e6281df",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 15716,
+    "hash": "c8f62e6281df",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_farm_harvest.mp3?v=c8f62e6281df",
+        "bytes": 15716,
+        "sha256": "c8f62e6281df14929ea32577ef8fc9e6de7317eaf054064b518c7522696f5a3d"
+      }
+    ]
+  },
+  "ui_farm_plant": {
+    "url": "/audio/sfx/ui_farm_plant.mp3?v=52c0cbe49abb",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 13835,
+    "hash": "52c0cbe49abb",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_farm_plant.mp3?v=52c0cbe49abb",
+        "bytes": 13835,
+        "sha256": "52c0cbe49abb07008989585ec371d18aae89d3c4d5bdd94414cc35469dfa0991"
+      }
+    ]
+  },
+  "ui_farm_ready": {
+    "url": "/audio/sfx/ui_farm_ready.mp3?v=67381d121de7",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 13835,
+    "hash": "67381d121de7",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_farm_ready.mp3?v=67381d121de7",
+        "bytes": 13835,
+        "sha256": "67381d121de71aa381352e537f83b847491d0d6d5022f0722c33d0e5f5f62b69"
+      }
+    ]
+  },
+  "ui_farm_withered": {
+    "url": "/audio/sfx/ui_farm_withered.mp3?v=bccba5361fcf",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 15716,
+    "hash": "bccba5361fcf",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_farm_withered.mp3?v=bccba5361fcf",
+        "bytes": 15716,
+        "sha256": "bccba5361fcf7a3d2c95cd2d36e362ae8b3f49818e01b57cb964937b7c2a873d"
+      }
+    ]
+  },
   "ui_fiesta_augment": {
     "url": "/audio/sfx/ui_fiesta_augment.mp3?v=e89cfcbe35b1",
     "loop": false,
@@ -6364,6 +7317,25 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "ui_legendary_forged": {
+    "url": "/audio/sfx/ui_legendary_forged.mp3?v=32d3bd13daef",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 35151,
+    "hash": "32d3bd13daef",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_legendary_forged.mp3?v=32d3bd13daef",
+        "bytes": 35151,
+        "sha256": "32d3bd13daef9c3e509cefd772fdd09d33d6e97b3ca0f73d4648275329bdc3dc"
+      }
+    ]
+  },
   "ui_level_up": {
     "url": "/audio/sfx/ui_level_up.mp3?v=d29c9e1dcfd5",
     "loop": false,
@@ -6445,6 +7417,44 @@ export const SFX_CLIPS =
       }
     ]
   },
+  "ui_perfecting_attempt": {
+    "url": "/audio/sfx/ui_perfecting_attempt.mp3?v=af0d8a7c2dc5",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 15716,
+    "hash": "af0d8a7c2dc5",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_perfecting_attempt.mp3?v=af0d8a7c2dc5",
+        "bytes": 15716,
+        "sha256": "af0d8a7c2dc55f6a266d32bda40e6c621cadd8c113a239d457d5b7ae26e82fc9"
+      }
+    ]
+  },
+  "ui_perfecting_success": {
+    "url": "/audio/sfx/ui_perfecting_success.mp3?v=3e4c81df3945",
+    "loop": false,
+    "category": "ui",
+    "preload": "startup",
+    "spatial": false,
+    "gain": 1,
+    "playbackRate": 1,
+    "bytes": 15716,
+    "hash": "3e4c81df3945",
+    "variants": [
+      {
+        "id": "main",
+        "url": "/audio/sfx/ui_perfecting_success.mp3?v=3e4c81df3945",
+        "bytes": 15716,
+        "sha256": "3e4c81df3945043e7da9f3d7d2c3aebc77f2faab7b45b3fa09654c2d7aae4f95"
+      }
+    ]
+  },
   "ui_quest_done": {
     "url": "/audio/sfx/ui_quest_done.mp3?v=31deea1844b2",
     "loop": false,
@@ -6502,22 +7512,22 @@ export const SFX_CLIPS =
       }
     ]
   },
-  "ui_vcup_kickoff": {
-    "url": "/audio/sfx/ui_vcup_kickoff.mp3?v=b29c56adf6c7",
+  "ui_sunder_complete": {
+    "url": "/audio/sfx/ui_sunder_complete.mp3?v=67322d72508e",
     "loop": false,
     "category": "ui",
     "preload": "startup",
     "spatial": false,
     "gain": 1,
     "playbackRate": 1,
-    "bytes": 20732,
-    "hash": "b29c56adf6c7",
+    "bytes": 18224,
+    "hash": "67322d72508e",
     "variants": [
       {
         "id": "main",
-        "url": "/audio/sfx/ui_vcup_kickoff.mp3?v=b29c56adf6c7",
-        "bytes": 20732,
-        "sha256": "b29c56adf6c7b91a0e2ca050d0765a7101a769e9b305db1f2792f1bf3c2ea687"
+        "url": "/audio/sfx/ui_sunder_complete.mp3?v=67322d72508e",
+        "bytes": 18224,
+        "sha256": "67322d72508ebdcb48127cf46309949253a4432ecdbcbfc4e7f392956beea908"
       }
     ]
   },

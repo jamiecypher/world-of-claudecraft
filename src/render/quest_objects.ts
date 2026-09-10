@@ -13,6 +13,7 @@ import {
   fenbridgeSurfaceRoughnessTexture,
 } from './fenbridge_surface_atlas';
 import { GFX, surfaceMat } from './gfx';
+import { markSharedGeometry, markSharedMaterial } from './shared_resource';
 import { applySurfaceDetail, wornFamilyFor } from './worn_stone';
 
 /** Target max height after normalization (~sparkle anchor at 1.35). */
@@ -36,6 +37,9 @@ const QUEST_OBJECT_URLS: Record<string, string> = {
   grave_sir_aldren: '/models/dungeon/gravestone.glb',
   grave_high_priest_malric: '/models/dungeon/gravestone.glb',
   grave_captain_voss: '/models/dungeon/gravestone.glb',
+  // The Proving Shore ferry bells (a clicked travel object, not a pickup):
+  // the standing bell-on-frame prop the marsh dressing already ships.
+  ps_ferry_bell: '/models/props/marsh_bell_gallows.glb',
 };
 
 const QUEST_OBJECT_HEIGHTS: Record<string, number> = {
@@ -50,6 +54,9 @@ const QUEST_OBJECT_HEIGHTS: Record<string, number> = {
   // A closed tome resting on the ground: shorter than the scroll/sigil
   // pickups, since it lies flat rather than standing upright.
   royal_seal: 1.5,
+  // A standing bell frame players travel by: tall enough to read at range,
+  // shy of the 3.4 the raid wardstones claim.
+  ps_ferry_bell: 2.6,
 };
 
 const SCROLL_ITEM_IDS = new Set(['weathered_ledger_page', 'fen_muster_order', 'highwatch_summons']);
@@ -229,22 +236,26 @@ function convertMaterial(src: THREE.Material, itemId: string): THREE.Material {
           roughnessMap: fenbridgeSurfaceRoughnessTexture(),
         }
       : { normalMap: undefined, roughnessMap: undefined };
+  // The muster order's aged-iron arm packs metalness in the response map's
+  // blue channel. It rides in the OPTIONS, never as a write on the returned
+  // material: surfaceMat dedupes by key and metalnessMap is a program-cache-key
+  // input, so a post-hoc write relinked every other prop sharing that entry.
+  const musterIron = fenbridgePbr.normalMap !== undefined;
   const mat = surfaceMat({
     color: color.getHex(),
     map: fenbridgeAtlas ?? s.map ?? undefined,
     vertexColors: fenbridgeAtlas ? false : s.vertexColors,
     normalMap: fenbridgePbr.normalMap ?? s.normalMap ?? undefined,
     roughnessMap: fenbridgePbr.roughnessMap ?? s.roughnessMap ?? undefined,
+    metalnessMap: musterIron ? fenbridgePbr.roughnessMap : undefined,
     roughness: s.roughness ?? 0.88,
-    metalness: Math.min(s.metalness ?? 0, 0.75),
+    metalness: musterIron ? 1 : Math.min(s.metalness ?? 0, 0.75),
     emissive: ov?.emissive,
     emissiveIntensity: ov?.emissiveIntensity,
     flatShading: !GFX.standardMaterials,
   });
-  if (itemId === 'fen_muster_order' && mat instanceof THREE.MeshStandardMaterial && mat.normalMap) {
+  if (musterIron && mat instanceof THREE.MeshStandardMaterial) {
     mat.normalScale.setScalar(FENBRIDGE_SURFACE_NORMAL_SCALE);
-    mat.metalness = 1;
-    mat.metalnessMap = mat.roughnessMap;
   }
   if (
     !AUTHORED_SCROLL_CUE_IDS.has(itemId) &&
@@ -402,7 +413,7 @@ function buildRitualCircleTemplate(): THREE.Group {
   light.position.set(0, 1.2, 0);
   root.add(light);
 
-  proceduralByItem.set('crypt_ritual_circle', root);
+  proceduralByItem.set('crypt_ritual_circle', markTemplateShared(root));
   return root;
 }
 
@@ -533,7 +544,7 @@ function buildRoyalSealTemplate(): THREE.Group {
   claspStud.position.set(bookWidth * 0.5 + 0.01, bookHeight * 0.5, 0);
   root.add(claspStud);
 
-  proceduralByItem.set('royal_seal', root);
+  proceduralByItem.set('royal_seal', markTemplateShared(root));
   return root;
 }
 
@@ -559,6 +570,22 @@ const PROCEDURAL_ITEM_IDS = new Set([
  */
 const measuredHeightByItem = new Map<string, number>();
 
+/** Tag a forever-cached template's geometry + materials shared BEFORE the
+ * first clone ships. Ground-object clones share both by reference, and the
+ * renderer's terminal teardown traverses views disposing unshared resources;
+ * untagged, the first teardown poisons the template for every renderer built
+ * after it (the WebGL context-recycle path). */
+function markTemplateShared<T extends THREE.Object3D>(root: T): T {
+  root.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    markSharedGeometry(mesh.geometry);
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const m of mats) markSharedMaterial(m);
+  });
+  return root;
+}
+
 function prepareItem(itemId: string): THREE.Group | null {
   const cached = preparedByItem.get(itemId);
   if (cached) return cached;
@@ -569,7 +596,7 @@ function prepareItem(itemId: string): THREE.Group | null {
     const template = build();
     const measuredHeight = normalizeRoot(template, QUEST_OBJECT_HEIGHTS[itemId] ?? TARGET_HEIGHT);
     measuredHeightByItem.set(itemId, measuredHeight);
-    preparedByItem.set(itemId, template);
+    preparedByItem.set(itemId, markTemplateShared(template));
     return template;
   }
   const gltf = gltfByUrl.get(url);
@@ -605,8 +632,38 @@ function prepareItem(itemId: string): THREE.Group | null {
   if (SCROLL_ITEM_IDS.has(itemId) && !AUTHORED_SCROLL_CUE_IDS.has(itemId)) {
     decorateScroll(root, itemId);
   }
-  preparedByItem.set(itemId, root);
+  preparedByItem.set(itemId, markTemplateShared(root));
   return root;
+}
+
+/** The feast contract bounds (scripts/assets/farm_props/model.js), which size
+ *  the no-item pick proxy below. BOTH feast GLBs, the party trestle table and
+ *  the apex pedestal banquet, are authored to this one envelope precisely so
+ *  the single proxy fits either table. Exported ONLY for the drift pin in
+ *  tests/farm_props_asset.test.ts: an authored prop resize on EITHER must move
+ *  this pair or the click box silently desyncs from the visible table. */
+export const NO_ITEM_PICK_HEIGHT = 0.9;
+export const NO_ITEM_PICK_FOOTPRINT = 1.6;
+
+/**
+ * The ONE material every no-item pick proxy wears (the sparkleMat precedent):
+ * renderer-owned and dispose-exempt (markSharedMaterial), so removeView's
+ * per-view teardown skips it and the program it holds stays resident. A fresh
+ * MeshBasicMaterial per view was one compile-gate unit per feast that LINKED
+ * (the view's gate enumerates the proxy as its own material group, and each
+ * despawn disposed the only material holding that program, so the next feast's
+ * gate linked it cold again); shared, the unit remains (one piece per gated
+ * root) but is a program-cache hit after the first feast of a session. Never
+ * clone this: Material.copy carries the shared tag into the clone
+ * (shared_resource.ts markOwnedMaterial), so a tinted or per-view variant
+ * would be one more never-disposed material. The proxy is invisible, so the
+ * material's look is irrelevant; the program key is a plain MeshBasicMaterial.
+ */
+const NO_ITEM_PICK_MATERIAL = markSharedMaterial(new THREE.MeshBasicMaterial());
+
+/** Test-only: the shared proxy material, so a suite can pin identity. */
+export function noItemPickMaterialForTest(): THREE.Material {
+  return NO_ITEM_PICK_MATERIAL;
 }
 
 export function buildGroundQuestObject(
@@ -614,6 +671,35 @@ export function buildGroundQuestObject(
   entityId: number,
 ): { group: THREE.Group; height: number } {
   const group = new THREE.Group();
+  // A ground object that grants NO item (renderer passes objectItemId ?? '';
+  // today only a placed feast, kind 'object', objectItemId null, carrying one
+  // of the templateIds `isFeastTemplateId` in src/sim/professions/feast.ts
+  // admits: the party feast's 'farm_feast' plus the three apex role feasts
+  // masterwrought Phase 11k added. Never key on the bare string here or
+  // anywhere; the family is derived from the catalog. Its world prop is drawn by
+  // farm_patches.ts, which since Phase 18 picks BETWEEN TWO TABLES off that
+  // same templateId (the party trestle table and the apex pedestal banquet;
+  // farmFeastModelUrl in farm_patches_core.ts), so this generic view must not
+  // stack a supply-crate body on top of either. What the view still owes the
+  // renderer is a raycastable click body and an honest anchor height, so the
+  // proxy is an INVISIBLE box at the feast contract's bounds, the ONE envelope
+  // both tables are authored to (the character clickProxy precedent:
+  // three's raycaster ignores `visible`). Fresh geometry per view on purpose
+  // (removeView's non-pooled path disposes it); the material is the shared
+  // dispose-exempt NO_ITEM_PICK_MATERIAL above, so the teardown that frees the
+  // box leaves the material, and its program, resident for the next feast.
+  if (!itemId) {
+    const proxy = new THREE.Mesh(
+      new THREE.BoxGeometry(NO_ITEM_PICK_FOOTPRINT, NO_ITEM_PICK_HEIGHT, NO_ITEM_PICK_FOOTPRINT),
+      NO_ITEM_PICK_MATERIAL,
+    );
+    proxy.position.y = NO_ITEM_PICK_HEIGHT / 2;
+    proxy.visible = false;
+    proxy.castShadow = false;
+    proxy.receiveShadow = false;
+    group.add(proxy);
+    return { group, height: NO_ITEM_PICK_HEIGHT };
+  }
   const key =
     PROCEDURAL_ITEM_IDS.has(itemId) || QUEST_OBJECT_URLS[itemId] ? itemId : 'supply_crate';
   const template = prepareItem(key);

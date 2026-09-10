@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
+import { FINITE_GUARD_GLSL } from '../src/render/post_finite_guard_glsl';
 import { OUTPUT_GRADE_FRAGMENT_SHADER, OutputGradePass } from '../src/render/post_output_grade';
 
 describe('fused output and grade shader', () => {
@@ -7,9 +8,7 @@ describe('fused output and grade shader', () => {
     const shader = OUTPUT_GRADE_FRAGMENT_SHADER;
     const diffuseSampleAt = shader.indexOf('vec4 outputColor = texture(tDiffuse, inputUv);');
     const bloomSampleAt = shader.indexOf('vec4 bloom = texture(tBloom, inputUv);');
-    const bloomBlendAt = shader.indexOf(
-      'outputColor.rgb = quantizeHalf(outputColor.rgb + sanitizeFinite(bloom.rgb * bloom.a));',
-    );
+    const bloomBlendAt = shader.indexOf('outputColor.rgb = quantizeHalf(');
     const toneMapAt = shader.indexOf('outputColor.rgb = ACESFilmicToneMapping(outputColor.rgb);');
     const srgbAt = shader.indexOf('outputColor = sRGBTransferOETF(outputColor);');
     const halfAt = shader.indexOf('vec3 c = quantizeHalf(outputColor.rgb);');
@@ -41,15 +40,74 @@ describe('fused output and grade shader', () => {
     expect(shader).toContain('vec2 inputUv = min(vUv * uInputUvRect.xy, uInputUvRect.zw);');
   });
 
+  it('runs the FXAA arm on the display-referred image, between the transfer and the grade', () => {
+    const shader = OUTPUT_GRADE_FRAGMENT_SHADER;
+    // The whole reason the FXAA arm is a define on THIS pass: it reuses the
+    // display-referred sample the grade already builds, so its edge detection
+    // sees the tone-mapped, transfer-encoded image a player looks at rather
+    // than the linear HDR buffer, where a bright sky swamps darker contours.
+    const displayFnAt = shader.indexOf('vec4 displayColor(vec2 inputUv) {');
+    const toneMapAt = shader.indexOf('outputColor.rgb = ACESFilmicToneMapping(outputColor.rgb);');
+    const srgbAt = shader.indexOf('outputColor = sRGBTransferOETF(outputColor);');
+    const displayReturnAt = shader.indexOf('return outputColor;');
+    const fxaaGuardAt = shader.indexOf('#ifdef FXAA_GRADE');
+    const fxaaTapAt = shader.indexOf('vec3 fxaaTap(vec2 inputUv, vec2 texelOffset) {');
+    const fxaaCallAt = shader.indexOf('outputColor.rgb = fxaaFilter(inputUv, outputColor.rgb);');
+    const gradeAt = shader.indexOf('vec3 c = quantizeHalf(outputColor.rgb);');
+
+    expect(displayFnAt).toBeGreaterThan(-1);
+    expect(toneMapAt).toBeGreaterThan(displayFnAt);
+    expect(srgbAt).toBeGreaterThan(toneMapAt);
+    expect(displayReturnAt).toBeGreaterThan(srgbAt);
+    expect(fxaaGuardAt).toBeGreaterThan(displayReturnAt);
+    expect(fxaaTapAt).toBeGreaterThan(fxaaGuardAt);
+    // Taps go through displayColor, so there is no second, raw sampler read.
+    expect(shader.match(/texture\(tDiffuse,/g)).toHaveLength(1);
+    // FXAA resolves before the grade tail, never after: the lift/vignette/grain
+    // are display-space cosmetics that must apply to the resolved pixel.
+    expect(fxaaCallAt).toBeGreaterThan(fxaaTapAt);
+    expect(gradeAt).toBeGreaterThan(fxaaCallAt);
+  });
+
+  it('clamps every FXAA tap into the rendered sub-rect so the region cannot bleed', () => {
+    const shader = OUTPUT_GRADE_FRAGMENT_SHADER;
+    // uInputUvRect.zw is the centre of the last RENDERED texel, so clamping to
+    // it stops a bilinear tap reaching the stale pixels a reduced region leaves
+    // in the rest of the target. Every tap goes through this one helper.
+    expect(shader).toContain(
+      'vec2 uv = clamp(inputUv + texelOffset * uInputTexelSize, vec2(0.0), uInputUvRect.zw);',
+    );
+    const tapBody = shader.slice(
+      shader.indexOf('vec3 fxaaTap(vec2 inputUv, vec2 texelOffset) {'),
+      shader.indexOf('vec3 fxaaFilter(vec2 inputUv, vec3 displayM) {'),
+    );
+    expect(tapBody).toContain('displayColor(uv)');
+    const fxaaBody = shader.slice(
+      shader.indexOf('vec3 fxaaFilter(vec2 inputUv, vec3 displayM) {'),
+      shader.indexOf('void main() {'),
+    );
+    expect(fxaaBody).not.toContain('displayColor(');
+    expect(fxaaBody.match(/fxaaTap\(inputUv,/g)).toHaveLength(8);
+  });
+
   it('rewrites NaN to zero on both composer-target reads before the tonemap', () => {
     // A single NaN fragment in the HalfFloat beauty target is smeared frame-wide
     // by the bloom blur and tonemaps to black on the composer tiers, while the
     // UNSIGNED_BYTE direct-to-canvas tiers clamp it away. Some drivers (ANGLE's
     // OpenGL backend with NVIDIA on Linux) emit those NaNs from the IBL/PBR path,
     // so OutputGradePass must scrub NaN out of BOTH the beauty read and the
-    // (already blur-spread) bloom read. Losing either scrub brings the black back.
+    // (already blur-spread) bloom read, on the bloom ADDEND itself: scrubbing
+    // only the sum turns a NaN bloom tap into `beauty + NaN`, which is NaN
+    // again, and the sum-sanitize would then rewrite the WHOLE pixel to 0
+    // instead of just dropping the bloom contribution. Losing either scrub
+    // brings the black back.
     const shader = OUTPUT_GRADE_FRAGMENT_SHADER;
-    expect(shader).toContain('(v.x < 0.0 || v.x >= 0.0) ? v.x : 0.0');
+    // Bit-exact, never a comparison: Mali evaluates NaN comparisons as finite
+    // (see post_finite_guard_glsl.ts), which is how the phone went black with
+    // the comparison form in place.
+    expect(shader).toContain(FINITE_GUARD_GLSL);
+    expect(shader).toContain('vec3 finite = wocSanitizeFinite(v);');
+    expect(shader).not.toContain('v.x < 0.0 || v.x >= 0.0');
     const helperAt = shader.indexOf('vec3 sanitizeFinite(vec3 v) {');
     const beautyScrubAt = shader.indexOf('outputColor.rgb = sanitizeFinite(outputColor.rgb);');
     const diffuseSampleAt = shader.indexOf('vec4 outputColor = texture(tDiffuse, inputUv);');
@@ -60,6 +118,25 @@ describe('fused output and grade shader', () => {
     expect(bloomScrubAt).toBeGreaterThan(-1);
     expect(toneMapAt).toBeGreaterThan(beautyScrubAt);
     expect(toneMapAt).toBeGreaterThan(bloomScrubAt);
+  });
+
+  it('caps finite overflow candidates before the SUM reaches quantizeHalf', () => {
+    // The shared guard owns literal NaN and Inf, and maps both to zero for the
+    // Android/Mali path. OutputGradePass still has to clamp finite runaway
+    // values on both signs, and it must sanitize the SUM of the beauty and
+    // bloom terms IN ADDITION TO the addend (see the NaN test above, a separate
+    // invariant): two large finite terms can still add past 65504, which
+    // packHalf2x16 cannot represent and rounds to +Infinity, reopening the
+    // exact hole this pin exists to keep shut. Never one scrub instead of the
+    // other.
+    const shader = OUTPUT_GRADE_FRAGMENT_SHADER;
+    expect(shader).toContain('vec3 finite = wocSanitizeFinite(v);');
+    expect(shader).toContain('return clamp(finite, vec3(-65504.0), vec3(65504.0));');
+    expect(shader).not.toContain('clamp(finite, vec3(0.0), vec3(65504.0))');
+    expect(shader).not.toContain('return min(finite, vec3(65504.0));');
+    expect(shader).toContain(
+      'sanitizeFinite(outputColor.rgb + sanitizeFinite(bloom.rgb * bloom.a))',
+    );
   });
 
   it('only calls tonemapping functions the installed three chunk defines', () => {
@@ -127,5 +204,47 @@ describe('fused output and grade shader', () => {
 
     pass.setInputUvRect(0.75, 0.8, 0.7, 0.74);
     expect(pass.uniforms.uInputUvRect.value.toArray()).toEqual([0.75, 0.8, 0.7, 0.74]);
+  });
+
+  it('compiles the FXAA arm only where it is asked for and leaves the SMAA tiers alone', () => {
+    const renderer = {
+      autoClear: true,
+      outputColorSpace: THREE.SRGBColorSpace,
+      toneMapping: THREE.ACESFilmicToneMapping,
+      toneMappingExposure: 1,
+      autoClearColor: true,
+      autoClearDepth: true,
+      autoClearStencil: false,
+      setRenderTarget: vi.fn(),
+      clear: vi.fn(),
+    } as unknown as THREE.WebGLRenderer;
+    const write = new THREE.WebGLRenderTarget(16, 8);
+    const read = new THREE.WebGLRenderTarget(64, 32);
+
+    const graded = new OutputGradePass({ value: 0 }, new THREE.Texture());
+    vi.spyOn(graded.fsQuad, 'render').mockImplementation(() => {});
+    graded.render(renderer, write, read);
+    expect(graded.fxaa).toBe(false);
+    expect(graded.material.defines).toEqual({
+      BLOOM_PREPARED: '',
+      SRGB_TRANSFER: '',
+      ACES_FILMIC_TONE_MAPPING: '',
+    });
+    // Nothing to drive, so the tiers that keep tail SMAA never pay the uniform
+    // write either.
+    expect(graded.uniforms.uInputTexelSize.value.toArray()).toEqual([0, 0]);
+
+    const antialiased = new OutputGradePass({ value: 0 }, null, { fxaa: true });
+    vi.spyOn(antialiased.fsQuad, 'render').mockImplementation(() => {});
+    antialiased.render(renderer, write, read);
+    expect(antialiased.fxaa).toBe(true);
+    expect(antialiased.material.defines).toEqual({
+      FXAA_GRADE: '',
+      SRGB_TRANSFER: '',
+      ACES_FILMIC_TONE_MAPPING: '',
+    });
+    // One texel of the READ target, which is what the rendered sub-rect is made
+    // of, so the taps stay a texel apart at every region scale.
+    expect(antialiased.uniforms.uInputTexelSize.value.toArray()).toEqual([1 / 64, 1 / 32]);
   });
 });

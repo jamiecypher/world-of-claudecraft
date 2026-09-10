@@ -1,4 +1,4 @@
-// Frozen Orb visual: the roaming ice sphere the frost mage releases (WoW-style
+// Frostglobe visual: the roaming ice sphere the frost mage releases (WoW-style
 // reference: a translucent blue orb drifting forward, swirling shards, frosty
 // glow, sparkling frost trail). The sim's orb is pure state (ctx.frozenOrbs,
 // never wired); the client animates the flight locally from three 'orb'
@@ -20,6 +20,7 @@
 // is the renderer, the determinism ban is sim-only.
 
 import * as THREE from 'three';
+import type { SimEvent } from '../sim/types';
 import { SCHOOL_COLORS } from './vfx';
 
 const ORB_HOVER = 1.15; // yards the sphere floats above the terrain
@@ -358,4 +359,68 @@ export class FrozenOrbFx {
     orb.trail.geometry.dispose();
     this.orbs.splice(index, 1);
   }
+
+  /** Renderer teardown (renderer_resource_lifecycle.ts): every live orb is
+   *  removed (its materials return to the pools), then the pools and the
+   *  shared geometries are disposed. Idempotent, and a spawn afterwards
+   *  rebuilds the geometries lazily exactly like the first spawn did. */
+  dispose(): void {
+    while (this.orbs.length > 0) this.remove(this.orbs.length - 1);
+    const pools: THREE.Material[][] = [
+      this.shellPool,
+      this.corePool,
+      this.shardPool,
+      this.trailPool,
+    ];
+    for (const pool of pools) {
+      for (const mat of pool) mat.dispose();
+      pool.length = 0;
+    }
+    this.shellGeo?.dispose();
+    this.coreGeo?.dispose();
+    this.shardGeo?.dispose();
+    this.shellGeo = null;
+    this.coreGeo = null;
+    this.shardGeo = null;
+  }
+}
+
+/** The 'spellfxAt' fields the orb flight reads; the fx union keeps a typo in
+ *  the dispatch arm a compile error. */
+export interface FrozenOrbSpellfxEvent {
+  fx: Extract<SimEvent, { type: 'spellfxAt' }>['fx'];
+  x: number;
+  z: number;
+  sourceId?: number;
+  phase?: 'release' | 'halt' | 'resume';
+  dirX?: number;
+  dirZ?: number;
+  speed?: number;
+  duration?: number;
+}
+
+/**
+ * The Frostglobe flight, animated locally from its three moments: 'release'
+ * starts the drift, 'halt'/'resume' freeze and restart it at the server's
+ * real coordinates when the orb latches onto an enemy. The caller's pulse
+ * novas stay the area telegraph, so no actionable information rides on this
+ * mesh. Moved verbatim from the renderer's event switch; returns true when
+ * the event was consumed.
+ */
+export function handleFrozenOrbSpellfxEvent(fx: FrozenOrbFx, ev: FrozenOrbSpellfxEvent): boolean {
+  if (ev.fx !== 'orb') return false;
+  const orbSource = ev.sourceId ?? -1;
+  if (ev.phase === 'halt') fx.halt(orbSource, ev.x, ev.z);
+  else if (ev.phase === 'resume') fx.resume(orbSource, ev.x, ev.z);
+  else
+    fx.spawn({
+      sourceId: orbSource,
+      x: ev.x,
+      z: ev.z,
+      dirX: ev.dirX ?? 0,
+      dirZ: ev.dirZ ?? 1,
+      speed: ev.speed ?? 2.5,
+      duration: ev.duration ?? 8,
+    });
+  return true;
 }

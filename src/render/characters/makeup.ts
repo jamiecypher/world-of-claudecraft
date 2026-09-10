@@ -29,6 +29,7 @@
 // frame is each head's own bounding box mapped to the unit sphere, so the ~3%
 // proportion difference is already divided out.
 import * as THREE from 'three';
+import { applyTextureAnisotropy } from '../texture_anisotropy';
 import {
   type BlushShade,
   blushColor,
@@ -160,6 +161,23 @@ export function makeupTextureData(
   size = MAKEUP_TEX_SIZE,
 ): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(new ArrayBuffer(size * size * 4));
+  makeupTextureRows(sel, out, 0, size, size);
+  return out;
+}
+
+/**
+ * Paint the rows [rowStart, rowEnd) of a makeup map into `out`, laid out as
+ * `makeupTextureData` allocates it. Bands concatenate to the byte-identical
+ * full map (each texel depends on its own coordinates only), which is what
+ * lets look_pieces.ts build a look's map a slice at a time.
+ */
+export function makeupTextureRows(
+  sel: Pick<MakeupSelection, 'blush' | 'eyeshadow'>,
+  out: Uint8Array,
+  rowStart: number,
+  rowEnd: number,
+  size = MAKEUP_TEX_SIZE,
+): void {
   const shadow = shadowColor(sel.eyeshadow);
   const blush = blushColor(sel.blush);
   // RGB must be valid in EVERY texel, covered or not: three multiplies the
@@ -167,17 +185,17 @@ export function makeupTextureData(
   // through bilinear filtering and rings the patch with a dark halo. Filling
   // with the layer's own colour means the bleed is invisible instead.
   const fill = shadow ?? blush ?? 0xffffff;
-  for (let i = 0; i < size * size; i++) {
+  for (let i = rowStart * size; i < rowEnd * size; i++) {
     out[i * 4] = (fill >> 16) & 0xff;
     out[i * 4 + 1] = (fill >> 8) & 0xff;
     out[i * 4 + 2] = fill & 0xff;
   }
-  if (shadow === null && blush === null) return out;
+  if (shadow === null && blush === null) return;
   // Blush is the lighter of the two on purpose: it is colour in the skin, while
   // eyeshadow is colour ON it.
   const SHADOW_ALPHA = 0.5;
   const BLUSH_ALPHA = 0.34;
-  for (let row = 0; row < size; row++) {
+  for (let row = rowStart; row < rowEnd; row++) {
     const v = (row + 0.5) / size - 0.5;
     for (let colIdx = 0; colIdx < size; colIdx++) {
       const u = (colIdx + 0.5) / size - 0.5;
@@ -209,7 +227,6 @@ export function makeupTextureData(
       out[i + 3] = Math.min(255, Math.round(cover * 255));
     }
   }
-  return out;
 }
 
 export function makeupKeyOf(sel: Pick<MakeupSelection, 'blush' | 'eyeshadow'>): string {
@@ -218,14 +235,29 @@ export function makeupKeyOf(sel: Pick<MakeupSelection, 'blush' | 'eyeshadow'>): 
 
 const textureCache = new Map<string, THREE.DataTexture>();
 
+/** Whether a shade pair's map is already resident (built and cached). */
+export function hasMakeupTexture(sel: Pick<MakeupSelection, 'blush' | 'eyeshadow'>): boolean {
+  return textureCache.has(makeupKeyOf(sel));
+}
+
 export function makeupTexture(
   sel: Pick<MakeupSelection, 'blush' | 'eyeshadow'>,
+): THREE.DataTexture {
+  return textureCache.get(makeupKeyOf(sel)) ?? makeupTextureFromData(sel, makeupTextureData(sel));
+}
+
+/** Wrap already-painted bytes (a full `makeupTextureData` map, whichever way
+ *  its rows were produced) as the shade pair's cached texture. A pair that
+ *  already has one keeps it: the first publish wins. */
+export function makeupTextureFromData(
+  sel: Pick<MakeupSelection, 'blush' | 'eyeshadow'>,
+  data: Uint8Array<ArrayBuffer>,
 ): THREE.DataTexture {
   const key = makeupKeyOf(sel);
   const hit = textureCache.get(key);
   if (hit) return hit;
   const tex = new THREE.DataTexture(
-    makeupTextureData(sel),
+    data,
     MAKEUP_TEX_SIZE,
     MAKEUP_TEX_SIZE,
     THREE.RGBAFormat,
@@ -238,7 +270,7 @@ export function makeupTexture(
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.generateMipmaps = true;
-  tex.anisotropy = 8;
+  applyTextureAnisotropy(tex, 'colour');
   tex.needsUpdate = true;
   textureCache.set(key, tex);
   return tex;
@@ -286,6 +318,18 @@ function makeupGeometry(head: THREE.BufferGeometry): THREE.BufferGeometry | null
   const geo = frame ? buildRegionDecalGeometry(head, frame, MAKEUP_REGION) : null;
   geoCache.set(key, geo);
   return geo;
+}
+
+/** Whether the makeup cut for this head geometry is already resident (a head
+ *  with no usable frame counts once ensured, as `null`). */
+export function hasMakeupGeometry(head: THREE.BufferGeometry): boolean {
+  return geoCache.has(head.uuid);
+}
+
+/** Build (and cache) the cut `buildMakeupDecal` will read for this head,
+ *  without building the mesh. */
+export function ensureMakeupGeometry(head: THREE.SkinnedMesh): void {
+  makeupGeometry(head.geometry);
 }
 
 /** The blush/eyeshadow mesh for a composed character, or null when neither is

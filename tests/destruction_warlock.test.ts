@@ -205,7 +205,12 @@ describe('destruction progression', () => {
     const consume = sim.ctx.resolvedAbility('drain_life', p.id);
     const drain = consume?.effects.find((effect) => effect.type === 'drainTick');
     if (!consume || drain?.type !== 'drainTick') throw new Error('Missing Destruction Consume');
-    const spellPowerBonus = channelTickBonus(p.spellPower, consume.def);
+    // The 2026-08-23 viability floor gives Destruction spellDmgPct 0.1; the
+    // v0.42.0 Ruination retune adds a further +0.11 offensive spec bonus
+    // (spec_output_tuning.ts), so the resolved dmgMult is 1.21, not 1.1. The
+    // engine scales the channel tick's spell-power rider by that same
+    // resolved talent multiplier the baked base already carries.
+    const spellPowerBonus = channelTickBonus(p.spellPower, consume.def, 1.21);
     expect(spellPowerBonus).toBeGreaterThan(0);
     const rawTick = drain.min + spellPowerBonus;
     const expectedHeal = Math.round(rawTick * 0.7);
@@ -602,7 +607,10 @@ describe('Destruction finishers and target switching', () => {
 
     resetGcd(p);
     p.hitBonus = 1;
-    mob.hp = 99;
+    // 150 sits clearly inside the sub-20% execute window (maxHp 1000, not a
+    // boundary value) with room for the 2026-08-23 viability-floor damage
+    // raise to land non-lethally.
+    mob.hp = 150;
     const events = castAndLand(sim, 'shadowburn', 2);
     expect(
       events.some(
@@ -618,11 +626,11 @@ describe('Destruction finishers and target switching', () => {
 
   it('Duskfire spends first, refunds on a later death inside five seconds, and expires cleanly', () => {
     const inside = destructionAt();
-    const insideMob = addDummy(inside.sim, 9712, 0, 500);
+    const insideMob = addDummy(inside.sim, 9712, 0, 1_000);
     inside.sim.targetEntity(insideMob.id);
     inside.p.facing = 0;
     inside.p.hitBonus = 1;
-    insideMob.hp = 99;
+    insideMob.hp = 150;
     giveRuin(inside.p, 1);
     inside.sim.castAbility('shadowburn');
     expect(ruinAmount(inside.p)).toBe(0);
@@ -641,10 +649,10 @@ describe('Destruction finishers and target switching', () => {
     expect(ruinAmount(inside.p)).toBe(1);
 
     const expired = destructionAt();
-    const expiredMob = addDummy(expired.sim, 9713, 0, 500);
+    const expiredMob = addDummy(expired.sim, 9713, 0, 1_000);
     expired.sim.targetEntity(expiredMob.id);
     expired.p.facing = 0;
-    expiredMob.hp = 99;
+    expiredMob.hp = 150;
     giveRuin(expired.p, 1);
     expired.sim.castAbility('shadowburn');
     expect(ruinAmount(expired.p)).toBe(0);
@@ -703,6 +711,9 @@ describe('Destruction finishers and target switching', () => {
     const primary = addDummy(sim, 9740);
     const branded = addDummy(sim, 9741, 3);
     p.facing = 0;
+    // Never-resist rig: Ruinous Brand is an instant hostile spell, so it takes a
+    // resist roll; a resisted brand leaves nothing for the second bolt to seek.
+    p.hitBonus = 1;
 
     sim.targetEntity(branded.id);
     castAndLand(sim, 'ruinous_brand', 1);
@@ -1025,7 +1036,9 @@ describe('Pyre Colossus', () => {
     expect(
       pulses.filter((event) => event.type === 'damage' && event.targetId === friendly.id),
     ).toHaveLength(0);
-    expect(pulses.every((event) => event.type === 'damage' && event.amount === 60)).toBe(true);
+    // v0.42.0 Ruination: the explicit destruction-only Pyre Aura pet bonus
+    // lifts the flat nova from 60 to 66.
+    expect(pulses.every((event) => event.type === 'damage' && event.amount === 66)).toBe(true);
     expect(ruinAmount(p)).toBe(4);
   });
 

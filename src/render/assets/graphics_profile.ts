@@ -1,6 +1,5 @@
 import { resetBankerChestProfileCaches } from '../banker_chest';
 import { prepareCanopyDetailProfileAssets } from '../canopy_detail';
-import { resetCastleFeatureProfileCaches } from '../castle_features';
 import { prepareCharacterProfileAssets, resetCharacterProfileCaches } from '../characters/assets';
 import { prepareCliffScreeProfileAssets, resetCliffScreeProfileCaches } from '../cliff_scree';
 import { prepareStoneDetailProfileAssets } from '../detail_normals';
@@ -19,6 +18,7 @@ import { prepareFoliageProfileAssets, resetFoliageProfileCaches } from '../folia
 import { resetFrostNovaRootProfileCaches } from '../frost_nova_root_visual';
 import { type GfxSettings, resetSurfaceMaterialProfileCache } from '../gfx';
 import { prepareGreatTreeProfileAssets } from '../great_tree_prewarm';
+import { clearGroundDecorPrewarmDraws } from '../ground_decor_prewarm';
 import { resetIceBlockProfileCaches } from '../ice_block_visual';
 import { resetJailSceneProfileCaches } from '../jail_scene';
 import { prepareMailboxProfileAssets, resetMailboxProfileCaches } from '../mailbox';
@@ -29,8 +29,6 @@ import { ensureSkyAssetsAt } from '../sky';
 import { resetStationProfileCaches } from '../stations';
 import { resetTemporalHourglassProfileCaches } from '../temporal_hourglass_visual';
 import { prepareTerrainProfileAssets } from '../terrain';
-import { resetValeCupBallProfileCaches } from '../vale_cup_ball';
-import { resetValeCupStadiumProfileCaches } from '../vale_cup_stadium';
 import { prepareWaterProfileAssets } from '../water';
 import { resetWildheartTerrainProfileCaches } from '../wildheart_terrain';
 import { prepareSurfaceDetailProfileAssets, resetSurfaceDetailProfileCaches } from '../worn_stone';
@@ -71,7 +69,6 @@ const RESETTERS = [
   ['props', resetPropProfileCaches],
   ['characters', resetCharacterProfileCaches],
   ['stations', resetStationProfileCaches],
-  ['castle_features', resetCastleFeatureProfileCaches],
   ['eastbrook_surface_atlas', resetEastbrookSurfaceProfileCaches],
   ['eastbrook_town', resetEastbrookTownProfileCaches],
   ['banker_chest', resetBankerChestProfileCaches],
@@ -82,13 +79,15 @@ const RESETTERS = [
   ['jail_scene', resetJailSceneProfileCaches],
   ['cliff_scree', resetCliffScreeProfileCaches],
   ['door_portal', resetDoorPortalProfileCaches],
-  ['vale_cup_ball', resetValeCupBallProfileCaches],
-  ['vale_cup_stadium', resetValeCupStadiumProfileCaches],
   ['wildheart_terrain', resetWildheartTerrainProfileCaches],
   ['fireball_travel_visual', resetFireballTravelProfileCaches],
   ['frost_nova_root_visual', resetFrostNovaRootProfileCaches],
   ['ice_block_visual', resetIceBlockProfileCaches],
   ['temporal_hourglass_visual', resetTemporalHourglassProfileCaches],
+  // The boot twin manifest for the lazy ground-decor pools holds the LIVE
+  // materials of the retiring profile: a rebuild mints new ones, and a twin
+  // wearing a retired material links a program nothing will ever draw.
+  ['ground_decor_prewarm', clearGroundDecorPrewarmDraws],
 ] as const satisfies readonly (readonly [owner: string, reset: () => void])[];
 
 /**

@@ -16,13 +16,14 @@
 // `src/sim`-pure: no DOM/Three/render-ui-game-net imports, no Math.random/
 // Date.now (enforced by tests/architecture.test.ts). The post draws NO rng.
 
-import { bagCapacity, canGrantCopies, instancedCountCap } from '../bags';
+import { bagPools, canGrantCopies, instancedCountCap } from '../bags';
 import { rekeySigner } from '../character_rename';
 import {
   HEROIC_MARK_LETTER,
   type LetterDef,
   QUEST_LETTERS,
   WELCOME_LETTER,
+  WYRMFALL_CORE_LETTER,
 } from '../content/letters';
 import { ITEMS } from '../data';
 import { boundCraftedRecipeIdOnLoad, warnDroppedInstanceKeys } from '../item_instance_load';
@@ -36,6 +37,11 @@ import {
   sanitizeEscrowSlot,
 } from '../item_instance_transfer';
 import { removeVendorSellUnits } from '../items';
+import { isMaterialItemId } from '../material_ids';
+import { rekeyMaterialSignature } from '../material_signatures';
+import { validateMaterialSlotSourcesOnLoad } from '../material_slot_load';
+
+import { WYRMFALL_CORE_ITEM_ID } from '../professions/masterwrought_materials';
 import type { PlayerMeta } from '../sim';
 import type { SimContext } from '../sim_context';
 import {
@@ -47,6 +53,7 @@ import {
   type MailResultCode,
 } from '../types';
 import { MailIndex } from './mail_index';
+import { planMaterialMailAttachments } from './material_attachment_plan';
 
 const MAIL_RANGE = INTERACT_RANGE + 2; // you must stand at a raven pillar to tend your post
 export const MAIL_POSTAGE = 30; // copper per letter
@@ -58,6 +65,17 @@ const MAIL_EXPIRY_SECONDS = 14 * 24 * 3600; // sim-seconds a read/plain letter l
 // sender, and the returned letter's second window before the sweep deletes it.
 export const MAIL_ATTACHMENT_EXPIRY_SECONDS = 30 * 24 * 3600;
 const MAIL_MAX_PER_RECIPIENT = 100; // stored letters per mailbox (full = refuse new)
+// #3561: the window every still-live letter with a finite expiresAt gets its
+// persisted deliverIn/secondsLeft refreshed at least once, staggered by id
+// (one ~1/3600th slice of the book per sim-second, never a synchronized
+// whole-book burst): bounds staleness against both the 30-day attachment
+// window it protects (MAIL_ATTACHMENT_EXPIRY_SECONDS, at roughly 0.14%) and
+// the 14-day plain-letter expiry window (MAIL_EXPIRY_SECONDS, at roughly
+// 0.3%), nowhere near the tight ~30s bound the old whole-book autosave
+// incidentally provided but never actually needed. See PostOffice.update.
+// Exported so tests can compute a letter's exact stagger slot (id %
+// MAIL_PERSIST_REFRESH_SECONDS) instead of guessing how long to tick.
+export const MAIL_PERSIST_REFRESH_SECONDS = 3600;
 export const MAIL_SUBJECT_MAX = 64;
 export const MAIL_BODY_MAX = 600;
 
@@ -86,6 +104,12 @@ export interface MailMessage {
   // parcels hold Infinity while attachments remain (their expiry exemption).
   expiresAt: number;
   read: boolean;
+  // Opaque broker reference on custody parcels (the $WOC Exchange delivery /
+  // return letters): the server-side custodian books each reference AT MOST
+  // ONCE (mailSystemParcel refuses a duplicate), so a crash-retry between
+  // "letter booked" and "settlement row advanced" reconciles to exactly one
+  // delivery. Absent on every other letter. Persisted.
+  custodyRef?: string;
   // The one return-to-sender cycle has run. The sweep's delete arm requires
   // this flag, so attachments are never destroyed without a return flight.
   returned?: boolean;
@@ -113,6 +137,7 @@ export interface MailSave {
     deliverIn: number; // seconds until delivery (0 = already delivered)
     secondsLeft: number; // seconds until expiry; -1 = never expires
     read: boolean;
+    custodyRef?: string; // broker book-once reference; absent off custody mail
     returned?: boolean; // the return cycle has run; absent = false
   }[];
   nextMailId: number;
@@ -182,12 +207,33 @@ export class PostOffice {
     // former per-call scan at the exact tick (never a per-second lag). Iterates
     // only the small in-flight set, not the whole book, and touches no rng/event
     // stream (the arrival toast keeps its own per-second cadence below). A
-    // landing changes what mailInfoFor shows purely by time passing, so it is
-    // a rev bump like any other mutation (the wire gate would otherwise serve
-    // the pre-landing view until its staleness backstop).
+    // landing changes what mailInfoFor shows and what deliverIn persists, so it
+    // is a rev bump and a dirty-partition mark like any other mutation.
     if (this.index.deliverDue(this.ctx.time) > 0) this.bumpRev();
     if (this.ctx.tickCount % 20 !== 0) return;
     const now = this.ctx.time;
+    // #3561: serializeLetter's deliverIn/secondsLeft are computed relative to
+    // "now" at the moment a letter is actually persisted, not stored as
+    // absolute times (sim.time resets to 0 every boot). The old whole-book
+    // autosave refreshed every letter every 30 s regardless, so staleness was
+    // bounded to one autosave cycle; incremental persistence only refreshes a
+    // letter when something dirties it, so a letter nobody touches could
+    // otherwise drift for the rest of the boot's uptime and grant itself extra
+    // life across an eventual restart: an escrowed parcel's attachment window
+    // stretches out, or (a P0 originally missed here) a plain letter's 14-day
+    // read/expiry clock never advances at all, so it effectively never expires
+    // across a restart, since realms restart far more often than 14 days. Both
+    // silently defeat the reclaim sweep #3561 exists to keep working, so
+    // re-dirty every still-live letter with a finite expiresAt, escrowed or
+    // plain alike, on the same bounded cadence below: its persisted countdown
+    // can never be staler than the old design ever allowed. Staggered by id,
+    // one slice of the book per sim-second (below), never the whole book on
+    // the same tick: a synchronized whole-book burst every
+    // MAIL_PERSIST_REFRESH_SECONDS would itself reopen the #3555 stall class
+    // at the book's scale. Cheap even so: roughly book-size /
+    // MAIL_PERSIST_REFRESH_SECONDS dirty marks per second (about 42/s at the
+    // #3561 150k-letter benchmark), and a dirty mark is O(1), not a write.
+    const refreshSlot = Math.floor(now) % MAIL_PERSIST_REFRESH_SECONDS;
     for (let i = this.mail.length - 1; i >= 0; i--) {
       const m = this.mail[i];
       if (!m.announced && now >= m.deliverAt) {
@@ -202,13 +248,14 @@ export class PostOffice {
           });
         }
       }
+      const hasEscrow = m.items.length > 0 || m.copper > 0;
       // Attachment expiry, player mail ONLY: a system/npc parcel holds
       // expiresAt = Infinity, so it can never trip this arm; the kind filter is
       // the belt-and-braces behind that by-construction exemption. An unclaimed
       // parcel first flies home; deletion with attachments aboard requires the
       // returned flag, so no item is ever destroyed without the return cycle
       // having run.
-      if (m.kind === 'player' && now >= m.expiresAt && (m.items.length > 0 || m.copper > 0)) {
+      if (m.kind === 'player' && now >= m.expiresAt && hasEscrow) {
         if (m.returned) {
           // The one sanctioned destruction: the return flight already happened.
           this.index.untrack(m, now);
@@ -219,12 +266,16 @@ export class PostOffice {
         }
         continue;
       }
-      if (now >= m.expiresAt && m.items.length === 0 && m.copper <= 0) {
+      if (now >= m.expiresAt && !hasEscrow) {
         // An expired letter leaves the buckets and, if delivered-and-unread,
         // the unread count (untrack re-derives both from the letter's state).
         this.index.untrack(m, now);
         this.mail.splice(i, 1);
         this.bumpRev();
+        continue;
+      }
+      if (Number.isFinite(m.expiresAt) && m.id % MAIL_PERSIST_REFRESH_SECONDS === refreshSlot) {
+        this.index.markDirty(m.recipientKey);
       }
     }
   }
@@ -443,8 +494,10 @@ export class PostOffice {
           this.result(meta.entityId, 'noMailBound');
           return;
         }
-        instancedWanted.push({ itemId: s.itemId, instance: s.instance });
-      } else {
+        if (!isMaterialItemId(s.itemId)) {
+          instancedWanted.push({ itemId: s.itemId, instance: s.instance });
+        }
+      } else if (!isMaterialItemId(s.itemId)) {
         wanted.set(s.itemId, (wanted.get(s.itemId) ?? 0) + count);
       }
     }
@@ -471,6 +524,23 @@ export class PostOffice {
         return;
       }
     }
+    // Materials plan as one batch on an independent inventory before copper or
+    // goods move. Source signatures are provenance rather than payload
+    // identity, so a plain material request may include premium units that the
+    // legacy signer-needle route already allowed. Sequential scratch planning
+    // also closes the overlap between such a plain request and a legacy signer
+    // needle: a later shortfall refuses the whole letter instead of booking a
+    // partial parcel after the first request consumed its unit.
+    const materialPlan = planMaterialMailAttachments(meta.inventory, items);
+    if (!materialPlan.ok) {
+      if (materialPlan.error === 'invalid-material-state') {
+        throw new Error('invalid material source state in mail attachment planning');
+      }
+      if (materialPlan.error === 'insufficient') {
+        this.result(meta.entityId, 'notEnoughItems');
+      }
+      return;
+    }
     if (meta.copper < coin + MAIL_POSTAGE) {
       this.result(meta.entityId, 'cantAffordPostage');
       return;
@@ -479,32 +549,39 @@ export class PostOffice {
       this.result(meta.entityId, 'recipientBoxFull');
       return;
     }
-    // Escrow: coin and goods leave the sender now, ride with the raven. An
-    // instanced entry escrows the ACTUAL matching copy, whose payload
-    // (removeMatchingInstance's contract, never the wire needle) is what the
-    // letter carries. A plain entry escrows via removeVendorSellUnits (the
-    // trade/market walk) with a `skip` that spares every instanced copy
-    // (matching the countFungibleItem check above, so an instanced copy is
-    // never consumed as a plain stack member), so the escrow reports each
-    // removed unit's plain-stack craftedRecipeId marker (bags.ts
-    // InvSlot.craftedRecipeId): otherwise a mailed crafted item lands at the
-    // recipient with no marker, laundering the disenchant-gate provenance the
-    // same way the trade/market fix closed. A single plain entry can legitimately
-    // span two provenance buckets (the market's boundstone_helm case), so it
-    // splits into one parcel per bucket rather than merging them.
+    // Escrow: coin and goods leave the sender now, ride with the raven.
+    // Materials apply the already-validated batch answer below, so the rows
+    // entering the letter are exactly the source/payload/recipe composition the
+    // preview selected. Non-materials keep the existing equality-needle and
+    // fungible removal paths, including their craftedRecipeId bucket split.
     meta.copper -= coin + MAIL_POSTAGE;
     const parcels: InvSlot[] = [];
-    for (const s of items) {
+    if (materialPlan.value.rowsByAttachment.some((rows) => rows !== null)) {
+      meta.inventory.length = materialPlan.value.inventory.length;
+      for (let i = 0; i < materialPlan.value.inventory.length; i++) {
+        meta.inventory[i] = materialPlan.value.inventory[i];
+      }
+      this.ctx.onInventoryChangedForQuests?.(meta);
+    }
+    for (const [attachmentIndex, s] of items.entries()) {
+      const materialRows = materialPlan.value.rowsByAttachment[attachmentIndex];
+      if (materialRows !== null) {
+        parcels.push(...materialRows);
+        continue;
+      }
       if (s.instance && typeof s.instance === 'object') {
         const escrowed = removeMatchingInstance(this.ctx, s.itemId, s.instance, meta.entityId);
         // The craft marker rides alongside the payload: an instanced parcel can
         // be crafted too (a masterwork proc, an enchanted crafted piece), so it
         // is carried rather than assumed absent on this arm.
-        if (escrowed?.instance)
+        if (escrowed)
           parcels.push({
             itemId: s.itemId,
             count: 1,
-            instance: escrowed.instance,
+            ...(escrowed.instance === undefined ? {} : { instance: escrowed.instance }),
+            ...(escrowed.materialSources === undefined
+              ? {}
+              : { materialSources: escrowed.materialSources }),
             ...(escrowed.craftedRecipeId === undefined
               ? {}
               : { craftedRecipeId: escrowed.craftedRecipeId }),
@@ -579,8 +656,15 @@ export class PostOffice {
     }
     // Parcels respect bag capacity (#1354, the market-collect rule): a stack that
     // does not fit stays ATTACHED to the letter for a later take, never destroyed
-    // and never force-added past the bag budget. canAddItem is checked per stack
-    // against the live inventory, so cumulative capacity is honoured.
+    // and never force-added past the bag budget. Capacity is checked per stack
+    // against the live inventory, so cumulative capacity is honoured. An
+    // instanced parcel (a marketplace custody delivery or return) grants
+    // through addItemInstance so the exact payload survives. Every grant
+    // carries the slot's craftedRecipeId through, and every capacity
+    // pre-check models the identical-payload AND same-craftedRecipeId merge
+    // the grant applies (countFit, the #2139 rule: a pre-check that disagrees
+    // with the grant's merge model re-opens the overflow class), never the
+    // plain fungible model.
     const kept: InvSlot[] = [];
     for (const s of m.items) {
       // The shared payload-aware pair (bags.ts canGrantCopies + grantCopies):
@@ -591,14 +675,23 @@ export class PostOffice {
       if (
         canGrantCopies(
           meta.inventory,
-          bagCapacity(meta.bags),
+          bagPools(meta.bags),
           s.itemId,
           s.count,
           s.instance,
           s.craftedRecipeId,
+          s.materialSources,
         )
       ) {
-        grantCopies(this.ctx, meta.entityId, s.itemId, s.count, s.instance, s.craftedRecipeId);
+        grantCopies(
+          this.ctx,
+          meta.entityId,
+          s.itemId,
+          s.count,
+          s.instance,
+          s.craftedRecipeId,
+          s.materialSources,
+        );
       } else {
         kept.push(s);
       }
@@ -610,7 +703,19 @@ export class PostOffice {
       this.index.markRead(m, this.ctx.time);
       mutated = true;
     }
-    if (mutated) this.bumpRev();
+    if (mutated) {
+      this.bumpRev();
+      // #3561: markRead above only dirties on the read-flag's FIRST flip
+      // (its own guard), but copper/item removal and the expiresAt reset
+      // below are content changes with no structural bucket move, so
+      // index.track/untrack/rekey never sees them either. Without this, a
+      // take on an ALREADY-READ letter (the ordinary flow: open the letter
+      // in the mailbox UI, which reads it, then click Take) would leave the
+      // stale pre-take copper/items sitting in the last-persisted partition
+      // row forever, restoring them on the next restart while the purse and
+      // bags already hold the real ones: a gold/item duplication.
+      this.index.markDirty(m.recipientKey);
+    }
     if (kept.length > 0) {
       // Attachments remain: expiresAt is untouched here, so the letter's
       // existing clock keeps running. That is Infinity for system/npc mail
@@ -692,6 +797,69 @@ export class PostOffice {
     });
   }
 
+  // Custody deliveries (the server's $WOC marketplace escrow returns and
+  // buyer deliveries): a system letter carrying EXACT item copies, instance
+  // payloads intact, unlike sendLetter's authored fungible parcels. Same
+  // service contract as sendLetter: no proximity, no postage, never refused,
+  // and the recipient may be offline (the book is keyed by stable character
+  // id). Each slot is deep-cloned (the save/load aliasing rule in types.ts)
+  // and its advisory bag cell dropped: the copy is entering the book, not a
+  // bag. System parcels hold Infinity expiry while attachments remain, so a
+  // returned or delivered copy is never destroyed by the sweep.
+  // Returns false (booking nothing) when `custodyRef` is already in the book:
+  // the custodian's crash-retry reconciliation counts on that dedupe.
+  mailSystemParcel(
+    recipient: { key: string; name: string },
+    letter: LetterDef,
+    items: InvSlot[],
+    custodyRef?: string,
+  ): boolean {
+    if (custodyRef !== undefined && this.hasCustodyParcel(custodyRef)) return false;
+    // Book-boundary validation, the mailSendResolved gate applied per slot: a
+    // slot with an unknown item def or a floored count below 1 never enters
+    // the book. Without it a zero-count or content-stale slot books a parcel
+    // whose take grants nothing and then drops the slot, silently destroying
+    // the escrowed record.
+    const booked: InvSlot[] = [];
+    for (const s of items) {
+      const count = Math.floor(s.count);
+      if (!ITEMS[s.itemId] || !Number.isFinite(count) || count < 1) continue;
+      const clone = cloneInvSlot(s);
+      clone.count = count;
+      delete clone.slot;
+      booked.push(clone);
+    }
+    // Asked to carry goods but NONE survived validation: refuse rather than
+    // book an empty letter. The custodian treats a refusal as "not booked" and
+    // releases its claim, so the item stays held and visible instead of being
+    // marked delivered against a parcel that carries nothing.
+    if (items.length > 0 && booked.length === 0) return false;
+    this.book({
+      custodyRef,
+      recipientKey: recipient.key,
+      recipientName: recipient.name,
+      senderName: letter.senderName,
+      kind: 'system',
+      letterId: letter.letterId,
+      subject: letter.subject,
+      body: letter.body,
+      copper: Math.max(0, Math.floor(letter.copper ?? 0)),
+      items: booked,
+      delaySeconds: letter.delaySeconds ?? 0,
+    });
+    return true;
+  }
+
+  // True when a custody parcel with this broker reference is in the book
+  // (delivered, still in flight, or already emptied but not yet deleted).
+  hasCustodyParcel(custodyRef: string): boolean {
+    // Rides the index, never a book scan: this is called on every Exchange
+    // delivery booking and twice per custody retry, and a grown book (the
+    // production six-figure-letter class) would put a whole-array walk on
+    // the world loop. Pinned by tests/mail_custody_parcels.test.ts.
+    return this.index.hasCustodyRef(custodyRef);
+  }
+
   // The one-time service letter; the caller flips meta.mailWelcomed.
   sendWelcome(meta: PlayerMeta): void {
     this.sendLetter(this.mailKeyFor(meta), meta.name, WELCOME_LETTER, 'system');
@@ -708,6 +876,20 @@ export class PostOffice {
       this.mailKeyFor(meta),
       meta.name,
       { ...HEROIC_MARK_LETTER, items: [{ itemId, count }] },
+      'system',
+    );
+  }
+
+  // Wyrmfall Core reward hook (awardWyrmfallCores): posts a participant's cores
+  // when they entered the run but were absent at the corpse when the kill paid
+  // out. Same absence-not-capacity contract as mailHeroicMarks above.
+  mailWyrmfallCores(pid: number, count: number): void {
+    const meta = this.ctx.players.get(pid);
+    if (!meta || count <= 0) return;
+    this.sendLetter(
+      this.mailKeyFor(meta),
+      meta.name,
+      { ...WYRMFALL_CORE_LETTER, items: [{ itemId: WYRMFALL_CORE_ITEM_ID, count }] },
       'system',
     );
   }
@@ -734,6 +916,7 @@ export class PostOffice {
     copper: number;
     items: InvSlot[];
     delaySeconds: number;
+    custodyRef?: string;
   }): void {
     const hasAttachments = opts.copper > 0 || opts.items.length > 0;
     // Player parcels ride the attachment window (one return cycle, then the
@@ -759,6 +942,7 @@ export class PostOffice {
       deliverAt: this.ctx.time + Math.max(0, opts.delaySeconds),
       expiresAt,
       read: false,
+      ...(opts.custodyRef === undefined ? {} : { custodyRef: opts.custodyRef }),
       announced: false,
     };
     this.mail.push(msg);
@@ -825,6 +1009,11 @@ export class PostOffice {
         m.senderKey = key;
         m.senderName = newName;
         changed = true;
+        // This letter's recipientKey (whoever it was addressed to, unrelated
+        // to the renaming character) is untouched structurally, so index.rekey
+        // never sees it: mark its row dirty directly, the same restamp
+        // purgeMailOwner's outgoing arm needs below.
+        this.index.markDirty(m.recipientKey);
       }
       if (m.recipientKey === key || m.recipientKey === oldName || m.recipientKey === newName) {
         if (m.recipientKey !== key || m.recipientName !== newName) changed = true;
@@ -833,6 +1022,10 @@ export class PostOffice {
         // contract: delivered-and-unread only, a same-key call is a no-op).
         this.index.rekey(m, key, this.ctx.time);
         m.recipientName = newName;
+        // A repeat rename of an already id-keyed character is a no-op rekey
+        // (index.rekey marks nothing dirty then), but recipientName still
+        // just changed above: mark explicitly so that restamp persists.
+        this.index.markDirty(key);
       }
       // The escrowed payloads follow their owner through the rename the same
       // way the blob sweep's buyback arm does (the fix-round review): a
@@ -844,6 +1037,7 @@ export class PostOffice {
       // foreign-held, the accepted craftedBy limitation.
       if (m.recipientKey === key) {
         for (const slot of m.items) {
+          if (rekeyMaterialSignature(slot, oldName, newName)) changed = true;
           if (rekeySigner(slot.instance, oldName, newName)) changed = true;
         }
       }
@@ -904,6 +1098,9 @@ export class PostOffice {
       ) {
         m.senderKey = key;
         changed = true;
+        // Same as rekeyMailOwner's outgoing arm: this letter's recipientKey is
+        // untouched structurally, so mark its row dirty directly.
+        this.index.markDirty(m.recipientKey);
       }
       if (!owns(m.recipientKey)) continue;
       changed = true;
@@ -936,36 +1133,82 @@ export class PostOffice {
     return changed;
   }
 
-  // Persist every letter; durations survive the boot-time clock reset as
-  // seconds-left (the market pattern).
+  // One letter's persisted shape; durations survive the boot-time clock reset
+  // as seconds-left (the market pattern). Shared by the full serialize below
+  // and the incremental per-recipient partition serialize.
+  private serializeLetter(m: MailMessage, now: number): MailSave['mail'][number] {
+    return {
+      id: m.id,
+      recipientKey: m.recipientKey,
+      recipientName: m.recipientName,
+      senderName: m.senderName,
+      senderKey: m.senderKey,
+      kind: m.kind,
+      letterId: m.letterId,
+      subject: m.subject,
+      body: m.body,
+      copper: m.copper,
+      // cloneInvSlot, not a shallow spread: an instanced parcel's payload
+      // must not alias between the live book and the serialized blob.
+      items: m.items.map(cloneInvSlot),
+      deliverIn: Math.max(0, Math.round(m.deliverAt - now)),
+      secondsLeft: Number.isFinite(m.expiresAt) ? Math.max(0, Math.round(m.expiresAt - now)) : -1,
+      read: m.read,
+      custodyRef: m.custodyRef,
+      returned: m.returned,
+    };
+  }
+
+  // Persist every letter: the full-book shape (the boot-load reconstruction
+  // target, and the retained legacy whole-blob path).
   serializeMail(): MailSave {
     const now = this.ctx.time;
     return {
-      mail: this.mail.map((m) => ({
-        id: m.id,
-        recipientKey: m.recipientKey,
-        recipientName: m.recipientName,
-        senderName: m.senderName,
-        senderKey: m.senderKey,
-        kind: m.kind,
-        letterId: m.letterId,
-        subject: m.subject,
-        body: m.body,
-        copper: m.copper,
-        // cloneInvSlot, not a shallow spread: an instanced parcel's payload
-        // must not alias between the live book and the serialized blob.
-        items: m.items.map(cloneInvSlot),
-        deliverIn: Math.max(0, Math.round(m.deliverAt - now)),
-        secondsLeft: Number.isFinite(m.expiresAt) ? Math.max(0, Math.round(m.expiresAt - now)) : -1,
-        read: m.read,
-        returned: m.returned,
-      })),
+      mail: this.mail.map((m) => this.serializeLetter(m, now)),
       nextMailId: this.nextMailId,
     };
   }
 
+  // Every recipient key whose bucket changed since the last call, each with
+  // its FULL current bucket content (never just the delta within a mailbox:
+  // a player mailbox is bounded by MAIL_MAX_PER_RECIPIENT, so re-writing its
+  // whole bucket is cheap; a quiet interval with no mutations returns an
+  // empty array and the caller writes nothing). This is the incremental-
+  // autosave seam #3561 exists for: steady-state autosave cost becomes
+  // proportional to what changed, not to total book size. Known gap:
+  // MAIL_MAX_PER_RECIPIENT is a send-time gate in mailSendResolved only;
+  // book() (system/npc/quest mail) enforces no per-recipient cap, so a
+  // high-volume system-mail recipient's bucket is NOT actually bounded here.
+  // Pre-existing (book() never capped this before #3561 either); tracked as
+  // a follow-up, not fixed in this change.
+  takeDirtyMailPartitions(): { recipientKey: string; letters: MailSave['mail'] }[] {
+    const now = this.ctx.time;
+    return this.index.takeDirty().map((recipientKey) => ({
+      recipientKey,
+      letters: this.index.bucketFor(recipientKey).map((m) => this.serializeLetter(m, now)),
+    }));
+  }
+
+  // Undo half of takeDirtyMailPartitions: re-mark these recipients dirty after
+  // a drained batch failed to reach durable storage (a DB error, a refused
+  // escrow transaction). Without this a failed write silently loses the
+  // change forever, since nothing else re-dirties a recipient whose mailbox
+  // nobody touches again; the old whole-book autosave self-healed from this
+  // exact failure by unconditionally re-serializing everything next cycle,
+  // and this restores the same guarantee for the incremental path. Safe to
+  // call with recipients already dirty again from a newer mutation (the
+  // dirty set is idempotent), and safe to call with recipients that ended up
+  // with zero letters (an empty bucket is still a legitimate row to persist,
+  // namely by deleting it).
+  markPartitionsDirty(recipientKeys: readonly string[]): void {
+    for (const key of recipientKeys) this.index.markDirty(key);
+  }
+
   loadMail(save: MailSave | null | undefined): void {
     if (!save) return;
+    for (const letter of save.mail ?? []) {
+      for (const slot of letter?.items ?? []) validateMaterialSlotSourcesOnLoad(slot);
+    }
     const returnedParcels: {
       recipientKey: string;
       recipientName: string;
@@ -977,6 +1220,12 @@ export class PostOffice {
       items: InvSlot[];
       delaySeconds: number;
     }[] = [];
+    // #3561: the soulbound-migration strip below mutates a loaded letter's
+    // content (items stripped) relative to what is actually on disk, so its
+    // OWN recipient needs an explicit dirty mark too, alongside the returned
+    // parcel's book() call: rebuild() alone would call the stripped-but-not-
+    // yet-persisted version "already durable" and never re-persist it.
+    const strippedRecipientKeys = new Set<string>();
     // One aggregated dev-channel line per BOOK load (the character-load
     // idiom): the escrow bound reports what it dropped without logging per
     // row on a systematically corrupt save.
@@ -1039,6 +1288,7 @@ export class PostOffice {
           items: returnedItems,
           delaySeconds: 0,
         });
+        strippedRecipientKeys.add(m.recipientKey);
       }
       const deliverIn = Number.isFinite(m.deliverIn) ? Math.max(0, m.deliverIn) : 0;
       const copper = Math.max(0, Math.floor(m.copper) || 0);
@@ -1072,6 +1322,7 @@ export class PostOffice {
         deliverAt: this.ctx.time + deliverIn,
         expiresAt,
         read: m.read === true,
+        ...(typeof m.custodyRef === 'string' ? { custodyRef: m.custodyRef } : {}),
         returned: m.returned === true,
         // Already-delivered letters never re-toast after a restart.
         announced: deliverIn <= 0,
@@ -1080,12 +1331,24 @@ export class PostOffice {
     warnDroppedInstanceKeys('mail book', escrowDrops);
     const maxId = this.mail.reduce((mx, m) => Math.max(mx, m.id + 1), 1);
     this.nextMailId = Math.max(this.nextMailId, save.nextMailId ?? 1, maxId);
-    for (const parcel of returnedParcels) this.book(parcel);
     // Buckets, unread counts, and the in-flight set are derived state, never
-    // persisted: rebuild them from the freshly loaded book. The wire revision
-    // advances too (book() above already bumped for any returned parcel, but a
-    // plain load must invalidate viewers as well).
+    // persisted: rebuild them from the freshly loaded book BEFORE booking any
+    // returned parcel below. Order matters (#3561): rebuild() clears the
+    // whole dirty set (a plain load reconstructs already-durable state, so it
+    // marks nothing dirty), and book() marks dirty through the normal
+    // index.track path. Booking first and rebuilding after would silently
+    // wipe the very dirty mark a freshly-minted return parcel needs to ever
+    // reach disk, re-running this migration every boot forever and risking a
+    // duplicate once the OTHER half (the letter it was split off) is later
+    // dirtied by something unrelated.
     this.index.rebuild(this.mail, this.ctx.time);
+    for (const parcel of returnedParcels) this.book(parcel);
+    // The OTHER half of the same migration: the original letter's own
+    // recipient, whose stored items no longer match what is on disk (the
+    // soulbound item was just stripped off, above).
+    for (const key of strippedRecipientKeys) this.index.markDirty(key);
+    // The wire revision advances too (book() above already bumped for any
+    // returned parcel, but a plain load must invalidate viewers as well).
     this.bumpRev();
   }
 }

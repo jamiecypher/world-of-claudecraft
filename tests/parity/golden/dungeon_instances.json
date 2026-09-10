@@ -10,13 +10,13 @@
     "updateDoorTriggers exit portal -> leaveDungeon (~14620)",
     "updateInstances empty-reset -> freeInstance despawn + partyKey null (~14841/14816)"
   ],
-  "draws": 44,
-  "drawDigest": "8329963e",
+  "draws": 41,
+  "drawDigest": "ed59696c",
   "frames": [
     {
       "tick": 0,
       "time": 0,
-      "nextId": 964,
+      "nextId": 1006,
       "state": "5bc471b0",
       "events": "741638a5",
       "rng": {
@@ -30,9 +30,9 @@
     {
       "tick": 2,
       "time": 0.1,
-      "nextId": 980,
-      "state": "98179ab5",
-      "events": "377121be",
+      "nextId": 1022,
+      "state": "9911a301",
+      "events": "97ddbb0c",
       "rng": {
         "draws": 39,
         "digest": "fc384baa"
@@ -50,11 +50,19 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "warrior",
           "companionUpgrades": {},
           "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
@@ -76,7 +84,7 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 964,
+          "entityId": 1006,
           "equipment": {
             "chest": "recruit_tunic",
             "mainhand": "worn_sword",
@@ -84,6 +92,9 @@
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -102,7 +113,11 @@
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         },
         {
           "activeLoadout": -1,
@@ -115,11 +130,19 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "mage",
           "companionUpgrades": {},
           "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
@@ -141,13 +164,16 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 965,
+          "entityId": 1007,
           "equipment": {
             "chest": "apprentice_robe",
             "mainhand": "gnarled_staff"
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -170,7 +196,11 @@
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         }
       ],
       "entities": [
@@ -185,7 +215,7 @@
               "name": "Battle Stance",
               "remaining": 3599.9,
               "school": "physical",
-              "sourceId": 964
+              "sourceId": 1006
             }
           ],
           "blockChance": 0.05,
@@ -196,8 +226,9 @@
           "detonateTimer": "Infinity",
           "dodgeChance": 0.06,
           "fiveSecondRule": 99.1,
+          "healPower": 5,
           "hp": 50000,
-          "id": 964,
+          "id": 1006,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -215,9 +246,9 @@
           "potionCooldownUntil": -1,
           "resourceType": "rage",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 5,
           "stats": {
@@ -243,10 +274,10 @@
           "critChance": 0.056,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.056,
-          "fallStartY": -1.693743,
           "fiveSecondRule": 99.1,
+          "healPower": 13,
           "hp": 50000,
-          "id": 965,
+          "id": 1007,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -264,9 +295,9 @@
           "resource": 195,
           "resourceType": "mana",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 13,
           "stats": {
@@ -295,7 +326,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 437,
-          "id": 966,
+          "id": 1008,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -339,7 +370,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 437,
-          "id": 967,
+          "id": 1009,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -383,7 +414,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 968,
+          "id": 1010,
           "kind": "mob",
           "level": 7,
           "lootFfaTimer": "Infinity",
@@ -427,7 +458,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 969,
+          "id": 1011,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -471,7 +502,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 437,
-          "id": 970,
+          "id": 1012,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -515,7 +546,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 971,
+          "id": 1013,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -559,7 +590,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 416,
-          "id": 972,
+          "id": 1014,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -603,7 +634,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 416,
-          "id": 973,
+          "id": 1015,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -647,7 +678,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 695,
-          "id": 974,
+          "id": 1016,
           "kind": "mob",
           "level": 9,
           "lootFfaTimer": "Infinity",
@@ -691,7 +722,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 975,
+          "id": 1017,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -737,7 +768,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 1191,
-          "id": 976,
+          "id": 1018,
           "kind": "mob",
           "level": 10,
           "lootFfaTimer": "Infinity",
@@ -752,6 +783,7 @@
             "z": -1152.210908
           },
           "potionCooldownUntil": -1,
+          "pulseTimer": 10,
           "spawnPos": {
             "x": 100300,
             "y": 0.6,
@@ -785,7 +817,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 977,
+          "id": 1019,
           "kind": "mob",
           "level": 7,
           "lootFfaTimer": "Infinity",
@@ -833,7 +865,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 978,
+          "id": 1020,
           "kind": "mob",
           "level": 7,
           "lootFfaTimer": "Infinity",
@@ -879,7 +911,7 @@
           "dungeonId": "hollow_crypt",
           "fiveSecondRule": 99,
           "hp": 1,
-          "id": 979,
+          "id": 1021,
           "kind": "object",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -911,12 +943,12 @@
     {
       "tick": 4,
       "time": 0.2,
-      "nextId": 980,
-      "state": "5c5d0252",
-      "events": "c2669e40",
+      "nextId": 1022,
+      "state": "c78de34a",
+      "events": "86847b02",
       "rng": {
-        "draws": 42,
-        "digest": "7a78e97c"
+        "draws": 39,
+        "digest": "fc384baa"
       },
       "label": "left",
       "players": [
@@ -931,18 +963,22 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "warrior",
           "companionUpgrades": {},
-          "counters": {
-            "damageTaken": 89060,
-            "deaths": 1
-          },
+          "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
-              "deaths": 1,
               "partiesJoined": 1
             },
             "dungeonClears": {},
@@ -955,21 +991,13 @@
           },
           "deedsEarned": [
             [
-              "cmb_first_fall",
-              ""
-            ],
-            [
-              "hid_fall_death",
-              ""
-            ],
-            [
               "soc_first_party",
               ""
             ]
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 964,
+          "entityId": 1006,
           "equipment": {
             "chest": "recruit_tunic",
             "mainhand": "worn_sword",
@@ -977,6 +1005,9 @@
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -991,11 +1022,15 @@
             "counts": {},
             "firstFind": {}
           },
-          "renown": 15,
+          "renown": 5,
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         },
         {
           "activeLoadout": -1,
@@ -1008,11 +1043,19 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "mage",
           "companionUpgrades": {},
           "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
@@ -1034,13 +1077,16 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 965,
+          "entityId": 1007,
           "equipment": {
             "chest": "apprentice_robe",
             "mainhand": "gnarled_staff"
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -1063,24 +1109,41 @@
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         }
       ],
       "entities": [
         {
           "aiState": "idle",
           "attackPower": 46,
+          "auras": [
+            {
+              "duration": 3600,
+              "id": "battle_stance",
+              "kind": "battle_stance",
+              "name": "Battle Stance",
+              "remaining": 3599.8,
+              "school": "physical",
+              "sourceId": 1006
+            }
+          ],
           "blockChance": 0.05,
           "blockValue": 6,
           "combatTimer": 99.2,
           "comboUntil": -1,
           "critChance": 0.06,
-          "dead": true,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.06,
           "fallStartY": -1.618548,
           "fiveSecondRule": 99.2,
-          "id": 964,
+          "healPower": 5,
+          "hp": 50000,
+          "id": 1006,
+          "inCombat": true,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -1099,9 +1162,9 @@
           "potionCooldownUntil": -1,
           "resourceType": "rage",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 5,
           "stats": {
@@ -1127,16 +1190,18 @@
           "critChance": 0.056,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.056,
-          "fallStartY": 35.827155,
+          "fallStartY": -1.618548,
           "fiveSecondRule": 99.2,
+          "healPower": 13,
           "hp": 50000,
-          "id": 965,
+          "id": 1007,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
           "maxHp": 50000,
           "maxResource": 195,
           "moveSpeed": 7,
+          "onGround": true,
           "overpowerUntil": -1,
           "petMode": "defensive",
           "pos": {
@@ -1148,9 +1213,9 @@
           "resource": 195,
           "resourceType": "mana",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 13,
           "stats": {
@@ -1179,7 +1244,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 437,
-          "id": 966,
+          "id": 1008,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1223,7 +1288,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 437,
-          "id": 967,
+          "id": 1009,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1267,7 +1332,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 968,
+          "id": 1010,
           "kind": "mob",
           "level": 7,
           "lootFfaTimer": "Infinity",
@@ -1311,7 +1376,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 969,
+          "id": 1011,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1355,7 +1420,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 437,
-          "id": 970,
+          "id": 1012,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1399,7 +1464,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 971,
+          "id": 1013,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1443,7 +1508,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 416,
-          "id": 972,
+          "id": 1014,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1487,7 +1552,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 416,
-          "id": 973,
+          "id": 1015,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1531,7 +1596,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 695,
-          "id": 974,
+          "id": 1016,
           "kind": "mob",
           "level": 9,
           "lootFfaTimer": "Infinity",
@@ -1575,7 +1640,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 975,
+          "id": 1017,
           "kind": "mob",
           "level": 8,
           "lootFfaTimer": "Infinity",
@@ -1621,7 +1686,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 1191,
-          "id": 976,
+          "id": 1018,
           "kind": "mob",
           "level": 10,
           "lootFfaTimer": "Infinity",
@@ -1636,6 +1701,7 @@
             "z": -1152.421816
           },
           "potionCooldownUntil": -1,
+          "pulseTimer": 10,
           "spawnPos": {
             "x": 100300,
             "y": 0.6,
@@ -1669,7 +1735,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 977,
+          "id": 1019,
           "kind": "mob",
           "level": 7,
           "lootFfaTimer": "Infinity",
@@ -1717,7 +1783,7 @@
           "fiveSecondRule": 99,
           "hostile": true,
           "hp": 391,
-          "id": 978,
+          "id": 1020,
           "kind": "mob",
           "level": 7,
           "lootFfaTimer": "Infinity",
@@ -1763,7 +1829,7 @@
           "dungeonId": "hollow_crypt",
           "fiveSecondRule": 99,
           "hp": 1,
-          "id": 979,
+          "id": 1021,
           "kind": "object",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -1795,56 +1861,56 @@
     {
       "tick": 5,
       "time": 0.25,
-      "nextId": 980,
-      "state": "46290881",
-      "events": "eff496f8",
+      "nextId": 1022,
+      "state": "48feb395",
+      "events": "741638a5",
       "rng": {
-        "draws": 42,
-        "digest": "7a78e97c"
+        "draws": 39,
+        "digest": "fc384baa"
       }
     },
     {
       "tick": 10,
       "time": 0.5,
-      "nextId": 980,
-      "state": "c6fac2e3",
+      "nextId": 1022,
+      "state": "51d26148",
       "events": "741638a5",
       "rng": {
-        "draws": 42,
-        "digest": "7a78e97c"
+        "draws": 39,
+        "digest": "fc384baa"
       }
     },
     {
       "tick": 15,
       "time": 0.75,
-      "nextId": 980,
-      "state": "22efebed",
+      "nextId": 1022,
+      "state": "0b5e0150",
       "events": "741638a5",
       "rng": {
-        "draws": 42,
-        "digest": "7a78e97c"
+        "draws": 39,
+        "digest": "fc384baa"
       }
     },
     {
       "tick": 20,
       "time": 1,
-      "nextId": 980,
-      "state": "b91952ef",
-      "events": "f1768bb6",
+      "nextId": 1022,
+      "state": "8203b584",
+      "events": "84a9176e",
       "rng": {
-        "draws": 44,
-        "digest": "8329963e"
+        "draws": 41,
+        "digest": "ed59696c"
       }
     },
     {
       "tick": 24,
       "time": 1.2,
-      "nextId": 980,
-      "state": "a4b3840f",
+      "nextId": 1022,
+      "state": "c2768f89",
       "events": "741638a5",
       "rng": {
-        "draws": 44,
-        "digest": "8329963e"
+        "draws": 41,
+        "digest": "ed59696c"
       },
       "label": "reset",
       "players": [
@@ -1859,18 +1925,22 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "warrior",
           "companionUpgrades": {},
-          "counters": {
-            "damageTaken": 89060,
-            "deaths": 1
-          },
+          "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
-              "deaths": 1,
               "partiesJoined": 1
             },
             "dungeonClears": {},
@@ -1879,17 +1949,12 @@
               "eastbrook_buckler",
               "recruit_tunic",
               "worn_sword"
+            ],
+            "visited": [
+              "poi:eastbrook_vale:fallen_chapel"
             ]
           },
           "deedsEarned": [
-            [
-              "cmb_first_fall",
-              ""
-            ],
-            [
-              "hid_fall_death",
-              ""
-            ],
             [
               "soc_first_party",
               ""
@@ -1897,7 +1962,7 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 964,
+          "entityId": 1006,
           "equipment": {
             "chest": "recruit_tunic",
             "mainhand": "worn_sword",
@@ -1905,6 +1970,9 @@
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -1919,11 +1987,15 @@
             "counts": {},
             "firstFind": {}
           },
-          "renown": 15,
+          "renown": 5,
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         },
         {
           "activeLoadout": -1,
@@ -1936,18 +2008,22 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "mage",
           "companionUpgrades": {},
-          "counters": {
-            "damageTaken": 89060,
-            "deaths": 1
-          },
+          "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
-              "deaths": 1,
               "partiesJoined": 1
             },
             "dungeonClears": {},
@@ -1956,17 +2032,12 @@
               "baked_bread",
               "gnarled_staff",
               "spring_water"
+            ],
+            "visited": [
+              "poi:eastbrook_vale:fallen_chapel"
             ]
           },
           "deedsEarned": [
-            [
-              "cmb_first_fall",
-              ""
-            ],
-            [
-              "hid_fall_death",
-              ""
-            ],
             [
               "soc_first_party",
               ""
@@ -1974,13 +2045,16 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 965,
+          "entityId": 1007,
           "equipment": {
             "chest": "apprentice_robe",
             "mainhand": "gnarled_staff"
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -1999,28 +2073,45 @@
             "counts": {},
             "firstFind": {}
           },
-          "renown": 15,
+          "renown": 5,
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         }
       ],
       "entities": [
         {
           "aiState": "idle",
           "attackPower": 46,
+          "auras": [
+            {
+              "duration": 3600,
+              "id": "battle_stance",
+              "kind": "battle_stance",
+              "name": "Battle Stance",
+              "remaining": 3598.8,
+              "school": "physical",
+              "sourceId": 1006
+            }
+          ],
           "blockChance": 0.05,
           "blockValue": 6,
           "combatTimer": 100.2,
           "comboUntil": -1,
           "critChance": 0.06,
-          "dead": true,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.06,
           "fallStartY": -1.618548,
           "fiveSecondRule": 100.2,
-          "id": 964,
+          "healPower": 5,
+          "hp": 50000,
+          "id": 1006,
+          "inCombat": true,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -2039,9 +2130,9 @@
           "potionCooldownUntil": -1,
           "resourceType": "rage",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 5,
           "stats": {
@@ -2065,12 +2156,13 @@
           "combatTimer": 100.2,
           "comboUntil": -1,
           "critChance": 0.056,
-          "dead": true,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.056,
           "fallStartY": -1.618548,
           "fiveSecondRule": 100.2,
-          "id": 965,
+          "healPower": 13,
+          "hp": 50000,
+          "id": 1007,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -2089,9 +2181,9 @@
           "resource": 195,
           "resourceType": "mana",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 13,
           "stats": {
@@ -2114,12 +2206,12 @@
     {
       "tick": 24,
       "time": 1.2,
-      "nextId": 980,
-      "state": "a4b3840f",
+      "nextId": 1022,
+      "state": "c2768f89",
       "events": "741638a5",
       "rng": {
-        "draws": 44,
-        "digest": "8329963e"
+        "draws": 41,
+        "digest": "ed59696c"
       },
       "label": "final",
       "players": [
@@ -2134,18 +2226,22 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "warrior",
           "companionUpgrades": {},
-          "counters": {
-            "damageTaken": 89060,
-            "deaths": 1
-          },
+          "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
-              "deaths": 1,
               "partiesJoined": 1
             },
             "dungeonClears": {},
@@ -2154,17 +2250,12 @@
               "eastbrook_buckler",
               "recruit_tunic",
               "worn_sword"
+            ],
+            "visited": [
+              "poi:eastbrook_vale:fallen_chapel"
             ]
           },
           "deedsEarned": [
-            [
-              "cmb_first_fall",
-              ""
-            ],
-            [
-              "hid_fall_death",
-              ""
-            ],
             [
               "soc_first_party",
               ""
@@ -2172,7 +2263,7 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 964,
+          "entityId": 1006,
           "equipment": {
             "chest": "recruit_tunic",
             "mainhand": "worn_sword",
@@ -2180,6 +2271,9 @@
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -2194,11 +2288,15 @@
             "counts": {},
             "firstFind": {}
           },
-          "renown": 15,
+          "renown": 5,
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         },
         {
           "activeLoadout": -1,
@@ -2211,18 +2309,22 @@
             null,
             null
           ],
-          "bank": {},
+          "bank": {
+            "socketBags": [
+              null,
+              null,
+              null,
+              null
+            ]
+          },
           "bgRating": 1500,
           "cls": "mage",
           "companionUpgrades": {},
-          "counters": {
-            "damageTaken": 89060,
-            "deaths": 1
-          },
+          "counters": {},
+          "craftDaily": {},
           "craftSkills": {},
           "deedStats": {
             "counters": {
-              "deaths": 1,
               "partiesJoined": 1
             },
             "dungeonClears": {},
@@ -2231,17 +2333,12 @@
               "baked_bread",
               "gnarled_staff",
               "spring_water"
+            ],
+            "visited": [
+              "poi:eastbrook_vale:fallen_chapel"
             ]
           },
           "deedsEarned": [
-            [
-              "cmb_first_fall",
-              ""
-            ],
-            [
-              "hid_fall_death",
-              ""
-            ],
             [
               "soc_first_party",
               ""
@@ -2249,13 +2346,16 @@
           ],
           "delveClears": {},
           "delveDaily": {},
-          "entityId": 965,
+          "entityId": 1007,
           "equipment": {
             "chest": "apprentice_robe",
             "mainhand": "gnarled_staff"
           },
           "equipmentInstance": {},
           "gatheringProficiency": {},
+          "harvestPreference": {
+            "kind": "all"
+          },
           "heroicDaily": {},
           "inventory": [
             {
@@ -2274,28 +2374,45 @@
             "counts": {},
             "firstFind": {}
           },
-          "renown": 15,
+          "renown": 5,
           "talents": {
             "rows": {}
           },
-          "townFocus": {}
+          "townFocus": {},
+          "vault": {
+            "stock": {}
+          },
+          "wyrmfallDaily": {}
         }
       ],
       "entities": [
         {
           "aiState": "idle",
           "attackPower": 46,
+          "auras": [
+            {
+              "duration": 3600,
+              "id": "battle_stance",
+              "kind": "battle_stance",
+              "name": "Battle Stance",
+              "remaining": 3598.8,
+              "school": "physical",
+              "sourceId": 1006
+            }
+          ],
           "blockChance": 0.05,
           "blockValue": 6,
           "combatTimer": 100.2,
           "comboUntil": -1,
           "critChance": 0.06,
-          "dead": true,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.06,
           "fallStartY": -1.618548,
           "fiveSecondRule": 100.2,
-          "id": 964,
+          "healPower": 5,
+          "hp": 50000,
+          "id": 1006,
+          "inCombat": true,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -2314,9 +2431,9 @@
           "potionCooldownUntil": -1,
           "resourceType": "rage",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 5,
           "stats": {
@@ -2340,12 +2457,13 @@
           "combatTimer": 100.2,
           "comboUntil": -1,
           "critChance": 0.056,
-          "dead": true,
           "detonateTimer": "Infinity",
           "dodgeChance": 0.056,
           "fallStartY": -1.618548,
           "fiveSecondRule": 100.2,
-          "id": 965,
+          "healPower": 13,
+          "hp": 50000,
+          "id": 1007,
           "kind": "player",
           "level": 1,
           "lootFfaTimer": "Infinity",
@@ -2364,9 +2482,9 @@
           "resource": 195,
           "resourceType": "mana",
           "spawnPos": {
-            "x": 2,
-            "y": 1.5,
-            "z": -2
+            "x": -94,
+            "y": -2,
+            "z": -58
           },
           "spellPower": 13,
           "stats": {

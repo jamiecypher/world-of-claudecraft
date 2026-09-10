@@ -1,5 +1,4 @@
-import { randomUUID } from 'node:crypto';
-import { Pool, type QueryResult } from 'pg';
+import { Pool, type PoolClient, type QueryResult } from 'pg';
 import {
   type AccountFlair,
   EMPTY_ACCOUNT_FLAIR,
@@ -9,20 +8,64 @@ import { LEADERBOARD_MAX } from '../src/sim/leaderboard_page';
 import { sanitizeRemovedZone1Content } from '../src/sim/removed_zone1_content';
 import type { CharacterState, MailSave, MarketSave } from '../src/sim/sim';
 import type { ArenaFormat, PlayerClass } from '../src/sim/types';
-import type { ActionBarLayout } from '../src/world_api/action_bar';
+import type { ActionBarLayoutProfiles, StoredActionBarLayout } from '../src/world_api/action_bar';
+import { projectAccountExportState } from './account_export_state';
+import { ACCOUNT_WEALTH_SCHEMA } from './account_wealth_db';
 import { AD_SPEND_SCHEMA } from './ad_spend_db';
 import { bustAdminGuildListReads } from './admin_guilds_read';
 import { ADMIN_GUILDS_SCHEMA } from './admin_guilds_schema';
 import { APPLE_AUTH_SCHEMA } from './apple_auth_db';
 import { ACCOUNT_ATTRIBUTION_SCHEMA, accountAttributionForExport } from './attribution_db';
 import { validCharName } from './auth';
+import {
+  type AccountModerationRow,
+  type AccountModerationStatus,
+  type AuthTokenRow,
+  computeModerationStatus,
+  tokenInfoFromRow,
+} from './auth_guard_core';
 import type { BankBonusFacts } from './bank_entitlements';
+import {
+  BANK_LEDGER_BATCH_RECEIPTS_SCHEMA,
+  type BankLedgerBatchWriteResult,
+  validateBankLedgerBatchReceiptsKeyShape,
+} from './bank_ledger_batch_db';
+import {
+  BANK_LEDGER_GROWTH_BUDGET_SCHEMA,
+  bankLedgerGrowthBudgetReadbackSql,
+  bankLedgerGrowthLimitFromError,
+  observeBankLedgerGrowthBudget,
+} from './bank_ledger_growth_budget';
+import {
+  attachBankLedgerCommittedPrefixToError,
+  type BankLedgerSaveEffects,
+  lockCharacterSaveEffectAccountsOnClient as lockSaveEffectAccounts,
+  writeBankLedgerSaveEffectsOnClient,
+} from './bank_ledger_save_effects_db';
+import { deleteOwnedCharacterRow } from './character_delete_db';
+import { PROCESS_LEASE_HOLDER } from './character_lease_db';
+import { journalCharacterSaveSources } from './character_material_sources_db';
 import {
   configureLifetimeXpRankCache,
   readLifetimeXpRankForCharacter,
 } from './character_rank_cache';
+import { characterSaveFailure, characterSaveLanded } from './character_save_result';
+import {
+  type CharacterSaveFence,
+  liveSaveFence,
+  runFencedCharacterSave,
+  runPreimageCharacterSave,
+} from './character_save_statement';
+import {
+  beginCharacterSaveTx,
+  CHARACTER_SAVE_STATEMENT_TIMEOUT_MS,
+  CHARACTER_SAVE_TRANSACTION_TIMEOUT_MS,
+  prepareCharacterSaveEffects,
+} from './character_save_transaction';
 import { seedChatFilterDefaults } from './chat_filter_db';
 import type { ChatLogRow } from './chat_log';
+import { cleanMetadataText } from './clean_metadata_text';
+import { CLIENT_PERF_REPORTS_SCHEMA } from './client_perf_reports_schema';
 import {
   buildCommunityTestCharacters,
   communityTestAccountsEnabled,
@@ -32,24 +75,39 @@ import {
 } from './community_test_accounts';
 import { CONCURRENT_INDEX_MIGRATIONS } from './concurrent_indexes';
 import { CONTENT_MODERATION_SCHEMA } from './content_moderation_db';
+import { cancelDetachedBackend } from './db_backend_cancel';
+import { dbConnectionBudgetWarning } from './db_connection_budget';
 import type { RankedDeedsAccount } from './deeds_board';
 import { DISCORD_SCHEMA } from './discord_db';
 import { enqueueLinkChange } from './discord_link_changes';
 import { bustDiscordStatus } from './discord_status_cache';
-import {
-  GENERAL_CHAT_QUOTA_DB_POOL_MAX_CLIENTS,
-  GENERAL_CHAT_QUOTA_LISTENER_CONNECTIONS,
-} from './general_chat_quota_config';
-import type { GeneralChatRateLimit } from './general_chat_quota_db';
 import { GENERAL_CHAT_QUOTA_SCHEMA } from './general_chat_quota_schema';
 import { GITHUB_SCHEMA } from './github_db';
 import {
-  GuildBankEscrowRefused,
-  type GuildBankSave,
-  type GuildBankWriteResult,
-  mergeGuildBankRow,
-} from './guild_bank_state';
+  GUILD_BANK_ROW_MAX_BYTES,
+  prepareGuildBankReceiptReplay,
+  writeClaimedGuildBankEffectsOnClient,
+} from './guild_bank_receipt_db';
+import type { GuildBankSave, GuildBankWriteResult } from './guild_bank_state';
 import { isUniqueViolation } from './http_util';
+import {
+  advanceCustodyWatermarkIn,
+  confirmBakedCustodyRefs,
+  deleteBakedCustodyRefsIn,
+  MAIL_CUSTODY_PARCELS_SCHEMA,
+  snapshotPendingCustodyRefs,
+} from './mail_custody_overlay';
+import {
+  assertMailPartitionWriteGateOpen,
+  openMailPartitionWriteGate,
+  writeMailPartitions,
+  writeMailPartitionsInTransaction,
+} from './mail_db';
+import {
+  mailPartitionMarkerKey,
+  mailStateKey,
+  runMailPartitionBackfill,
+} from './mail_partition_backfill';
 import { MAPS_SCHEMA } from './maps_db';
 import {
   LEGACY_MARKET_KEY,
@@ -58,7 +116,11 @@ import {
   marketStateKey,
   runMarketBackfill,
 } from './market_backfill';
+import { MARKET_SOLD_VOLUME_SCHEMA } from './market_sold_volume_db';
+import { materialSourceConnection } from './material_source_connection';
+import { applyMaterialSourceSchema, applyMaterialSourceWriterGuard } from './material_source_host';
 import { OAUTH_SCHEMA } from './oauth_db';
+import { runOfflineCharacterSave } from './offline_character_save_db';
 import { PLAY_SESSION_RETENTION_SCHEMA } from './play_session_retention_db';
 import {
   closeOrphanPlayerSessions,
@@ -70,12 +132,28 @@ import {
 import { PROGRESS_EVENTS_SCHEMA } from './progress_events_db';
 import { RATELIMIT_PRUNE_SQL, RATELIMIT_SCHEMA } from './ratelimit_db';
 import { REALM, REALM_DIRECTORY } from './realm';
+import { REALM_BUILDER_SCHEMA } from './realm_builder_db';
 import { chooseArchiveName } from './reclaim_name';
+import { attachSchemaNoticeForwarder } from './schema_notices';
 import { SEEKER_ENTITLEMENT_SCHEMA } from './seeker_entitlement_db';
 import { SOCIAL_SCHEMA } from './social_db';
+import {
+  STORAGE_PURCHASE_SCHEMA,
+  type StorageAppliedEffect,
+  writeStorageAppliedEffectsOnClient,
+} from './storage_purchase_db';
+import { SUSPICION_FLAGS_SCHEMA } from './suspicion_flags_db';
 import { UNSTUCK_SCHEMA } from './unstuck_db';
 import { USER_ASSETS_SCHEMA } from './user_assets_db';
+import { bustWocAuthGuardAccount, bustWocAuthGuardToken } from './woc_auth_guard_cache';
+import { WOC_MARKET_SCHEMA } from './woc_market_db';
+import { bustWocMarketActivity } from './woc_market_read_cache';
 
+export type { BankLedgerSaveEffects } from './bank_ledger_save_effects_db';
+export { GUILD_BANK_ROW_MAX_BYTES } from './guild_bank_receipt_db';
+// Re-export split mail helpers so existing callers keep the db.ts surface.
+export { closeMailPartitionWriteGateForTests, openMailPartitionWriteGate } from './mail_db';
+export { mailRecipientKey, mailStateKey } from './mail_partition_backfill';
 // The realm-market key helpers and the backfill marker key live in
 // server/market_backfill.ts (a *_db-style module with no db.ts dependency, so
 // db.ts can import it without a cycle). Only marketStateKey was ever part of
@@ -114,11 +192,12 @@ const DB_POOL_MAX_CLIENTS_DEFAULT = 10;
 // shipped deployment: stock postgres:16 serves max_connections 100 with 3
 // superuser-reserved, so 97 are usable. Every realm process builds its own pool
 // on the one DATABASE_URL and pools have no cross-process coordination, so
-// realms x (the shared pool + two General-quota consume clients + one LISTEN client) +
-// tooling is what must stay at or under 97. ensureSchema also uses a dedicated
-// boot Client before LISTEN starts (and a rolling restart can overlap them
-// across old/new processes). Past that, logins fail with "too many clients"
-// exactly at peak.
+// realms x (the shared pool + two General-quota consume clients + one LISTEN
+// client + the max-1 deadline-cancel side pool) + tooling is what must stay at
+// or under 97 (the per-realm term lives in db_connection_budget.ts). ensureSchema
+// also uses a dedicated boot Client before LISTEN starts (and a rolling restart
+// can overlap them across old/new processes). Past that, logins fail with
+// "too many clients" exactly at peak.
 // Connections are not the binding constraint on the shipped deployment, though:
 // the game process and Postgres share ONE 4-vCPU box, where the database is
 // already the heaviest CPU consumer at peak, so a large pool only buys
@@ -161,28 +240,24 @@ console.log(
 // left to the operator's arithmetic. REALMS is the realm directory every realm
 // process is handed (scripts/dev-realms.mjs exports it to each child; a
 // production deployment sets the same list on every process), so its entry
-// count is how many independent pools this one DATABASE_URL will see. Unset
-// means a single realm, whose pool is already bounded by the parser ceiling and
-// so can never trip this on its own. PREMISE: every realm shares one database
+// count is how many independent pools this one DATABASE_URL will see; it is
+// counted through the SAME parser the directory ships from (REALM_DIRECTORY
+// dedupes names and drops malformed or non-origin entries), so the arithmetic
+// matches the processes that will actually boot rather than raw comma
+// segments. Unset REALMS parses to the single-realm fallback entry, which can
+// never trip the ceiling on its own. PREMISE: every realm shares one database
 // (true of the shipped single-box deployment); directory entries hosted on
-// their own databases have their own budgets, so the warning below names the
-// assumption instead of pretending to know each realm's DATABASE_URL.
-// Counted through the SAME parser the realm directory ships from
-// (REALM_DIRECTORY dedupes names and drops malformed or non-origin entries),
-// so the warning's arithmetic matches the processes that will actually boot
-// rather than raw comma segments. Unset REALMS parses to the single-realm
-// fallback entry, which can never trip the ceiling on its own.
+// their own databases have their own budgets, so the warning names the
+// assumption instead of pretending to know each realm's DATABASE_URL. The
+// per-realm term (shared + quota + listener + deadline-cancel, matching
+// DEPLOY.md's budget arithmetic) lives in db_connection_budget.ts.
 const configuredRealmCount = REALM_DIRECTORY.length;
-const configuredSteadyConnections =
-  configuredRealmCount *
-  (DB_POOL_MAX_CLIENTS +
-    GENERAL_CHAT_QUOTA_DB_POOL_MAX_CLIENTS +
-    GENERAL_CHAT_QUOTA_LISTENER_CONNECTIONS);
-if (configuredSteadyConnections > DB_POOL_MAX_CLIENTS_CEILING) {
-  console.warn(
-    `db pool: ${configuredRealmCount} realms x (${DB_POOL_MAX_CLIENTS} shared + ${GENERAL_CHAT_QUOTA_DB_POOL_MAX_CLIENTS} quota + ${GENERAL_CHAT_QUOTA_LISTENER_CONNECTIONS} listener) = ${configuredSteadyConnections} steady connections, past the ${DB_POOL_MAX_CLIENTS_CEILING} usable on stock postgres:16 (max_connections 100, 3 superuser-reserved), before tooling, the transient concurrent-index client, and rolling-restart overlap. If every realm shares this DATABASE_URL, logins will fail with "too many clients" at peak: lower DB_POOL_MAX_CLIENTS or raise max_connections.`,
-  );
-}
+const budgetWarning = dbConnectionBudgetWarning(
+  configuredRealmCount,
+  DB_POOL_MAX_CLIENTS,
+  DB_POOL_MAX_CLIENTS_CEILING,
+);
+if (budgetWarning !== null) console.warn(budgetWarning);
 
 // Server-side default statement timeout per session, applied as a connection
 // startup parameter so every query on every pooled client is bounded by the
@@ -195,36 +270,40 @@ export const DB_STATEMENT_TIMEOUT_MS = 15_000;
 // leaderboard / board / metrics aggregates and the final character save, plus the
 // on-demand admin reads: the sessions-by-day chart, the client perf summary, and
 // the account-detail playtime aggregate), applied via runWithStatementTimeout.
-// Bounded so even an exempted scan that goes runaway still dies rather than
-// pinning a pooled client indefinitely.
-export const DB_HEAVY_STATEMENT_TIMEOUT_MS = 60_000;
+// Bounded so a runaway exempted scan still dies instead of pinning a pooled client.
+export const DB_HEAVY_STATEMENT_TIMEOUT_MS = CHARACTER_SAVE_STATEMENT_TIMEOUT_MS;
 
-// Client-side backstop timeout per connection. query_timeout is enforced in the
-// driver, NOT the database, so a SET LOCAL cannot lift it: it MUST sit strictly
-// above the heaviest server-side allowance or it would kill the very queries
-// runWithStatementTimeout raises DB_HEAVY_STATEMENT_TIMEOUT_MS for. The server-side
-// statement_timeout is the real working limit; this only catches a black-holed
-// server that accepted a query and then never answers (so no server-side timer
-// ever fires), one layer outside the heavy allowance.
-export const DB_QUERY_TIMEOUT_MS = DB_HEAVY_STATEMENT_TIMEOUT_MS + 5000;
+// Client-side (driver) backstop per connection; SET LOCAL cannot lift it, so it
+// MUST sit strictly above the heaviest server-side allowance
+// (runWithStatementTimeout's DB_HEAVY_STATEMENT_TIMEOUT_MS). The server-side
+// statement_timeout is the working limit; this only catches a black-holed server
+// that accepted a query and never answers, so no server-side timer ever fires.
+export const DB_QUERY_TIMEOUT_MS = CHARACTER_SAVE_TRANSACTION_TIMEOUT_MS;
+
+// The code-owned material-source writer capability as a STARTUP option (so it
+// describes THIS binary, never a shared PGOPTIONS an old one inherits), on the
+// pool below and both boot Clients (material_source_connection.ts owns how).
+const SOURCE_WRITER_CONNECTION = materialSourceConnection(DATABASE_URL);
 
 export const pool = new Pool({
-  connectionString: DATABASE_URL,
+  connectionString: SOURCE_WRITER_CONNECTION.connectionString,
+  options: SOURCE_WRITER_CONNECTION.options,
   max: DB_POOL_MAX_CLIENTS,
   connectionTimeoutMillis: DB_POOL_CONNECT_TIMEOUT_MS,
   statement_timeout: DB_STATEMENT_TIMEOUT_MS,
   query_timeout: DB_QUERY_TIMEOUT_MS,
 });
 
-// An idle pooled client can emit 'error' with no query in flight (a backend
-// termination, a dropped TCP connection). Unhandled, pg re-emits it on the Pool
-// where it becomes an uncaught exception that crashes the realm process. Swallow
-// it to a logged, counted event; pg discards the broken client and the next
-// checkout transparently opens a fresh one. Dev-channel English is fine here (a
-// log, never player text). The real pg Pool is an EventEmitter; a few db-layer
-// unit tests replace it with a minimal fake that omits .on, so guard the
-// registration by capability rather than force every such fake to grow the event
-// surface (the real registration is exercised in tests/server/tunables.test.ts).
+// Character saves ride this wrapper: on deadline expiry pg_cancel_backend drops
+// held locks through the dedicated side pool (db_backend_cancel.ts).
+const cancelSaveBackend = cancelDetachedBackend;
+const beginSaveTx = (c: Parameters<typeof beginCharacterSaveTx>[0], op: string, s?: AbortSignal) =>
+  beginCharacterSaveTx(c, op, s, cancelSaveBackend);
+
+// An idle pooled client can emit 'error' with no query in flight (backend death, dropped
+// TCP); unhandled, pg re-emits it on the Pool as an uncaught exception crashing the realm.
+// Swallow to a logged, counted event; pg discards the client, the next checkout opens a
+// fresh one. The .on guard tolerates minimal pool fakes; registration: tunables.test.ts.
 let poolClientErrorCount = 0;
 if (typeof pool.on === 'function') {
   pool.on('error', (err) => {
@@ -357,7 +436,7 @@ ALTER TABLE characters ADD COLUMN IF NOT EXISTS last_login TIMESTAMPTZ;
 -- blob: keeping it out of CharacterState leaves sim serialization byte-identical
 -- and the offline Sim host-agnostic. Nullable/absent until the character first
 -- saves one; the server treats the value as opaque and re-validates its bounds
--- (sanitizeActionBarLayout) on both read and write.
+-- (sanitizeActionBarLayoutProfiles) on read; a write merges ONE surface profile.
 ALTER TABLE characters ADD COLUMN IF NOT EXISTS hotbar_layout JSONB;
 -- The character's authored modular-creator look (ModularAppearance). Client
 -- PRESENTATION state exactly like hotbar_layout above: its own additive column,
@@ -455,6 +534,18 @@ WHERE cosmetics ? 'weaponSkinIds' OR cosmetics ? 'weaponSkinLoadout'
 -- startup would let a rolled-back binary resurrect a stale, previously-cleared
 -- loadout. Once the dedicated row exists it is the sole authority.
 ON CONFLICT (account_id) DO NOTHING;
+-- Mount skin ownership (src/sim/content/mount_skins.ts): the same rollback-safe
+-- paid-state shape as account_weapon_cosmetics, its own row so an older binary
+-- that rewrites accounts.cosmetics wholesale can never erase a purchase. No
+-- backfill: nothing ever stored a mount skin in the JSON document. The WORN skin
+-- is character state (characters.state mountSkinId), never kept here.
+CREATE TABLE IF NOT EXISTS account_mount_cosmetics (
+  account_id INT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  skin_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT account_mount_cosmetics_skin_ids_array
+    CHECK (jsonb_typeof(skin_ids) = 'array')
+);
 -- Operator-set account flair (cosmetic, no gameplay effect): the "AI-operated
 -- account" mark that prefixes the character name with [AI], and an official
 -- streamer's platform links. Both are written ONLY from the admin dashboard
@@ -485,11 +576,11 @@ ALTER TABLE accounts ADD COLUMN IF NOT EXISTS locale TEXT;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS unsubscribe_token TEXT;
--- Deed broadcast opt-out. When FALSE the server skips the guild/friend
--- broadcast of this account's marquee deed unlocks (the earner's own client
--- toast is local and unaffected). Defaults TRUE so broadcasts are on unless
--- the player opts out; the flag never gates the unlock itself.
+-- Deed broadcast opt-out (defaults TRUE: on unless the player opts out; never
+-- gates the unlock itself) and the queue-pop Discord DM opt-in (defaults FALSE:
+-- a DM is intrusive, so the player asks for it; server/discord_queue_pops.ts).
 ALTER TABLE accounts ADD COLUMN IF NOT EXISTS deed_broadcasts BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS discord_queue_pings BOOLEAN NOT NULL DEFAULT FALSE;
 -- Index + collision guard for the public unsubscribe lookup. Partial (the column
 -- is NULL until an account first opts in) and UNIQUE so two accounts can never
 -- share a token. The token is a low-sensitivity capability (its only power is to
@@ -822,66 +913,6 @@ CREATE TABLE IF NOT EXISTS chat_violations (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS chat_violations_account ON chat_violations(account_id, created_at DESC);
-CREATE TABLE IF NOT EXISTS client_perf_reports (
-  id BIGSERIAL PRIMARY KEY,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  schema_version INT NOT NULL DEFAULT 1,
-  release_version TEXT NOT NULL DEFAULT '',
-  build_id TEXT NOT NULL DEFAULT '',
-  session_id TEXT NOT NULL DEFAULT '',
-  account_id INT REFERENCES accounts(id) ON DELETE SET NULL,
-  character_id INT REFERENCES characters(id) ON DELETE SET NULL,
-  realm TEXT NOT NULL DEFAULT '${REALM_SQL_DEFAULT}',
-  graphics_preset TEXT NOT NULL DEFAULT '',
-  gfx_tier TEXT NOT NULL DEFAULT '',
-  auto_governor BOOLEAN NOT NULL DEFAULT FALSE,
-  target_fps INT NOT NULL DEFAULT 0,
-  render_scale REAL NOT NULL DEFAULT 1,
-  effective_render_scale REAL NOT NULL DEFAULT 1,
-  fps_avg REAL NOT NULL DEFAULT 0,
-  frame_p95_ms REAL NOT NULL DEFAULT 0,
-  frame_p99_ms REAL NOT NULL DEFAULT 0,
-  long_frame_count INT NOT NULL DEFAULT 0,
-  renderer_calls INT NOT NULL DEFAULT 0,
-  renderer_triangles INT NOT NULL DEFAULT 0,
-  renderer_textures INT NOT NULL DEFAULT 0,
-  renderer_programs INT NOT NULL DEFAULT 0,
-  context_lost_count INT NOT NULL DEFAULT 0,
-  long_task_count INT NOT NULL DEFAULT 0,
-  long_task_p95_ms REAL NOT NULL DEFAULT 0,
-  memory_used_mb REAL,
-  memory_limit_mb REAL,
-  dpr REAL NOT NULL DEFAULT 1,
-  viewport_bucket TEXT NOT NULL DEFAULT '',
-  device_memory REAL,
-  hardware_concurrency INT NOT NULL DEFAULT 0,
-  mobile_touch BOOLEAN NOT NULL DEFAULT FALSE,
-  browser_family TEXT NOT NULL DEFAULT '',
-  os_family TEXT NOT NULL DEFAULT '',
-  gl_vendor TEXT NOT NULL DEFAULT '',
-  gl_renderer_bucket TEXT NOT NULL DEFAULT '',
-  zone_or_scenario TEXT NOT NULL DEFAULT '',
-  source TEXT NOT NULL DEFAULT 'gameplay',
-  raw_summary JSONB NOT NULL DEFAULT '{}'::jsonb
-);
-CREATE INDEX IF NOT EXISTS client_perf_reports_created ON client_perf_reports(created_at DESC);
-CREATE INDEX IF NOT EXISTS client_perf_reports_release_created ON client_perf_reports(release_version, created_at DESC);
-CREATE INDEX IF NOT EXISTS client_perf_reports_gpu_created ON client_perf_reports(gl_renderer_bucket, created_at DESC);
-CREATE INDEX IF NOT EXISTS client_perf_reports_session_created ON client_perf_reports(session_id, created_at DESC);
--- Packet 0 report dimensions (rulings R3-R7). crowd_bucket keeps the summary
--- statement's GROUPING-bits contract (every grouped column TEXT NOT NULL
--- DEFAULT ''; pre-column rows fold to 'unknown' in the read-time mapper). The
--- worst-10s ranking index builds via CONCURRENT_INDEX_MIGRATIONS
--- (server/client_perf_indexes.ts), never here.
-ALTER TABLE client_perf_reports ADD COLUMN IF NOT EXISTS crowd_bucket TEXT NOT NULL DEFAULT '';
-ALTER TABLE client_perf_reports ADD COLUMN IF NOT EXISTS sim_entities INT NOT NULL DEFAULT 0;
-ALTER TABLE client_perf_reports ADD COLUMN IF NOT EXISTS active_views INT NOT NULL DEFAULT 0;
-ALTER TABLE client_perf_reports ADD COLUMN IF NOT EXISTS visible_views INT NOT NULL DEFAULT 0;
-ALTER TABLE client_perf_reports ADD COLUMN IF NOT EXISTS worst_10s_frame_p95_ms REAL NOT NULL DEFAULT 0;
--- Phase 05 (ruling R14): client-computed perf-doctor suggestion ids, validated
--- against the server allowlist in perf_report.ts before storage (filter,
--- dedupe, cap 3). Pre-column and healthy rows both read as the empty array.
-ALTER TABLE client_perf_reports ADD COLUMN IF NOT EXISTS suggestion_ids TEXT[] NOT NULL DEFAULT '{}';
 -- Non-custodial Solana wallet links (PRD: docs/prd/woc/wallet-link.md). One
 -- wallet per account (account_id is the PK) and one account per wallet (pubkey
 -- is UNIQUE). The server never holds keys; ownership is proven by a signed
@@ -1240,7 +1271,13 @@ export async function ensureSchema(): Promise<void> {
   // with a Pool-only factory and never boot the schema; a top-level named
   // import would invalidate every one of those mocks.
   const { Client } = await import('pg');
-  const client = new Client({ connectionString: DATABASE_URL });
+  const client = new Client({ ...SOURCE_WRITER_CONNECTION });
+  // The schema fragments report through RAISE NOTICE (the storage-purchase
+  // refused-row sweep names what it removed); node-postgres discards notices
+  // that no listener consumes, so forward them to the boot log, filtered
+  // (schema_notices.ts drops the idempotent-DDL skip wall every steady-state
+  // boot emits, which would bury the one report the forward exists to surface).
+  attachSchemaNoticeForwarder(client);
   try {
     // Inside the try so the finally's end() always runs, even on a connect
     // failure (end() on a never-connected client is a harmless no-op).
@@ -1254,6 +1291,10 @@ export async function ensureSchema(): Promise<void> {
     await client.query('SET LOCAL statement_timeout = 0');
     await client.query('SELECT pg_advisory_xact_lock($1)', [SCHEMA_ADVISORY_LOCK_KEY]);
     await client.query(SCHEMA);
+    // The material source audit's anchor + journal pair: after SCHEMA (it
+    // FK-references characters), before the growth budget that must count it.
+    await applyMaterialSourceSchema(client);
+    await client.query(BANK_LEDGER_BATCH_RECEIPTS_SCHEMA);
     // Local-recovery reports reference accounts/characters, so their additive
     // schema runs after the core tables under the same boot advisory lock.
     await client.query(UNSTUCK_SCHEMA);
@@ -1280,6 +1321,11 @@ export async function ensureSchema(): Promise<void> {
     // beside the other analytics schemas. Bounded (one row per campaign-day),
     // deliberately keep-forever (see ad_spend_db.ts).
     await client.query(AD_SPEND_SCHEMA);
+    // The Realm Builder of the Month roll (the Eastbrook Vale monument, named
+    // from the admin dashboard). FK-references accounts(id) for the "who named
+    // them" column, so it runs after SCHEMA. Bounded at one row a month and
+    // deliberately keep-forever: deleting an old row erases a real award.
+    await client.query(REALM_BUILDER_SCHEMA);
     await client.query(SOCIAL_SCHEMA);
     await client.query(ADMIN_GUILDS_SCHEMA);
     await client.query(SEEKER_ENTITLEMENT_SCHEMA);
@@ -1316,6 +1362,17 @@ export async function ensureSchema(): Promise<void> {
     // is unaffected: only expired windows match, and a racing UPSERT on a pruned
     // key simply re-inserts a fresh row.
     await client.query(RATELIMIT_PRUNE_SQL);
+    // Admin economy oversight: the materialised per-account wealth totals and
+    // the persisted suspicion-flag workflow tables. Both FK-reference
+    // accounts(id), so they run after SCHEMA. Applied unconditionally
+    // (idempotent), like the other schema modules.
+    await client.query(ACCOUNT_WEALTH_SCHEMA);
+    await client.query(SUSPICION_FLAGS_SCHEMA);
+    // The $WOC custody mail overlay (server/mail_custody_overlay.ts): one
+    // durable row per booked parcel until the next full mail-book write
+    // bakes it. No FK on purpose: rows must survive character deletion long
+    // enough for an operator to attribute them.
+    await client.query(MAIL_CUSTODY_PARCELS_SCHEMA);
     // Map editor tables: saved/forked custom maps and uploaded GLB assets.
     // Both FK-reference accounts(id), so they run after SCHEMA. Applied
     // unconditionally (idempotent), like the other schema modules.
@@ -1325,15 +1382,18 @@ export async function ensureSchema(): Promise<void> {
     // block, unblock). FK-references accounts(id), so it runs after SCHEMA.
     // Applied unconditionally (idempotent), like the other schema modules.
     await client.query(CONTENT_MODERATION_SCHEMA);
-    // Seed the chat-filter word lists + config on first boot only (idempotent).
-    // Runs under the same advisory lock so concurrent realm boots don't race.
+    // After SCHEMA: every marketplace table FKs accounts(id), and the custody
+    // model rides characters + world_state (the escrow combined save).
+    await client.query(WOC_MARKET_SCHEMA);
+    // The World Market sold-volume store (qr-19-sold-volume-four-seam-wiring):
+    // realm x day x tracked-item daily aggregates, no FK, additive, idempotent.
+    await client.query(MARKET_SOLD_VOLUME_SCHEMA);
+    // Seed chat-filter defaults once (idempotent), under the same advisory lock.
     await seedChatFilterDefaults(client);
-    // Partitioned World Market backfill. Runs inside this same
-    // advisory-lock transaction (so a concurrent realm boot cannot race it) and
-    // AFTER the schema modules exist. It splits any surviving pre-scoping
-    // 'market' blob per seller realm, RETAINS the legacy row as a rollback
-    // artifact, and records a marker row so every later boot is a no-op. See
-    // server/market_backfill.ts.
+    // Partitioned World Market backfill: runs inside this same advisory-lock
+    // transaction (a concurrent realm boot cannot race it), after the schema
+    // modules exist. It splits any surviving pre-scoping 'market' blob per
+    // seller realm, keeps the legacy row, and marks itself done (market_backfill.ts).
     const marketBackfillDryRun = process.env.MARKET_BACKFILL_DRY_RUN === '1';
     const backfill = await runMarketBackfill({
       client,
@@ -1343,9 +1403,8 @@ export async function ensureSchema(): Promise<void> {
     });
     if (marketBackfillDryRun) {
       // Deliberate halt: the runner logged the per-realm plan and wrote nothing
-      // (no partitions, no marker). Stop the boot so an operator can inspect the
-      // plan before applying. The ROLLBACK in the catch is harmless: the DDL is
-      // idempotent and the dry run wrote nothing.
+      // (no partitions, no marker), so an operator can inspect before applying.
+      // The catch's ROLLBACK is harmless: idempotent DDL, nothing written.
       throw new Error(
         'MARKET_BACKFILL_DRY_RUN halted boot after computing the market backfill plan: no changes were written and the boot was stopped deliberately, unset MARKET_BACKFILL_DRY_RUN to apply',
       );
@@ -1355,11 +1414,64 @@ export async function ensureSchema(): Promise<void> {
         `[market-backfill] applied for realm ${REALM} (legacyRowFound=${backfill.legacyRowFound})`,
       );
     }
+    // Partitioned Ravenpost mail backfill (#3561): splits this realm's
+    // `mail:<realm>` blob per recipient so autosave can persist only what
+    // changed. Runs in the same advisory-lock transaction as the market
+    // backfill above, right before COMMIT, for the same reason: a racing
+    // autosave must never observe a half-migrated realm. See
+    // server/mail_partition_backfill.ts.
+    const mailBackfill = await runMailPartitionBackfill({
+      client,
+      realm: REALM,
+      log: (line) => console.log(line),
+    });
+    if (mailBackfill.ran) {
+      console.log(
+        `[mail-partition-backfill] applied for realm ${REALM} (legacyRowFound=${mailBackfill.legacyRowFound}, recipients=${mailBackfill.recipientCount})`,
+      );
+    }
+    // Client perf telemetry: after SCHEMA (its FKs reference accounts and
+    // characters), late for the storage-purchase reason below (ADD COLUMN locks
+    // the highest-insert-rate table until COMMIT). Ordering pinned in tests.
+    await client.query(CLIENT_PERF_REPORTS_SCHEMA);
+    // Storage purchase parent triggers land late so their first-rollout table
+    // locks are held only briefly before COMMIT.
+    await client.query(STORAGE_PURCHASE_SCHEMA);
+    // The source-writer capability guard: HERE because every table it guards
+    // now exists (characters, world_state, bank_ledger, character_leases,
+    // guild_banks, the mail custody pair, the market tables). Unconditional and
+    // switchless (material_source_host.ts): this binary writes compositions, so
+    // an un-migrated writer on those rows is the defect the guard prevents. It
+    // probes BOTH connections first, so a process that could not satisfy its own
+    // guard refuses to boot rather than failing at its first save.
+    await applyMaterialSourceWriterGuard(client, pool);
+    // The first durable-ledger ceiling install locks the ledger while seeding
+    // an exact row count; keep it the final fragment so nothing else waits.
+    await client.query(BANK_LEDGER_GROWTH_BUDGET_SCHEMA);
+    // Readback issued separately before COMMIT (a multi-statement query returns
+    // an ARRAY of results, so the fragment's trailing SELECT is unreadable).
+    // The SQL is exported beside the schema builder so the two cannot drift;
+    // boot always applies the fragment's default 'public'.
+    const bankLedgerGrowthBudget = await client.query(bankLedgerGrowthBudgetReadbackSql());
+    const growthGaugeSeeded = observeBankLedgerGrowthBudget(
+      bankLedgerGrowthBudget.rows[0]?.committed_rows,
+      bankLedgerGrowthBudget.rows[0]?.hard_limit_rows,
+    );
+    if (!growthGaugeSeeded) {
+      // The monitor refresh backstops the gauge within a minute, but a missing
+      // or malformed singleton right after the fragment ran deserves a name.
+      console.warn(
+        '[schema] bank ledger growth budget readback did not seed the gauge (missing or malformed singleton row)',
+      );
+    }
     await client.query('COMMIT');
-    // Open the market write gate only AFTER a successful COMMIT, so no market
-    // write can land before the marker is durable. Opens on the no-op path too
-    // (backfill.ran === false, i.e. the marker already existed).
+    // Open the market write gate only AFTER a successful COMMIT (also on the
+    // no-op path where the marker already existed): no market write lands
+    // before the marker is durable.
     openMarketWriteGate();
+    // Same discipline for the mail partition gate: no mail:<realm>:r:* write
+    // can land before this realm's marker is durable.
+    openMailPartitionWriteGate();
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     throw err;
@@ -1400,31 +1512,55 @@ export async function runConcurrentIndexMigrations(): Promise<void> {
   // Resolved at call time, not module scope: many suites module-mock 'pg' with
   // a Pool-only factory (the ensureSchema precedent above).
   const { Client } = await import('pg');
-  const client = new Client({ connectionString: DATABASE_URL });
-  let locked = false;
+  const client = new Client({ ...SOURCE_WRITER_CONNECTION });
+  // The post-listen fragments report through RAISE NOTICE too; without the
+  // forwarder (schema_notices.ts) node-postgres discards them.
+  attachSchemaNoticeForwarder(client);
   try {
-    await client.connect();
-    await client.query('SET statement_timeout = 0');
-    await client.query('SELECT pg_advisory_lock($1)', [SCHEMA_ADVISORY_LOCK_KEY]);
-    locked = true;
-    // A prior build may have died mid-CONCURRENTLY (a deploy-watchdog restart,
-    // a crash), stranding an INVALID index that IF NOT EXISTS would treat as
-    // existing forever, so the reader would sequential-scan for good. Each
-    // entry drops its carcass first; the list and its order live in
-    // server/concurrent_indexes.ts.
-    for (const migration of CONCURRENT_INDEX_MIGRATIONS) {
-      const invalidIndex = await client.query(migration.checkSql);
-      if ((invalidIndex.rowCount ?? 0) > 0) {
-        await client.query(migration.dropSql);
+    let locked = false;
+    try {
+      await client.connect();
+      await client.query('SET statement_timeout = 0');
+      await client.query('SELECT pg_advisory_lock($1)', [SCHEMA_ADVISORY_LOCK_KEY]);
+      locked = true;
+      // A prior build may have died mid-CONCURRENTLY (a deploy-watchdog restart,
+      // a crash), stranding an INVALID index that IF NOT EXISTS would treat as
+      // existing forever, so the reader would sequential-scan for good. Each
+      // entry drops its carcass first; the list and its order live in
+      // server/concurrent_indexes.ts.
+      for (const migration of CONCURRENT_INDEX_MIGRATIONS) {
+        const invalidIndex = await client.query(migration.checkSql);
+        if ((invalidIndex.rowCount ?? 0) > 0) {
+          await client.query(migration.dropSql);
+        }
+        await client.query(migration.createSql);
+        // A replacement must be valid before its superseded index disappears.
+        // If CREATE throws (including an interrupted concurrent build), this is
+        // never reached and the old index keeps serving until the next boot.
+        if (migration.retireSql !== undefined) {
+          await client.query(migration.retireSql);
+        }
       }
-      await client.query(migration.createSql);
+      // The out-of-boot half of the receipts key-shape converge, INSIDE the
+      // session advisory lock: ensureSchema re-adds a drifted constraint as
+      // NOT VALID so boot never scans the keep-forever table; this VALIDATE
+      // (SHARE UPDATE EXCLUSIVE, inserts keep flowing) proves the rows here.
+      // In-lock on purpose: a concurrently booting realm waits at
+      // pg_advisory_lock holding NOTHING, while post-unlock it would run its
+      // boot DDL (IF NOT EXISTS still takes ACCESS EXCLUSIVE/SHARE locks)
+      // and block mid-DDL behind the scan, freezing logins and saves. The
+      // helper bounds the scan in its own SET LOCAL transaction and swallows
+      // failure loudly (NOT VALID survives, next boot retries); the index
+      // loop's own throw skips it for the same next-boot retry.
+      await validateBankLedgerBatchReceiptsKeyShape(client);
+    } finally {
+      if (locked) {
+        await client
+          .query('SELECT pg_advisory_unlock($1)', [SCHEMA_ADVISORY_LOCK_KEY])
+          .catch(() => {});
+      }
     }
   } finally {
-    if (locked) {
-      await client
-        .query('SELECT pg_advisory_unlock($1)', [SCHEMA_ADVISORY_LOCK_KEY])
-        .catch(() => {});
-    }
     await client.end().catch(() => {});
   }
 }
@@ -1442,26 +1578,10 @@ export interface AccountRow {
   totp_last_window?: string | number | null;
 }
 
-export interface AccountModerationStatus {
-  locked: boolean;
-  banned: boolean;
-  suspendedUntil: string | null;
-  // True only for a self-deactivated account (locked, not banned, no active
-  // suspension). Lets a caller distinguish the deactivation lock from a
-  // suspension so it can surface the correct message/code (e.g. the API pipeline
-  // requireAccount maps it to account.deactivated, not moderation.suspended).
-  deactivated?: boolean;
-  reason: string;
-  message: string;
-  // Chat mute is independent of `locked`: a muted account can still log in and
-  // play, it just can't send chat until `chatMutedUntil` passes. Surfaced here
-  // so the WS auth handshake can seed the live session without a second query.
-  chatMutedUntil: string | null;
-  chatStrikes: number;
-  // Sparse account policy. Null means Unlimited. Loaded in this existing auth
-  // read so a known-unlimited session never performs quota database work.
-  generalChatRateLimit?: GeneralChatRateLimit | null;
-}
+// The status shape (and its compute) moved to server/auth_guard_core.ts so the
+// direct read below and the marketplace guard cache share one source of truth;
+// re-exported here so the existing importers compile unchanged.
+export type { AccountModerationStatus } from './auth_guard_core';
 
 export interface AccountChatMuteStatus {
   mutedUntil: string | null;
@@ -1473,80 +1593,19 @@ export interface RequestMetadata {
   userAgent?: string | null;
 }
 
-export interface AccountCosmetics {
-  completedQuestIds: string[];
-  mechChromaIds: string[];
-  // Season 1 Armory weapon skins: owned skin ids (granted on Claudium spend,
-  // reconciled from the economy service) and the applied-skin-per-weapon-type
-  // loadout. Account-wide by design; characters never carry either.
-  weaponSkinIds: string[];
-  weaponSkinLoadout: Record<string, string>;
-}
-
-function uniqueStrings(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const item of value) {
-    if (typeof item !== 'string' || item.length === 0 || seen.has(item)) continue;
-    seen.add(item);
-    out.push(item);
-  }
-  return out;
-}
-
-function stringRecord(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  const out: Record<string, string> = {};
-  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof entry === 'string' && entry.length > 0) out[key] = entry;
-  }
-  return out;
-}
-
-export function normalizeAccountCosmetics(value: unknown): AccountCosmetics {
-  const src = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
-  return {
-    completedQuestIds: uniqueStrings(src.completedQuestIds),
-    mechChromaIds: uniqueStrings(src.mechChromaIds),
-    weaponSkinIds: uniqueStrings(src.weaponSkinIds),
-    weaponSkinLoadout: stringRecord(src.weaponSkinLoadout),
-  };
-}
-
-interface AccountCosmeticsRow {
-  cosmetics?: unknown;
-  weapon_skin_ids?: unknown;
-  weapon_skin_loadout?: unknown;
-}
-
-function normalizeAccountCosmeticsRow(row: AccountCosmeticsRow | undefined): AccountCosmetics {
-  const base = normalizeAccountCosmetics(row?.cosmetics);
-  return {
-    ...base,
-    weaponSkinIds:
-      row?.weapon_skin_ids === null || row?.weapon_skin_ids === undefined
-        ? base.weaponSkinIds
-        : uniqueStrings(row.weapon_skin_ids),
-    weaponSkinLoadout:
-      row?.weapon_skin_loadout === null || row?.weapon_skin_loadout === undefined
-        ? base.weaponSkinLoadout
-        : stringRecord(row.weapon_skin_loadout),
-  };
-}
-
-export async function loadAccountCosmetics(accountId: number): Promise<AccountCosmetics> {
-  const res = await pool.query(
-    `SELECT a.cosmetics,
-            awc.skin_ids AS weapon_skin_ids,
-            awc.loadout AS weapon_skin_loadout
-       FROM accounts a
-       LEFT JOIN account_weapon_cosmetics awc ON awc.account_id = a.id
-      WHERE a.id = $1`,
-    [accountId],
-  );
-  return normalizeAccountCosmeticsRow(res.rows[0]);
-}
+export type { AccountCosmetics } from './account_cosmetics_db';
+// Account cosmetics (quest lockouts, mech chromas, weapon skins, mount skins)
+// live in server/account_cosmetics_db.ts; re-exported so every caller and test
+// double keeps importing them from here.
+export {
+  grantAccountMechChroma,
+  grantAccountMountSkins,
+  grantAccountWeaponSkins,
+  loadAccountCosmetics,
+  markAccountQuestComplete,
+  normalizeAccountCosmetics,
+  setAccountWeaponSkinLoadout,
+} from './account_cosmetics_db';
 
 /**
  * The account's operator-set flair (AI mark + streamer links). The stored JSONB is
@@ -1566,139 +1625,6 @@ export async function loadAccountFlair(accountId: number): Promise<AccountFlair>
     streamer: row.is_streamer,
     links: row.streamer_links,
   });
-}
-
-async function addAccountCosmeticId(
-  accountId: number,
-  key: 'completedQuestIds' | 'mechChromaIds',
-  value: string,
-): Promise<AccountCosmetics> {
-  const res = await pool.query(
-    `WITH updated AS (
-       UPDATE accounts
-          SET cosmetics = jsonb_set(
-            COALESCE(cosmetics, '{}'::jsonb), ARRAY[$2::text],
-            (SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY v), '[]'::jsonb)
-               FROM (
-                 SELECT DISTINCT v FROM (
-                   SELECT jsonb_array_elements_text(
-                     CASE WHEN jsonb_typeof(cosmetics -> $2) = 'array'
-                       THEN cosmetics -> $2 ELSE '[]'::jsonb END) AS v
-                   UNION ALL SELECT $3::text
-                 ) merged
-               ) uniq))
-        WHERE id = $1
-        RETURNING id, cosmetics
-     )
-     SELECT updated.cosmetics,
-            awc.skin_ids AS weapon_skin_ids,
-            awc.loadout AS weapon_skin_loadout
-       FROM updated
-       LEFT JOIN account_weapon_cosmetics awc ON awc.account_id = updated.id`,
-    [accountId, key, value],
-  );
-  return normalizeAccountCosmeticsRow(res.rows[0]);
-}
-
-export async function markAccountQuestComplete(
-  accountId: number,
-  questId: string,
-): Promise<AccountCosmetics> {
-  return addAccountCosmeticId(accountId, 'completedQuestIds', questId);
-}
-
-export async function grantAccountMechChroma(
-  accountId: number,
-  chromaId: string,
-): Promise<AccountCosmetics> {
-  return addAccountCosmeticId(accountId, 'mechChromaIds', chromaId);
-}
-
-export async function revokeAccountMechChroma(
-  accountId: number,
-  chromaId: string,
-): Promise<AccountCosmetics> {
-  const res = await pool.query(
-    `WITH updated AS (
-       UPDATE accounts
-          SET cosmetics = jsonb_set(
-            COALESCE(cosmetics, '{}'::jsonb), '{mechChromaIds}',
-            (SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY ord), '[]'::jsonb)
-               FROM jsonb_array_elements_text(
-                 CASE WHEN jsonb_typeof(cosmetics -> 'mechChromaIds') = 'array'
-                   THEN cosmetics -> 'mechChromaIds' ELSE '[]'::jsonb END)
-                 WITH ORDINALITY AS entries(v, ord)
-              WHERE v <> $2))
-        WHERE id = $1
-        RETURNING id, cosmetics
-     )
-     SELECT updated.cosmetics,
-            awc.skin_ids AS weapon_skin_ids,
-            awc.loadout AS weapon_skin_loadout
-       FROM updated
-       LEFT JOIN account_weapon_cosmetics awc ON awc.account_id = updated.id`,
-    [accountId, chromaId],
-  );
-  return normalizeAccountCosmeticsRow(res.rows[0]);
-}
-
-/** Additive union in the rollback-safe paid-entitlement row. */
-export async function grantAccountWeaponSkins(
-  accountId: number,
-  skinIds: string[],
-): Promise<AccountCosmetics> {
-  const res = await pool.query(
-    `WITH upserted AS (
-       INSERT INTO account_weapon_cosmetics AS awc (account_id, skin_ids)
-       VALUES ($1, to_jsonb($2::text[]))
-       ON CONFLICT (account_id) DO UPDATE SET
-         skin_ids = (
-           SELECT COALESCE(jsonb_agg(to_jsonb(v) ORDER BY v), '[]'::jsonb)
-             FROM (
-               SELECT DISTINCT value AS v
-                 FROM jsonb_array_elements_text(awc.skin_ids || EXCLUDED.skin_ids)
-             ) merged),
-         updated_at = now()
-       RETURNING account_id, skin_ids, loadout
-     )
-     SELECT a.cosmetics,
-            upserted.skin_ids AS weapon_skin_ids,
-            upserted.loadout AS weapon_skin_loadout
-       FROM upserted
-       JOIN accounts a ON a.id = upserted.account_id`,
-    [accountId, skinIds.filter((id) => id)],
-  );
-  return normalizeAccountCosmeticsRow(res.rows[0]);
-}
-
-/** Replace the applied-skin-per-weapon-type loadout in the paid-state row. */
-export async function setAccountWeaponSkinLoadout(
-  accountId: number,
-  loadout: Record<string, string>,
-): Promise<AccountCosmetics> {
-  const cleanLoadout = stringRecord(loadout);
-  const res = await pool.query(
-    `WITH upserted AS (
-       INSERT INTO account_weapon_cosmetics AS awc (account_id, loadout)
-       VALUES ($1, $2::jsonb)
-       ON CONFLICT (account_id) DO UPDATE SET
-         loadout = EXCLUDED.loadout,
-         updated_at = now()
-       RETURNING account_id, skin_ids, loadout
-     )
-     SELECT a.cosmetics,
-            upserted.skin_ids AS weapon_skin_ids,
-            upserted.loadout AS weapon_skin_loadout
-       FROM upserted
-       JOIN accounts a ON a.id = upserted.account_id`,
-    [accountId, JSON.stringify(cleanLoadout)],
-  );
-  return normalizeAccountCosmeticsRow(res.rows[0]);
-}
-
-function cleanMetadataText(value: string | null | undefined, max: number): string | null {
-  const text = typeof value === 'string' ? value.trim() : '';
-  return text ? text.slice(0, max) : null;
 }
 
 export async function createAccount(
@@ -1832,6 +1758,28 @@ export async function saveToken(
      VALUES ($1, $2, now() + ($3 || ' hours')::interval, $4, $5)`,
     [token, accountId, String(ttlHours), scope, label],
   );
+  // A fresh random token can have no cached guard entry; the call keeps the
+  // auth_tokens writer set exemption-free for the bust discovery pin.
+  bustWocAuthGuardToken(token);
+}
+
+// The raw token-probe row for the guard reads (the cache's refresh source and
+// the direct read's fetch half). The expires_at > now() qual stays as the
+// DB-side belt; expires_at is ALSO selected so tokenInfoFromRow can re-check
+// expiry at read time, which is what makes a cached row safe
+// (server/auth_guard_core.ts owns the pure half).
+export async function authTokenRowForToken(token: string): Promise<AuthTokenRow | null> {
+  const res = await pool.query(
+    'SELECT account_id, scope, expires_at FROM auth_tokens WHERE token = $1 AND expires_at > now()',
+    [token],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    accountId: row.account_id,
+    scope: String(row.scope),
+    expiresAtMs: new Date(row.expires_at).getTime(),
+  };
 }
 
 // Account + scope for a live token. Every caller receives the authority context:
@@ -1839,17 +1787,12 @@ export async function saveToken(
 // require exact full scope. Unknown database values fail closed instead of being
 // promoted to full authority. Such a historical token also cannot authenticate
 // its own logout; account-level revocation remains available to clear the row.
+// Fetch + pure verdict (tokenInfoFromRow), the same pair the marketplace guard
+// cache composes, so the two arms cannot drift.
 export async function accountAndScopeForToken(
   token: string,
 ): Promise<{ accountId: number; scope: TokenScope } | null> {
-  const res = await pool.query(
-    'SELECT account_id, scope FROM auth_tokens WHERE token = $1 AND expires_at > now()',
-    [token],
-  );
-  const row = res.rows[0];
-  if (!row) return null;
-  if (row.scope !== 'full' && row.scope !== 'read') return null;
-  return { accountId: row.account_id, scope: row.scope };
+  return tokenInfoFromRow(await authTokenRowForToken(token), Date.now());
 }
 
 export interface AccountInfoRow {
@@ -1909,6 +1852,19 @@ export async function updatePasswordHash(accountId: number, passwordHash: string
   if ((res.rowCount ?? 0) > 0) bustDiscordStatus(accountId);
 }
 
+export async function setInitialPasswordHashIfUnset(
+  accountId: number,
+  passwordHash: string,
+): Promise<boolean> {
+  const res = await pool.query(
+    'UPDATE accounts SET password_hash = $2, password_set = TRUE WHERE id = $1 AND password_set = FALSE',
+    [accountId, passwordHash],
+  );
+  const changed = (res.rowCount ?? 0) > 0;
+  if (changed) bustDiscordStatus(accountId);
+  return changed;
+}
+
 // Revoke every token for an account except (optionally) the one in hand.
 // A password change keeps the current device signed in (pass its token);
 // a deactivate revokes everything (pass null).
@@ -1924,10 +1880,13 @@ export async function revokeTokensExcept(
   } else {
     await pool.query('DELETE FROM auth_tokens WHERE account_id = $1', [accountId]);
   }
+  // Account-keyed guard bust (over-busting the kept token costs one re-fetch).
+  bustWocAuthGuardAccount(accountId);
 }
 
 export async function revokeToken(token: string): Promise<void> {
   await pool.query('DELETE FROM auth_tokens WHERE token = $1', [token]);
+  bustWocAuthGuardToken(token);
 }
 
 // Revoke a read-scoped token by value (OAuth/RFC-7009 revocation, companion
@@ -1937,6 +1896,7 @@ export async function revokeReadToken(token: string): Promise<boolean> {
   const res = await pool.query(`DELETE FROM auth_tokens WHERE token = $1 AND scope = 'read'`, [
     token,
   ]);
+  bustWocAuthGuardToken(token);
   return (res.rowCount ?? 0) > 0;
 }
 
@@ -1990,6 +1950,10 @@ export async function revokeCompanionToken(accountId: number, prefix: string): P
       WHERE account_id = $1 AND scope = 'read' AND left(token, 8) = $2`,
     [accountId, prefix],
   );
+  // The cache is keyed by the FULL token this site does not hold, so the
+  // account-keyed bust drops every cached token of the account (over-busting
+  // is the safe direction; the survivors re-fetch).
+  bustWocAuthGuardAccount(accountId);
   return (res.rowCount ?? 0) > 0;
 }
 
@@ -2027,6 +1991,7 @@ export async function setAccountDeactivated(
     `UPDATE accounts SET deactivated_at = CASE WHEN $2 THEN now() ELSE NULL END WHERE id = $1`,
     [accountId, deactivated],
   );
+  bustWocAuthGuardAccount(accountId);
 }
 
 export async function setAccountLocale(accountId: number, locale: string | null): Promise<void> {
@@ -2197,6 +2162,7 @@ export async function consumePasswordResetRequest(
     // after COMMIT like the discord_db.ts sites. The expired/replayed-token arm
     // returns above without writing and must not evict a healthy snapshot.
     bustDiscordStatus(row.account_id);
+    bustWocAuthGuardAccount(row.account_id);
     return { accountId: row.account_id };
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
@@ -2491,7 +2457,7 @@ export async function exportAccountData(
       name: c.name,
       class: c.class,
       level: c.level,
-      state: c.state,
+      state: projectAccountExportState(c.state),
       realm: c.realm,
       // The authored modular look: per-character personal data the account
       // created, so it belongs in the export beside the state blob.
@@ -2577,11 +2543,15 @@ export async function linkWalletToAccount(accountId: number, pubkey: string): Pr
     if (isUniqueViolation(err)) return false;
     throw err;
   }
+  // Identity changes must not wait out a cache TTL: the Exchange's activity
+  // readout carries the verified wallet (the bustDiscordStatus discipline).
+  bustWocMarketActivity(accountId);
   return true;
 }
 
 export async function unlinkWallet(accountId: number): Promise<void> {
   await pool.query('DELETE FROM wallet_links WHERE account_id = $1', [accountId]);
+  bustWocMarketActivity(accountId);
 }
 
 // ── Shareable player cards + referrals ─────────────────────────────────────
@@ -2843,9 +2813,14 @@ export async function lifetimeXpRankForCharacter(
   return readLifetimeXpRankForCharacter(characterId);
 }
 
-export async function moderationStatusForAccount(
+// The raw moderation row for the guard reads (the cache's refresh source and
+// the direct read's fetch half): the accounts moderation columns plus the
+// LEFT-JOINed chat-quota policy. Every time-dependent verdict is computed from
+// this row by computeModerationStatus (server/auth_guard_core.ts) at read
+// time, which is why the ROW and never the computed result may be cached.
+export async function moderationRowForAccount(
   accountId: number,
-): Promise<AccountModerationStatus> {
+): Promise<AccountModerationRow | null> {
   const res = await pool.query(
     `SELECT a.banned_at, a.suspended_until, a.moderation_reason, a.chat_muted_until,
             a.chat_strikes, a.deactivated_at, q.messages, q.window_minutes
@@ -2854,83 +2829,16 @@ export async function moderationStatusForAccount(
      WHERE a.id = $1`,
     [accountId],
   );
-  const row = res.rows[0];
-  if (!row) {
-    return {
-      locked: false,
-      banned: false,
-      suspendedUntil: null,
-      reason: '',
-      message: '',
-      chatMutedUntil: null,
-      chatStrikes: 0,
-      generalChatRateLimit: null,
-    };
-  }
-  const mutedUntilDate = row.chat_muted_until ? new Date(row.chat_muted_until) : null;
-  const chatMutedUntil =
-    mutedUntilDate && mutedUntilDate.getTime() > Date.now() ? mutedUntilDate.toISOString() : null;
-  const chatStrikes = Number(row.chat_strikes ?? 0);
-  const generalChatRateLimit =
-    row.messages === null || row.messages === undefined
-      ? null
-      : {
-          messages: Number(row.messages),
-          windowMinutes: Number(row.window_minutes),
-        };
-  // Admin-imposed states (ban, then active suspension) outrank a self-imposed
-  // deactivation: a banned+deactivated account must still surface the ban reason
-  // and label, not be relabelled "deactivated". All branches resolve to locked.
-  if (row.banned_at) {
-    return {
-      locked: true,
-      banned: true,
-      suspendedUntil: null,
-      reason: row.moderation_reason ?? '',
-      message: 'This account has been banned.',
-      chatMutedUntil,
-      chatStrikes,
-      generalChatRateLimit,
-    };
-  }
-  const suspendedUntil = row.suspended_until ? new Date(row.suspended_until) : null;
-  if (suspendedUntil && suspendedUntil.getTime() > Date.now()) {
-    return {
-      locked: true,
-      banned: false,
-      suspendedUntil: suspendedUntil.toISOString(),
-      reason: row.moderation_reason ?? '',
-      message: `This account is suspended until ${suspendedUntil.toUTCString()}.`,
-      chatMutedUntil,
-      chatStrikes,
-      generalChatRateLimit,
-    };
-  }
-  // A self-deactivated account is locked out of login + WS auth (same gate as
-  // banned/suspended) until an admin reactivates it.
-  if (row.deactivated_at) {
-    return {
-      locked: true,
-      banned: false,
-      suspendedUntil: null,
-      deactivated: true,
-      reason: '',
-      message: 'This account has been deactivated.',
-      chatMutedUntil,
-      chatStrikes,
-      generalChatRateLimit,
-    };
-  }
-  return {
-    locked: false,
-    banned: false,
-    suspendedUntil: null,
-    reason: '',
-    message: '',
-    chatMutedUntil,
-    chatStrikes,
-    generalChatRateLimit,
-  };
+  return res.rows[0] ?? null;
+}
+
+// Fetch + pure verdict (computeModerationStatus), the same pair the
+// marketplace guard cache composes, so the two arms cannot drift. The
+// decision ladder itself lives in server/auth_guard_core.ts.
+export async function moderationStatusForAccount(
+  accountId: number,
+): Promise<AccountModerationStatus> {
+  return computeModerationStatus(await moderationRowForAccount(accountId), Date.now());
 }
 
 export async function chatMuteStatusForAccount(accountId: number): Promise<AccountChatMuteStatus> {
@@ -2961,7 +2869,7 @@ export interface CharacterRow {
   playtime_seconds?: string | number | null;
   // Per-character action-bar layout (own JSONB column, not the sim state blob).
   // Opaque to the server beyond bounds validation; only the join path selects it.
-  hotbar_layout?: ActionBarLayout | null;
+  hotbar_layout?: StoredActionBarLayout | null;
   // The authored modular-creator look (own JSONB column, hotbar_layout's
   // pattern). Normalized at write; NULL = pre-creator character (legacy rig).
   appearance?: Record<string, unknown> | null;
@@ -3060,13 +2968,13 @@ export async function getCharacter(
   return res.rows[0] ?? null;
 }
 
-/** Persist a character's action-bar layout in its dedicated JSONB column. The
- *  layout is already sanitized/bounded by the caller (server-side, untrusted
- *  client input); stored as an opaque document, replaced whole (last write wins).
- *  Parameterized: characterId is $1, the JSON document is $2. */
+/** Persist a character's action-bar layout document in its dedicated JSONB
+ *  column. Already sanitized/bounded by the caller (untrusted client input, the
+ *  saved profile merged in by server/hotbar_layout.ts); stored as an opaque
+ *  document, replaced whole. Parameterized: characterId is $1, the JSON is $2. */
 export async function setCharacterHotbarLayout(
   characterId: number,
-  layout: ActionBarLayout,
+  layout: ActionBarLayoutProfiles,
 ): Promise<void> {
   await pool.query('UPDATE characters SET hotbar_layout = $2::jsonb WHERE id = $1', [
     characterId,
@@ -3204,61 +3112,10 @@ export async function guildNameForCharacter(characterId: number): Promise<string
   return res.rows[0]?.name ?? null;
 }
 
-export async function createCharacterCapped(
-  accountId: number,
-  name: string,
-  cls: PlayerClass,
-  limit = 10,
-  state: CharacterState | null = null,
-  // The authored modular look, already normalized by the route handler.
-  // Null = created without the creator (legacy rig).
-  appearance: Record<string, unknown> | null = null,
-): Promise<CharacterRow | null> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const account = await client.query('SELECT id FROM accounts WHERE id = $1 FOR UPDATE', [
-      accountId,
-    ]);
-    if ((account.rowCount ?? 0) === 0) {
-      await client.query('ROLLBACK');
-      return null;
-    }
-    const count = await client.query(
-      'SELECT count(*)::int AS n FROM characters WHERE account_id = $1 AND realm = $2',
-      [accountId, REALM],
-    );
-    if (Number(count.rows[0]?.n ?? 0) >= limit) {
-      await client.query('ROLLBACK');
-      return null;
-    }
-    const res = await client.query(
-      'INSERT INTO characters (account_id, name, class, realm, state, appearance) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, account_id, name, class, level, state, is_gm, force_rename, appearance',
-      [
-        accountId,
-        name,
-        cls,
-        REALM,
-        state ? JSON.stringify(state) : null,
-        appearance ? JSON.stringify(appearance) : null,
-      ],
-    );
-    await recordCharacterCreation(client, accountId, REALM);
-    await client.query('COMMIT');
-    // A created character can become the account's top one, and its class is fixed
-    // here forever (no statement ever updates characters.class). Enqueued inside the
-    // db function rather than at the route so the RouteDef arm, its retained legacy
-    // twin in main.ts, and the PBE boost roster are all covered by one site. After
-    // COMMIT: a rolled-back create must never have enqueued.
-    enqueueLinkChange({ accountId, kinds: ['flex'] }, Date.now());
-    return res.rows[0];
-  } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-}
+// The capped character CREATE moved whole to server/character_create_db.ts
+// at the Phase 18 database review (the character_delete_db.ts sibling's
+// shape); re-exported here so no caller re-points.
+export { createCharacterCapped } from './character_create_db';
 
 // Reclaim a character name abandoned by a deactivated ("invalid") account.
 // Character names are unique per (realm, lower(name)), and deactivation is a
@@ -3339,12 +3196,19 @@ export async function reclaimDeactivatedName(name: string): Promise<{
   }
 }
 
-export async function deleteCharacter(accountId: number, characterId: number): Promise<boolean> {
-  const res = await pool.query(
-    'DELETE FROM characters WHERE id = $1 AND account_id = $2 AND realm = $3',
-    [characterId, accountId, REALM],
+export async function deleteCharacter(
+  accountId: number,
+  characterId: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const deleted = await deleteOwnedCharacterRow(
+    // The dedicated canceller, never the main pool (db_backend_cancel.ts).
+    { connect: () => pool.connect(), cancelBackend: cancelDetachedBackend },
+    accountId,
+    characterId,
+    REALM,
+    signal,
   );
-  const deleted = (res.rowCount ?? 0) > 0;
   // Only a delete that matched a row is a transition: deleting the top character
   // promotes the next-ordered one (or none). A miss (wrong owner, wrong realm,
   // already gone) changes nothing and must not enqueue.
@@ -3425,130 +3289,171 @@ export async function renameCharacter(
 // pair would race the takeover that steals the lease between the two. The no-nonce path
 // (tests, resumes, meta-less sessions) writes unconditionally and returns true, exactly
 // as before.
-// The ONE fenced character UPDATE the whole save family issues
-// (saveCharacterState, saveCharacterAndMarketState, and the guild bank escrow
-// sibling). Extracted so the lease fence stays byte-identical across the
-// family: the fence rides the write statement itself (never a separate
-// pre-check that would race a takeover), and a nonce that matches no lease row
-// touches nothing, which every caller must treat as "persist NOTHING".
-function characterUpdateStatement(
-  characterId: number,
-  level: number,
-  stateJson: string,
-  leaseNonce: string | undefined,
-): { text: string; values: unknown[] } {
-  return leaseNonce === undefined
-    ? {
-        text: 'UPDATE characters SET level = $2, state = $3, updated_at = now() WHERE id = $1',
-        values: [characterId, level, stateJson],
-      }
-    : {
-        text: `UPDATE characters SET level = $2, state = $3, updated_at = now()
-            WHERE id = $1
-              AND EXISTS (
-                SELECT 1 FROM character_leases
-                 WHERE character_id = $1 AND holder = $4 AND nonce = $5
-              )`,
-        values: [characterId, level, stateJson, PROCESS_LEASE_HOLDER, leaseNonce],
-      };
-}
+// The statement builders, the fence-shape picker (liveSaveFence, holder passed in
+// to avoid a db.ts cycle) and the executors (runFencedCharacterSave, which takes
+// the characters row lock FIRST, qr-19-live-nonce-fence-write-loss, and returns
+// the locked source pre-image) live in server/character_save_statement.ts.
 
 export async function saveCharacterState(
   characterId: number,
   level: number,
   state: CharacterState,
   leaseNonce?: string,
+  storageEffects: readonly StorageAppliedEffect[] = [],
+  ledgerEffects?: BankLedgerSaveEffects,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  const ledger = prepareCharacterSaveEffects(characterId, storageEffects, ledgerEffects);
   const cleanState = sanitizeRemovedZone1Content(state).state;
-  // A character save should wait out a slow database rather than lose state, so
-  // run it on the raised heavy allowance; still bounded so a leave / shutdown
-  // flush cannot hang past the container stop grace.
-  const stmt = characterUpdateStatement(characterId, level, JSON.stringify(cleanState), leaseNonce);
-  const res = await runWithStatementTimeout(DB_HEAVY_STATEMENT_TIMEOUT_MS, (query) =>
-    query(stmt.text, stmt.values),
-  );
-  return leaseNonce === undefined ? true : (res.rowCount ?? 0) > 0;
+  // Serialized BEFORE the checkout, as it always was here: this stringify is the
+  // save's one non-trivial CPU cost and must not run inside the transaction.
+  const stateJson = JSON.stringify(cleanState);
+  const client = await pool.connect();
+  const transaction = await beginSaveTx(client, 'character save', signal);
+  let ledgerWrite: BankLedgerBatchWriteResult | undefined;
+  try {
+    await lockSaveEffectAccounts(transaction, storageEffects, ledger);
+    const { result: res, before } = await runFencedCharacterSave(
+      transaction,
+      characterId,
+      level,
+      stateJson,
+      liveSaveFence(leaseNonce, PROCESS_LEASE_HOLDER),
+    );
+    if (!characterSaveLanded(leaseNonce, storageEffects, ledger, res.rowCount)) {
+      await transaction.rollback();
+      return false;
+    }
+    await journalCharacterSaveSources(transaction, characterId, before, res, cleanState);
+    ledgerWrite = await writeBankLedgerSaveEffectsOnClient(transaction, ledger);
+    await writeStorageAppliedEffectsOnClient(transaction, storageEffects);
+    await transaction.commit();
+    return true;
+  } catch (err) {
+    await transaction.rollback();
+    throw characterSaveFailure(err, ledger, ledgerWrite);
+  } finally {
+    transaction.release();
+  }
 }
 
-// Persist a character row AND this realm's World Market + Ravenpost mail blobs
-// in ONE transaction. They live in different tables (characters / world_state),
-// but a Market listing and a mail attachment are both escrows: the item leaves
-// the character's bags (character state) and becomes a listing / a letter
-// parcel (world state) in the same Sim action. Saving them as independent
-// writes lets an unclean crash persist one half and not the other, vaporising
-// the item or duplicating it across bags and book. The leave path uses this so
-// a logout flush of bags can never tear away from either escrow.
+// Lease-fenced offline snapshots for the PBE roster fallback.
+// Signer and name mutations use offline_character_mutation_db.ts instead.
+// The snapshot writer and its bounds live in offline_character_save_db.ts.
+export function saveOfflineCharacterState(
+  characterId: number,
+  level: number,
+  state: CharacterState,
+): Promise<boolean> {
+  return runOfflineCharacterSave(runWithStatementTimeout, characterId, level, state);
+}
+
+// Persist a character row AND this realm's World Market + Ravenpost mail
+// state in ONE transaction. They live in different tables (characters /
+// world_state), but a Market listing and a mail attachment are both escrows:
+// the item leaves the character's bags (character state) and becomes a
+// listing / a letter parcel (world state) in the same Sim action. Saving them
+// as independent writes lets an unclean crash persist one half and not the
+// other, vaporising the item or duplicating it across bags and book. The
+// leave path uses this so a logout flush of bags can never tear away from
+// either escrow.
+//
+// mailPartitions carries only the recipient mailboxes dirtied since the last
+// mail save (Sim.takeDirtyMailPartitions, #3561), not the whole realm book:
+// the atomicity this function exists for only ever needed to protect the
+// one or two mailboxes THIS session's own action actually touched, the same
+// as the periodic autosave's incremental write. An empty array (no mail
+// mutation this session) issues no mail SQL at all.
 export async function saveCharacterAndMarketState(
   characterId: number,
   level: number,
   state: CharacterState,
   market: MarketSave,
-  mail: MailSave,
+  mailPartitions: readonly { recipientKey: string; letters: MailSave['mail'] }[],
   leaseNonce?: string,
-  // Guild bank books dirtied by this character's session (Guild Bank Phase 3):
-  // they are escrows exactly like the market/mail blobs (an item leaves the
-  // bags and becomes a book slot in one Sim action), so a leave flush that
-  // carries both MUST land them in this same fenced transaction. Optional and
-  // additive: omitted (or empty) writes exactly what this function always has.
+  // Optional guild-book escrow halves dirtied by this session.
   guildBanks?: readonly GuildBankSave[],
   // Out-parameter, same contract as saveCharacterAndGuildBankState's.
   results?: GuildBankWriteResult[],
+  storageEffects: readonly StorageAppliedEffect[] = [],
+  ledgerEffects?: BankLedgerSaveEffects,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  // Custody overlay bake, the saveMailState contract adjusted for partitioned
+  // mail: snapshot at entry before anything awaits, then delete only on the
+  // committed arm below when this transaction actually persisted mail
+  // partitions. The fence-refused false arm and every rollback keep the rows.
+  const bakedCustodyRefs = snapshotPendingCustodyRefs();
+  const ledger = prepareCharacterSaveEffects(
+    characterId,
+    storageEffects,
+    ledgerEffects,
+    guildBanks?.map((book) => book.guildId),
+  );
   // Gate the escrow flush on the boot backfill just like saveMarketState:
   // this writes the realm-market row, so it must not run before ensureSchema
   // has confirmed the marker and opened the gate. Checked before any pool work.
   assertMarketWriteGateOpen();
+  const guildReplay = prepareGuildBankReceiptReplay(guildBanks ?? [], ledger?.batches ?? []);
   const cleanState = sanitizeRemovedZone1Content(state).state;
   const client = await pool.connect();
+  const transaction = await beginSaveTx(client, 'character and market save', signal);
+  let ledgerWrite: BankLedgerBatchWriteResult | undefined;
   try {
-    await client.query('BEGIN');
-    // Same rationale as saveCharacterState: a logout / shutdown escrow flush should
-    // wait out a slow database rather than lose the character + market blobs, so
-    // raise this transaction to the heavy allowance; still bounded so shutdown
-    // cannot hang past the container stop grace. SET LOCAL reverts at COMMIT.
-    await client.query(`SET LOCAL statement_timeout = ${DB_HEAVY_STATEMENT_TIMEOUT_MS}`);
-    // Fence the bag half on the current lease holder+nonce when one is given (same
-    // in-statement fence as saveCharacterState). If a same-account takeover rotated
-    // the nonce out from under this displaced session, the character UPDATE matches
-    // no row: ROLL BACK before touching the market/mail rows and report false. The
-    // escrow halves must never land without the bag half, and a displaced session
-    // must not overwrite the realm's shared Market/Ravenpost escrow either.
-    const stmt = characterUpdateStatement(
+    await lockSaveEffectAccounts(transaction, storageEffects, ledger);
+    // Fence the bag half first; a miss rolls back before shared escrow writes.
+    const { result: charRes, before } = await runFencedCharacterSave(
+      transaction,
       characterId,
       level,
       JSON.stringify(cleanState),
-      leaseNonce,
+      liveSaveFence(leaseNonce, PROCESS_LEASE_HOLDER),
     );
-    const charRes = await client.query(stmt.text, stmt.values);
-    if (leaseNonce !== undefined && (charRes.rowCount ?? 0) === 0) {
-      await client.query('ROLLBACK');
+    if (!characterSaveLanded(leaseNonce, storageEffects, ledger, charRes.rowCount)) {
+      await transaction.rollback();
       return false;
     }
-    await client.query(
-      `INSERT INTO world_state (key, data, updated_at) VALUES ($1, $2, now())
-       ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
-      // Same realm-scoped key loadMarketState/saveMarketState use: the leave
-      // flush must land where the market is read back, or the escrowed listing
-      // is written to a key nothing loads and the item is stranded on next boot.
-      [marketStateKey(REALM), JSON.stringify(market)],
-    );
-    await client.query(
-      `INSERT INTO world_state (key, data, updated_at) VALUES ($1, $2, now())
-       ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
-      [mailStateKey(REALM), JSON.stringify(mail)],
-    );
+    await journalCharacterSaveSources(transaction, characterId, before, charRes, cleanState);
+    // Every statement in this function goes through `transaction`, never the
+    // raw client: the wrapper owns the SET LOCAL statement/lock timeouts and
+    // the abort-driven pg_cancel_backend, so a raw client.query would run
+    // deadline-free inside a fenced save.
+    const inTx = (text: string, values: unknown[]) => transaction.query(text, values);
+    ledgerWrite = await writeBankLedgerSaveEffectsOnClient(transaction, ledger);
+    // Same realm-scoped key loadMarketState/saveMarketState use: the leave
+    // flush must land where the market is read back, or the escrowed listing
+    // is written to a key nothing loads and the item is stranded on next boot.
+    await upsertWorldStateRowIn(inTx, marketStateKey(REALM), market);
+    const wroteMailPartitions = mailPartitions.length > 0;
+    if (wroteMailPartitions) {
+      // Same writeMailPartitions shape as saveMailPartitions (the periodic
+      // autosave path), just inside this transaction instead of the pool, and
+      // gated the same way: a leave flush must not persist mail:<realm>:r:*
+      // rows before ensureSchema's mail partition backfill has run.
+      assertMailPartitionWriteGateOpen();
+      await writeMailPartitions(transaction, REALM, mailPartitions);
+    }
     // Guild bank books ride the SAME fenced transaction (Guild Bank Phase 3):
     // the character UPDATE above already passed the lease fence, so these can
     // never land for a displaced session, and a failure anywhere rolls back
     // the character, market, mail, and book halves together.
-    await writeGuildBankRows(client, guildBanks ?? [], results);
-    await client.query('COMMIT');
+    await writeClaimedGuildBankEffectsOnClient(transaction, guildReplay, ledgerWrite, results);
+    await writeStorageAppliedEffectsOnClient(transaction, storageEffects);
+    // The custody bake and the watermark advance ride the same fenced
+    // transaction as the mail partition write (see saveMailState), so they land
+    // after every other effect and immediately before COMMIT.
+    if (wroteMailPartitions) {
+      await deleteBakedCustodyRefsIn(inTx, bakedCustodyRefs);
+      await advanceCustodyWatermarkIn(inTx);
+    }
+    await transaction.commit();
+    if (wroteMailPartitions) confirmBakedCustodyRefs(bakedCustodyRefs);
     return true;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
+    await transaction.rollback();
+    throw characterSaveFailure(err, ledger, ledgerWrite);
   } finally {
-    client.release();
+    transaction.release();
   }
 }
 
@@ -3566,144 +3471,55 @@ export async function saveCharacterAndMarketState(
 export type { GuildBankSave, GuildBankWriteResult } from './guild_bank_state';
 export { GuildBankEscrowRefused } from './guild_bank_state';
 
-// Write every carried book inside the already-fenced transaction, then decide
-// the transaction's fate on the result. A refused book half ABORTS the whole
-// thing, character row included: the two halves commit together or not at all,
-// and "commit the character and record that the book could not follow" is a
-// receipt for a mint, not a mitigation. The caller retries; see
-// server/game.ts handleGuildBankEscrowRefusal for what happens when a retry
-// can never succeed.
-async function writeGuildBankRows(
-  client: { query: (text: string, values: unknown[]) => Promise<unknown> },
-  guildBanks: readonly GuildBankSave[],
-  results?: GuildBankWriteResult[],
-): Promise<void> {
-  const written: GuildBankWriteResult[] = [];
-  for (const gb of guildBanks) {
-    written.push(await writeGuildBankRow(client, gb));
-  }
-  results?.push(...written);
-  if (written.some((r) => !r.written)) {
-    await client.query('ROLLBACK', []);
-    throw new GuildBankEscrowRefused(written);
-  }
-}
-
-// The one guild_banks write, only ever issued on a client that is inside the
-// fenced escrow transaction (see the section comment above), and always a
-// READ-MODIFY-WRITE rather than a blind blob overwrite:
-//
-//   SELECT ... FOR UPDATE  ->  mergeGuildBankRow(durable, this session's own
-//   deltas)  ->  upsert
-//
-// The row lock is what makes the merge safe across PROCESSES (in-process, the
-// market serial writer already means no two book transactions overlap, but the
-// lease system exists precisely because more than one process can contend for
-// the same character, and a realm's book rows are reachable from any process
-// holding a lease). It is a primary-key lock, sub-millisecond and free in the
-// uncontended case. Reading OUTSIDE the transaction instead would be a
-// lost-update window: two saves could read the same base and the later write
-// would discard the earlier's deltas.
-//
-// The read is issued AFTER the fenced character UPDATE has already passed, so
-// a fence miss still rolls back before any book row is touched or locked.
-//
-// The same size bound the boot read applies (GUILD_BANK_ROW_MAX_BYTES) is
-// applied here in SQL: an oversized blob never crosses the wire and its row is
-// PRESERVED rather than overwritten, exactly like the boot skip.
-async function writeGuildBankRow(
-  client: { query: (text: string, values: unknown[]) => Promise<unknown> },
-  gb: GuildBankSave,
-): Promise<GuildBankWriteResult> {
-  // Keyed on (guild_id, realm), not guild_id alone. Guild ids are globally
-  // unique, so the realm predicate cannot change which row this finds today; it
-  // is the discipline every sibling statement in this file already carries, and
-  // it means a realm that somehow met another realm's row locks and merges
-  // nothing rather than silently rewriting it.
-  const lockedRead = async () =>
-    (await client.query(
-      `SELECT octet_length(data::text) AS data_bytes,
-              CASE WHEN octet_length(data::text) <= $2 THEN data ELSE NULL END AS data
-         FROM guild_banks
-        WHERE guild_id = $1 AND realm = $3
-          FOR UPDATE`,
-      [gb.guildId, GUILD_BANK_ROW_MAX_BYTES, REALM],
-    )) as { rows: { data_bytes?: unknown; data?: unknown }[] };
-  let read = await lockedRead();
-  if (!read.rows?.[0]) {
-    // FOR UPDATE locks ROWS, so a guild with no row yet locks nothing and two
-    // processes could both merge onto the empty base, the second upsert
-    // discarding the first's deltas. Seed the empty row first (idempotent,
-    // and a no-op for every save after the guild's first), then re-read it
-    // under the lock. Only ever runs once per guild in the whole realm's life.
-    await client.query(
-      `INSERT INTO guild_banks (guild_id, realm, data, updated_at) VALUES ($1, $2, $3, now())
-       ON CONFLICT (guild_id) DO NOTHING`,
-      [gb.guildId, REALM, JSON.stringify({ treasury: 0, inventory: [], purchasedSlots: 0 })],
-    );
-    read = await lockedRead();
-  }
-  const row = read.rows?.[0];
-  const oversized = row ? Number(row.data_bytes) > GUILD_BANK_ROW_MAX_BYTES : false;
-  const merged = mergeGuildBankRow(row ? (row.data ?? null) : null, gb.deltas, { oversized });
-  if (merged.data === null) return { guildId: gb.guildId, ...merged.result };
-  await client.query(
-    `INSERT INTO guild_banks (guild_id, realm, data, updated_at) VALUES ($1, $2, $3, now())
-     ON CONFLICT (guild_id) DO UPDATE SET realm = EXCLUDED.realm, data = EXCLUDED.data,
-       updated_at = now()`,
-    [gb.guildId, REALM, JSON.stringify(merged.data)],
-  );
-  return { guildId: gb.guildId, ...merged.result };
-}
-
-// The game-loop escrow save: the acting character's state AND the guild books
-// their session dirtied, in ONE transaction carrying the character-lease
-// fence. The sibling of saveCharacterAndMarketState for saves that carry no
-// market/mail half (the autosave path); a fence miss rolls back everything and
-// returns false, exactly like the market sibling, so a displaced session can
-// never persist either half. No market gate assertion: this writes no
-// world_state row, and books only exist in the sim after the boot load (or the
-// guild_create seed), both of which run after ensureSchema.
+// Game-loop sibling of the market save: character + dirty guild books share a
+// fenced transaction. It needs no market gate because it writes no world_state.
 export async function saveCharacterAndGuildBankState(
   characterId: number,
   level: number,
   state: CharacterState,
   guildBanks: readonly GuildBankSave[],
   leaseNonce?: string,
-  // Out-parameter: what each book write did. A refused one aborts the whole
-  // transaction and throws GuildBankEscrowRefused (which carries these too),
-  // so on the COMMITTED path every entry reads written; the parameter exists
-  // for tests and for the defensive check at the call site. An out-parameter
-  // rather than a richer return type because the boolean return IS the fence
-  // signal and every call site (and every test double) reads it as one.
+  // A refused result aborts and throws; committed entries are all written.
   results?: GuildBankWriteResult[],
+  storageEffects: readonly StorageAppliedEffect[] = [],
+  ledgerEffects?: BankLedgerSaveEffects,
+  signal?: AbortSignal,
 ): Promise<boolean> {
+  const ledger = prepareCharacterSaveEffects(
+    characterId,
+    storageEffects,
+    ledgerEffects,
+    guildBanks.map((book) => book.guildId),
+  );
+  const guildReplay = prepareGuildBankReceiptReplay(guildBanks, ledger?.batches ?? []);
   const cleanState = sanitizeRemovedZone1Content(state).state;
   const client = await pool.connect();
+  const transaction = await beginSaveTx(client, 'character and guild bank save', signal);
+  let ledgerWrite: BankLedgerBatchWriteResult | undefined;
   try {
-    await client.query('BEGIN');
-    // Same rationale as saveCharacterAndMarketState: an escrow flush waits out
-    // a slow database on the heavy allowance. SET LOCAL reverts at COMMIT.
-    await client.query(`SET LOCAL statement_timeout = ${DB_HEAVY_STATEMENT_TIMEOUT_MS}`);
-    const stmt = characterUpdateStatement(
+    await lockSaveEffectAccounts(transaction, storageEffects, ledger);
+    const { result: charRes, before } = await runFencedCharacterSave(
+      transaction,
       characterId,
       level,
       JSON.stringify(cleanState),
-      leaseNonce,
+      liveSaveFence(leaseNonce, PROCESS_LEASE_HOLDER),
     );
-    const charRes = (await client.query(stmt.text, stmt.values)) as { rowCount: number | null };
-    if (leaseNonce !== undefined && (charRes.rowCount ?? 0) === 0) {
-      await client.query('ROLLBACK');
+    if (!characterSaveLanded(leaseNonce, storageEffects, ledger, charRes.rowCount)) {
+      await transaction.rollback();
       return false;
     }
-    await writeGuildBankRows(client, guildBanks, results);
-    await client.query('COMMIT');
+    await journalCharacterSaveSources(transaction, characterId, before, charRes, cleanState);
+    ledgerWrite = await writeBankLedgerSaveEffectsOnClient(transaction, ledger);
+    await writeClaimedGuildBankEffectsOnClient(transaction, guildReplay, ledgerWrite, results);
+    await writeStorageAppliedEffectsOnClient(transaction, storageEffects);
+    await transaction.commit();
     return true;
   } catch (err) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw err;
+    await transaction.rollback();
+    throw characterSaveFailure(err, ledger, ledgerWrite);
   } finally {
-    client.release();
+    transaction.release();
   }
 }
 
@@ -3716,8 +3532,6 @@ export async function saveCharacterAndGuildBankState(
 // leaving that guild's ops silently inert and the row untouched on disk
 // (items are never destroyed by a load path), rather than loading an empty
 // book that the next save would persist over the real row.
-export const GUILD_BANK_ROW_MAX_BYTES = 262_144;
-
 export interface GuildBankRow {
   guildId: number;
   // Parsed JSONB (pg hands objects, never strings), or null when the guild has
@@ -3745,6 +3559,35 @@ export interface GuildBankRow {
 // statement allowance like every other known-long boot read (a slow boot
 // must load the books, not fail into the all-banks-inert arm).
 export const GUILD_BANK_BOOT_BATCH = 500;
+
+/** Targeted load for a guild created after this process's boot snapshot (or
+ *  committed ambiguously on another process). Never synthesize an empty book
+ *  when the guild itself is absent: callers may only mirror a returned row. */
+export async function loadGuildBankRow(guildId: number): Promise<GuildBankRow | null> {
+  if (!Number.isSafeInteger(guildId) || guildId <= 0) {
+    throw new RangeError('guild bank guildId must be a positive safe integer');
+  }
+  const res = await pool.query(
+    `SELECT g.id AS guild_id,
+            (gb.guild_id IS NOT NULL) AS has_row,
+            b.data_bytes,
+            CASE WHEN b.data_bytes <= $2 THEN gb.data ELSE NULL END AS data
+       FROM guilds g
+       LEFT JOIN guild_banks gb ON gb.guild_id = g.id
+       LEFT JOIN LATERAL (SELECT COALESCE(octet_length(gb.data::text), 0) AS data_bytes) b
+         ON true
+      WHERE g.realm = $1 AND g.id = $3`,
+    [REALM, GUILD_BANK_ROW_MAX_BYTES, guildId],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return {
+    guildId: Number(row.guild_id),
+    data: row.data ?? null,
+    oversized: row.has_row === true && Number(row.data_bytes) > GUILD_BANK_ROW_MAX_BYTES,
+    dataBytes: Number(row.data_bytes) || 0,
+  };
+}
 
 export async function loadGuildBankRows(): Promise<GuildBankRow[]> {
   const out: GuildBankRow[] = [];
@@ -3776,6 +3619,42 @@ export async function loadGuildBankRows(): Promise<GuildBankRow[]> {
     }
     if (res.rows.length < GUILD_BANK_BOOT_BATCH) return out;
     lastId = Number(res.rows[res.rows.length - 1].guild_id);
+  }
+}
+
+// Reusable character-save arm for caller-owned transactions; a fence miss returns false.
+export async function saveCharacterStateOnClient(
+  client: PoolClient,
+  characterId: number,
+  level: number,
+  state: CharacterState,
+  leaseNonce?: string,
+  storageEffects: readonly StorageAppliedEffect[] = [],
+  ledgerEffects?: BankLedgerSaveEffects,
+  existingAccountLock?: import('./bank_ledger_save_effects_db').CharacterSaveAccountLockProof,
+): Promise<boolean> {
+  const ledger = prepareCharacterSaveEffects(characterId, storageEffects, ledgerEffects);
+  const cleanState = sanitizeRemovedZone1Content(state).state;
+  await lockSaveEffectAccounts(client, storageEffects, ledger, existingAccountLock);
+  // D145-excluded (occupancy invariant, race carried): the character write stays
+  // ONE statement (the journal below adds one only when a container moved).
+  const { result: res, before } = await runPreimageCharacterSave(
+    client,
+    characterId,
+    level,
+    JSON.stringify(cleanState),
+    liveSaveFence(leaseNonce, PROCESS_LEASE_HOLDER),
+  );
+  if (!characterSaveLanded(leaseNonce, storageEffects, ledger, res.rowCount)) return false;
+  let ledgerWrite: BankLedgerBatchWriteResult | undefined;
+  try {
+    await journalCharacterSaveSources(client, characterId, before, res, cleanState);
+    ledgerWrite = await writeBankLedgerSaveEffectsOnClient(client, ledger);
+    await writeStorageAppliedEffectsOnClient(client, storageEffects);
+    return true;
+  } catch (err) {
+    attachBankLedgerCommittedPrefixToError(err, ledger, ledgerWrite);
+    throw err;
   }
 }
 
@@ -4023,6 +3902,11 @@ export interface GuildLeaderRow {
   memberCount: number;
   totalLifetimeXp: number;
   topLevel: number;
+  // Guild pledge board recruiting status (docs/prd/guild-pledge-board.md),
+  // shown per row on the high-score board so aspirants know who is looking.
+  pledgesEnabled: boolean;
+  pledgeMinLevel: number;
+  pledgeNote: string;
 }
 
 export async function topGuilds(
@@ -4032,7 +3916,7 @@ export async function topGuilds(
   // Capped at LEADERBOARD_MAX (1000) like the player board, so a realm with many
   // guilds is fully ranked through the cached window.
   const cap = Math.max(1, Math.min(LEADERBOARD_MAX, limit));
-  const selectAgg = `g.name, g.realm,
+  const selectAgg = `g.name, g.realm, g.pledges_enabled, g.pledge_min_level, g.pledge_note,
                 COUNT(gm.character_id)                                AS member_count,
                 COALESCE(SUM(COALESCE((c.state->>'lifetimeXp')::bigint, 0)), 0) AS total_lifetime_xp,
                 COALESCE(MAX(COALESCE((c.state->>'level')::int, 0)), 0)         AS top_level`;
@@ -4072,6 +3956,9 @@ export async function topGuilds(
     memberCount: Number(r.member_count),
     totalLifetimeXp: Number(r.total_lifetime_xp),
     topLevel: Number(r.top_level),
+    pledgesEnabled: !!r.pledges_enabled,
+    pledgeMinLevel: Number(r.pledge_min_level) || 1,
+    pledgeNote: typeof r.pledge_note === 'string' ? r.pledge_note : '',
   }));
 }
 
@@ -4243,6 +4130,8 @@ export interface ClientPerfReportInsert {
   graphicsPreset: string;
   gfxTier: string;
   autoGovernor: boolean;
+  shaderWarmWorkerActive: boolean;
+  shaderWarmRefusal: string;
   targetFps: number;
   renderScale: number;
   effectiveRenderScale: number;
@@ -4268,6 +4157,11 @@ export interface ClientPerfReportInsert {
   osFamily: string;
   glVendor: string;
   glRendererBucket: string;
+  glBackend: string;
+  glRendererRaw: string;
+  glModel: string;
+  glLaptop: boolean | null;
+  gpuHpAdapter: string;
   zoneOrScenario: string;
   source: string;
   crowdBucket: string;
@@ -4288,19 +4182,20 @@ export async function insertClientPerfReport(row: ClientPerfReportInsert): Promi
        renderer_calls, renderer_triangles, renderer_textures, renderer_programs, context_lost_count,
        long_task_count, long_task_p95_ms, memory_used_mb, memory_limit_mb,
        dpr, viewport_bucket, device_memory, hardware_concurrency, mobile_touch,
-       browser_family, os_family, gl_vendor, gl_renderer_bucket, zone_or_scenario, source,
+       browser_family, os_family, gl_vendor, gl_renderer_bucket, gl_backend, zone_or_scenario, source,
        crowd_bucket, sim_entities, active_views, visible_views, worst_10s_frame_p95_ms,
-       suggestion_ids, raw_summary
+       suggestion_ids, raw_summary,
+       gl_renderer_raw, gl_model, gl_laptop, gpu_hp_adapter,
+       shader_warm_worker_active, shader_warm_refusal
      ) VALUES (
        $1, $2, $3, $4, $5, $6, $7,
        $8, $9, $10, $11, $12, $13,
        $14, $15, $16, $17,
        $18, $19, $20, $21, $22,
        $23, $24, $25, $26,
-       $27, $28, $29, $30, $31,
-       $32, $33, $34, $35, $36, $37,
-       $38, $39, $40, $41, $42,
-       $43, $44
+       $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38,
+       $39, $40, $41, $42, $43,
+       $44, $45, $46, $47, $48, $49, $50, $51
      )`,
     [
       row.schemaVersion,
@@ -4338,6 +4233,7 @@ export async function insertClientPerfReport(row: ClientPerfReportInsert): Promi
       row.osFamily,
       row.glVendor,
       row.glRendererBucket,
+      row.glBackend,
       row.zoneOrScenario,
       row.source,
       row.crowdBucket,
@@ -4347,6 +4243,12 @@ export async function insertClientPerfReport(row: ClientPerfReportInsert): Promi
       row.worst10sFrameP95Ms,
       row.suggestionIds,
       JSON.stringify(row.rawSummary),
+      row.glRendererRaw,
+      row.glModel,
+      row.glLaptop,
+      row.gpuHpAdapter,
+      row.shaderWarmWorkerActive,
+      row.shaderWarmRefusal,
     ],
   );
 }
@@ -4386,6 +4288,22 @@ export async function loadWorldState<T>(key: string): Promise<T | null> {
   return (res.rows[0]?.data as T) ?? null;
 }
 
+/** The one world_state upsert shape, shared by the single-statement
+ *  saveWorldState and the in-transaction blob writers
+ *  (saveCharacterAndMarketState, saveMailState): one copy so the
+ *  ON CONFLICT contract cannot drift between them. */
+async function upsertWorldStateRowIn(
+  query: (text: string, values: unknown[]) => Promise<unknown>,
+  key: string,
+  data: unknown,
+): Promise<void> {
+  await query(
+    `INSERT INTO world_state (key, data, updated_at) VALUES ($1, $2, now())
+     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
+    [key, JSON.stringify(data)],
+  );
+}
+
 export async function saveWorldState(key: string, data: unknown): Promise<void> {
   // The pre-scoping bare 'market' row is RETAINED as the rollback artifact for
   // the partitioned market backfill (server/market_backfill.ts) and is never
@@ -4401,11 +4319,7 @@ export async function saveWorldState(key: string, data: unknown): Promise<void> 
   if (key.startsWith(MARKET_KEY_PREFIX)) {
     assertMarketWriteGateOpen();
   }
-  await pool.query(
-    `INSERT INTO world_state (key, data, updated_at) VALUES ($1, $2, now())
-     ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
-    [key, JSON.stringify(data)],
-  );
+  await upsertWorldStateRowIn((text, values) => pool.query(text, values), key, data);
 }
 
 // Boot-ordering write gate for the World Market. Before ensureSchema's
@@ -4469,18 +4383,112 @@ export async function saveMarketState(save: MarketSave): Promise<void> {
   await saveWorldState(marketStateKey(REALM), save);
 }
 
-// The Ravenpost mail book: realm-scoped like the market, one JSONB blob per
-// realm under `mail:<realm>`. Born realm-scoped, so no legacy migration.
-export function mailStateKey(realm: string): string {
-  return `mail:${realm}`;
+// The Ravenpost mail book: realm-scoped like the market. Used to live as one
+// JSONB blob per realm under `mail:<realm>`; ensureSchema's partitioned
+// backfill (server/mail_partition_backfill.ts, #3561) now splits that into
+// one row per recipient (`mail:<realm>:r:<key>`) so the 30 s autosave persists
+// only the recipients that actually changed instead of re-serializing the
+// WHOLE book every cycle. The `mail:<realm>` key itself is RETAINED as the
+// rollback artifact and never written again after the backfill runs, mirroring
+// the market's legacy-blob retention.
+//
+// loadMailState is a pure READ: it serves the union of this realm's partition
+// rows, and only a pre-backfill database (no marker yet) falls back to the
+// retained legacy blob, exactly like loadMarketState.
+async function loadAllMailPartitions(realm: string): Promise<MailSave['mail']> {
+  // Half-open range on the key column selects every `mail:<realm>:r:*` row;
+  // ';' is the ASCII character immediately after ':', so this bounds the
+  // exact prefix UNDER BYTE ORDER ONLY. `>=`/`<` on `text` are themselves
+  // collation-sensitive (an earlier revision of this comment claimed the
+  // opposite): under a linguistic collation (glibc en_US.utf8, ICU), the
+  // default for a non-Alpine/non-C-locale Postgres, punctuation carries no
+  // primary weight, so 'mail:<realm>:r;' can sort BEFORE every real
+  // partition key and this range silently matches nothing. `COLLATE "C"`
+  // forces byte-order comparison regardless of the column's declared
+  // collation, on both sides, so this is correct everywhere; `ORDER BY` under
+  // the same collation keeps boot-to-boot mail order deterministic instead of
+  // plan-dependent (a seq scan and an index scan can otherwise disagree).
+  // Boot-time only, not a hot path, so the missing index for this collation
+  // is an accepted cost (see server/CLAUDE.md "SQL shape on hot paths").
+  const lo = `mail:${realm}:r:`;
+  const hi = `mail:${realm}:r;`;
+  const res = await pool.query(
+    `SELECT data FROM world_state
+      WHERE (key COLLATE "C") >= $1 AND (key COLLATE "C") < $2
+      ORDER BY key COLLATE "C"`,
+    [lo, hi],
+  );
+  const out: MailSave['mail'] = [];
+  for (const row of res.rows) {
+    const letters = (row.data as { mail?: MailSave['mail'] } | null)?.mail;
+    if (Array.isArray(letters)) out.push(...letters);
+  }
+  return out;
 }
 
 export async function loadMailState(): Promise<MailSave | null> {
+  const letters = await loadAllMailPartitions(REALM);
+  if (letters.length > 0) {
+    // nextMailId is deliberately NOT reconstructed from the partition rows:
+    // PostOffice.loadMail already derives it as
+    // max(this.nextMailId, save.nextMailId, every loaded letter's id + 1), so
+    // a neutral 1 here is exactly as safe as the market's per-realm nextListingId
+    // carry-forward, without needing a second synchronized counter row.
+    return { mail: letters, nextMailId: 1 };
+  }
+  // No partition rows. If the backfill has recorded its marker, this realm
+  // genuinely has an empty mailbook (never write or fall back): only a
+  // database that predates the backfill (no marker) still falls back to a
+  // back-compat READ of the retained legacy blob. On a normal boot this
+  // fallback is unreachable (ensureSchema always confirms the marker before
+  // game.loadMail runs); it is a defensive net for an out-of-band caller
+  // hitting a pre-backfill database.
+  const marker = await loadWorldState<unknown>(mailPartitionMarkerKey(REALM));
+  if (marker !== null) return null;
   return loadWorldState<MailSave>(mailStateKey(REALM));
 }
 
+// Test-only surface: many unrelated tests stub the whole `server/db` module
+// and reference this name, so it is retained for that, but no production path
+// calls it any more (see saveMailPartitions below). Post-backfill it writes
+// the legacy `mail:<realm>` key, which loadMailState never reads back once
+// the marker is set, so a caller here would be writing into the void; it
+// remains a correct, complete whole-book write for whatever still exercises it.
 export async function saveMailState(save: MailSave): Promise<void> {
-  await saveWorldState(mailStateKey(REALM), save);
+  // Custody overlay bake (mail_custody_overlay.ts): the snapshot runs before
+  // anything awaits, and no awaited gap separates the caller's
+  // serializeMail() from this entry, so every snapshotted parcel is inside
+  // `save` or durably collected out of it. The bake DELETE and the
+  // watermark advance ride the SAME transaction as the book upsert: the
+  // blob without a parcel and the row's removal must commit together, or a
+  // failed post-commit delete bracketing a collection could later replay a
+  // collected parcel. Every book write takes this one transactional path
+  // (no refs-empty shortcut) so the watermark keeps advancing on quiet
+  // realms too.
+  const bakedCustodyRefs = snapshotPendingCustodyRefs();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const inTx = (text: string, values: unknown[]) => client.query(text, values);
+    await upsertWorldStateRowIn(inTx, mailStateKey(REALM), save);
+    await deleteBakedCustodyRefsIn(inTx, bakedCustodyRefs);
+    await advanceCustodyWatermarkIn(inTx);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+  confirmBakedCustodyRefs(bakedCustodyRefs);
+}
+
+export async function saveMailPartitions(
+  partitions: readonly { recipientKey: string; letters: MailSave['mail'] }[],
+): Promise<void> {
+  if (partitions.length === 0) return;
+  assertMailPartitionWriteGateOpen();
+  await writeMailPartitionsInTransaction(pool, REALM, partitions);
 }
 
 // Shared Rift event history/scheduler, realm-scoped. Runtime group instances are
@@ -4532,112 +4540,18 @@ export async function closeOrphanSessions(): Promise<number> {
   return closeOrphanPlayerSessions(pool, REALM);
 }
 
-// ---------------------------------------------------------------------------
-// Character load leases: the cross-process double-load dupe guard. At most one
-// process may hold a character in-world at a time. A row in character_leases IS
-// the lease; it self-releases via expiry after a crash, so no client checkout
-// or advisory lock is pinned for the session's whole length (that would starve
-// the pool this shares with HTTP). heartbeats ride the 30s autosave loop.
-// ---------------------------------------------------------------------------
-
-// Lease lifetime with no heartbeat before an expired lease is reclaimable. Set
-// to three missed 30s autosave heartbeats so a brief GC pause or an autosave
-// that runs long never lets a peer steal a live character; only a genuine crash
-// (or a clean shutdown that deletes the lease) frees it early.
-export const LEASE_TTL_SECONDS = 90;
-
-// One value per process boot: realm name plus a per-boot UUID. Realm alone must
-// NOT identify the holder, because two processes accidentally started on the
-// SAME realm name is exactly the double-load accident this table guards; if they
-// shared a holder the second would treat the first's lease as its own and load
-// the character anyway. The UUID keeps every boot distinct.
-export const PROCESS_LEASE_HOLDER = `${REALM}#${randomUUID()}`;
-
-// Claim (or renew) the lease for one character. Returns true when this process
-// now holds it, false when a live lease belongs to a foreign holder AND a foreign
-// account (fail closed: the caller must refuse the join). The ON CONFLICT UPDATE
-// fires when the existing lease has expired (crash reclaim) OR is already ours (a
-// linkdead resume on the same process re-extends its own lease instead of refusing
-// itself) OR belongs to the same account (the owner reclaiming a lease stranded by
-// a dead or wedged process before its TTL expires). A live lease that is none of
-// those matches no arm, so rowCount stays 0. Every acquire stamps a fresh nonce
-// (the caller passes a per-join value): a later releaseCharacterLease matches on
-// that nonce, so an older join's stale release cannot delete the row this acquire
-// re-stamped, and a same-account reclaim rotates the nonce out from under any
-// displaced session, whose fenced writes then fail. accountId is the authenticated
-// owner (getCharacter gated the caller before this runs).
-export async function acquireCharacterLease(
-  characterId: number,
-  accountId: number,
-  nonce: string,
-  holder = PROCESS_LEASE_HOLDER,
-): Promise<boolean> {
-  const res = await pool.query(
-    // The nonce rotation needs no extra code: this ONE atomic statement already
-    // re-stamps nonce = EXCLUDED.nonce, which IS the fence rotation. The account arm
-    // uses PLAIN EQUALITY (never IS NOT DISTINCT FROM): SQL NULL semantics make a
-    // NULL account_id row (a lease that predates this column) fail the account arm
-    // and every arm except expiry, which is exactly the locked fail-closed behavior.
-    `INSERT INTO character_leases (character_id, realm, holder, nonce, account_id, acquired_at, heartbeat_at, expires_at)
-     VALUES ($1, $2, $3, $4, $5, now(), now(), now() + make_interval(secs => $6))
-     ON CONFLICT (character_id) DO UPDATE
-       SET realm = EXCLUDED.realm,
-           holder = EXCLUDED.holder,
-           nonce = EXCLUDED.nonce,
-           account_id = EXCLUDED.account_id,
-           acquired_at = now(),
-           heartbeat_at = now(),
-           expires_at = EXCLUDED.expires_at
-       WHERE character_leases.expires_at < now() OR character_leases.holder = EXCLUDED.holder OR character_leases.account_id = EXCLUDED.account_id`,
-    [characterId, REALM, holder, nonce, accountId, LEASE_TTL_SECONDS],
-  );
-  return (res.rowCount ?? 0) > 0;
-}
-
-// Drop the lease for one character on a clean leave. Guarded on holder so this
-// never deletes a lease that another process has already reclaimed (e.g. after
-// our own lease expired and a peer took over). When a nonce is given it is also
-// matched, the fence that makes a stale release a no-op: if a newer acquire has
-// re-stamped the row with a different nonce (a reconnect that raced this leave),
-// the DELETE finds nothing and the live session keeps its lease. The no-nonce
-// arm is for callers that created a session without one (direct game.join in
-// tests); it deletes on holder alone as before.
-export async function releaseCharacterLease(
-  characterId: number,
-  nonce?: string,
-  holder = PROCESS_LEASE_HOLDER,
-): Promise<void> {
-  if (nonce === undefined) {
-    await pool.query('DELETE FROM character_leases WHERE character_id = $1 AND holder = $2', [
-      characterId,
-      holder,
-    ]);
-    return;
-  }
-  await pool.query(
-    'DELETE FROM character_leases WHERE character_id = $1 AND holder = $2 AND nonce = $3',
-    [characterId, holder, nonce],
-  );
-}
-
-// Extend every lease this process holds in one statement, called from the
-// autosave loop. A lease already reclaimed by another holder is not matched, so
-// this can never steal one back.
-export async function heartbeatCharacterLeases(holder = PROCESS_LEASE_HOLDER): Promise<void> {
-  await pool.query(
-    `UPDATE character_leases
-        SET heartbeat_at = now(),
-            expires_at = now() + make_interval(secs => $2)
-      WHERE holder = $1`,
-    [holder, LEASE_TTL_SECONDS],
-  );
-}
-
-// Shutdown sweep: drop every lease this process holds so a clean restart never
-// waits out the TTL before its characters can reload.
-export async function releaseAllCharacterLeases(holder = PROCESS_LEASE_HOLDER): Promise<void> {
-  await pool.query('DELETE FROM character_leases WHERE holder = $1', [holder]);
-}
+// Character load leases: moved whole to server/character_lease_db.ts (the
+// monolith ratchet); the character_leases DDL stays here in the core SCHEMA.
+// PROCESS_LEASE_HOLDER is imported at the top since the save-family fence
+// sites below (liveSaveFence) reach it directly.
+export {
+  acquireCharacterLease,
+  heartbeatCharacterLeases,
+  LEASE_TTL_SECONDS,
+  releaseAllCharacterLeases,
+  releaseCharacterLease,
+} from './character_lease_db';
+export { PROCESS_LEASE_HOLDER };
 
 // ---------------------------------------------------------------------------
 // Chat logs: one row per sent say/party message, written in batches by the
@@ -4721,13 +4635,36 @@ export interface BankLedgerRow {
     // move at all, which is the mint signature the counterparty columns exist
     // to make visible: without this row the op writes nothing and the audit
     // sees a clean, self-consistent book.
-    | 'counterparty_orphan';
+    | 'counterparty_orphan'
+    // Materials Vault stock consumed IN PLACE by a completed craft or enchant
+    // (Bank Storage Phase 04, server/bank_ledger.ts
+    // buildVaultCraftConsumeLedgerRows via the bank_ledger_session.ts
+    // reservation journal).
+    // Vault-only: it replays as a removal like a withdraw, but the materials
+    // went into the craft, never through the bags, so it is a distinct op on
+    // purpose (a dupe investigation must tell the two apart). Like the
+    // container union below, widening this vocabulary needed no DDL change.
+    | 'craft_consume'
+    // Bank bag sockets (Bank Storage phase 07), personal-only. unlock_socket
+    // is the copper-only purchase of the next socket rung (the buy_slots
+    // shape); socket_bag / unsocket_bag are single-bag item moves into and out
+    // of the bank's socket store, which the slot replay cannot see (a socketed
+    // bag exists only as its socketBags id). scripts/bank_audit.mjs replays
+    // the socket store from these rows; a swap writes one of each. Widening
+    // this vocabulary needed no DDL change, like craft_consume above.
+    | 'unlock_socket'
+    | 'socket_bag'
+    | 'unsocket_bag';
   itemId: string | null;
   count: number | null;
   instance: unknown;
   copperDelta: number;
   purchasedSlotsAfter: number;
-  container: 'personal' | 'guild';
+  // 'vault' is the Materials Vault (Bank Storage Phase 2): a per-character
+  // container like 'personal', so it carries no container_id. The column is a
+  // plain TEXT with no CHECK constraint, so this union is the only place the
+  // vocabulary is fixed; widening it needed no DDL change.
+  container: 'personal' | 'guild' | 'vault';
   containerId: number | null;
   /** Signed copper the ACTING CHARACTER'S PURSE gained under this op (negative
    *  means it paid). Omitted / null means NOT RECORDED, which is what every
@@ -4739,125 +4676,69 @@ export interface BankLedgerRow {
   counterpartyCount?: number | null;
 }
 
-// ---------------------------------------------------------------------------
-// The guild bank ACTIVITY LOG read: the newest window of one guild's
-// bank_ledger rows, for the in-game officer-visible history
-// (server/guild_bank_log.ts owns the projection, the gate, and the cache; this
-// is only the statement).
-//
-// PRIVACY IS THE COLUMN LIST. This is the one read whose result reaches
-// players, so it selects the narrowest set that can render a sentence:
-// bank_ledger.account_id, realm, and the instance payload are NOT selected at
-// all, and character_id is resolved to a display name here rather than shipped.
-// Nothing account-scoped can leak through a projection bug downstream, because
-// nothing account-scoped is in the row.
-//
-// The predicate rides bank_ledger_container_recent (container, container_id,
-// id DESC), added through the CONCURRENTLY seam with this reader: see
-// server/bank_ledger_indexes.ts for why the third column carries its weight.
-// `id DESC` (not created_at) is the paging order: BIGSERIAL cannot tie, and it
-// is exactly the index's trailing column, so this is a bounded backwards index
-// scan whose cost is the LIMIT rather than the guild's lifetime row count.
-//
-// The op filter is applied HERE rather than in JS so a suppressed row never
-// crosses the wire into this process at all, and so the LIMIT counts only rows
-// a player can actually see (filtering after the fact would silently return
-// fewer than the window it promised).
-export interface GuildBankLogDbRow {
-  id: number;
-  /** Epoch milliseconds (the column is TIMESTAMPTZ; pg hands back a Date). */
-  at: number;
-  /** The acting character's display name, or null when the character row is
-   *  gone. Never an id. */
-  characterName: string | null;
-  op: string;
-  itemId: string | null;
-  count: number | null;
-  copperDelta: number;
-}
-
-/**
- * The per-statement bound for the activity log read, deliberately far BELOW the
- * pool default rather than above it.
- *
- * Intended cost is a bounded backward index scan of 50 rows, i.e. single-digit
- * milliseconds. The cost without its index is a sequential scan of a
- * keep-forever table, and at the 15s pool default roughly ten of those in
- * flight would exhaust DB_POOL_MAX_CLIENTS and make every login and autosave on
- * the realm fail its checkout. That window is reachable now that the
- * CONCURRENTLY builds run after listen (runConcurrentIndexMigrations), and it
- * is also what a dropped index or an unhealed INVALID carcass looks like. Two
- * seconds is ~3 orders of magnitude of headroom over the intended cost and
- * still fails this ONE read instead of the realm: the caller answers the
- * player a refusal, which the pane renders.
- */
-export const GUILD_BANK_LOG_TIMEOUT_MS = 2_000;
-
-export async function loadGuildBankLogRows(
-  guildId: number,
-  limit: number,
-  visibleOps: readonly string[],
-): Promise<GuildBankLogDbRow[]> {
-  const res = await runWithStatementTimeout(GUILD_BANK_LOG_TIMEOUT_MS, (query) =>
-    query(
-      `SELECT bl.id,
-            bl.created_at,
-            bl.op,
-            bl.item_id,
-            bl.count,
-            bl.copper_delta,
-            c.name AS character_name
-       FROM bank_ledger bl
-       LEFT JOIN characters c ON c.id = bl.character_id
-      WHERE bl.container = 'guild'
-        AND bl.container_id = $1
-        -- Realm discipline, matching every sibling statement. A guild lives on
-        -- exactly one realm and guild ids are globally unique, so this cannot
-        -- change which rows match today and cannot make the LIMIT scan wider;
-        -- it is here so a cross-realm row could never be projected into a
-        -- guild's history if that ever stopped being true.
-        AND bl.realm = $4
-        AND bl.op = ANY($2::text[])
-      ORDER BY bl.id DESC
-      LIMIT $3`,
-      [guildId, visibleOps, limit, REALM],
-    ),
-  );
-  return res.rows.map((r) => ({
-    id: Number(r.id),
-    at: r.created_at instanceof Date ? r.created_at.getTime() : Number(new Date(r.created_at)),
-    characterName: typeof r.character_name === 'string' ? r.character_name : null,
-    op: String(r.op),
-    itemId: r.item_id === null || r.item_id === undefined ? null : String(r.item_id),
-    count: r.count === null || r.count === undefined ? null : Number(r.count),
-    // BIGINT arrives as a string from pg; Number() is safe here because every
-    // legitimate copper magnitude is far inside the safe-integer range (the
-    // treasury cap alone is 1e9).
-    copperDelta: Number(r.copper_delta) || 0,
-  }));
+/** The multi-row sibling of insertBankLedgerRow (the insertChatLogs UNNEST
+ *  idiom): ONE statement for the whole batch, so a vault deposit-all's N
+ *  material rows cost one round trip and land atomically (all rows or none,
+ *  which is what the audit's replay wants from one logical op). Row order
+ *  within the batch is preserved: unnest emits elements in array order and
+ *  the id sequence assigns in insert order. */
+export async function insertBankLedgerRows(rows: readonly BankLedgerRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  try {
+    await pool.query(
+      `INSERT INTO bank_ledger
+       (realm, character_id, account_id, op, item_id, count, instance,
+        copper_delta, purchased_slots_after, container, container_id,
+        counterparty_copper_delta, counterparty_count)
+       SELECT * FROM unnest(
+         $1::text[], $2::int[], $3::int[], $4::text[], $5::text[], $6::int[], $7::jsonb[],
+         $8::bigint[], $9::int[], $10::text[], $11::bigint[], $12::bigint[], $13::int[])`,
+      [
+        rows.map((r) => r.realm),
+        rows.map((r) => r.characterId),
+        rows.map((r) => r.accountId),
+        rows.map((r) => r.op),
+        rows.map((r) => r.itemId),
+        rows.map((r) => r.count),
+        rows.map((r) => (r.instance == null ? null : JSON.stringify(r.instance))),
+        rows.map((r) => r.copperDelta),
+        rows.map((r) => r.purchasedSlotsAfter),
+        rows.map((r) => r.container),
+        rows.map((r) => r.containerId),
+        rows.map((r) => r.counterpartyCopperDelta ?? null),
+        rows.map((r) => r.counterpartyCount ?? null),
+      ],
+    );
+  } catch (error) {
+    throw bankLedgerGrowthLimitFromError(error) ?? error;
+  }
 }
 
 export async function insertBankLedgerRow(row: BankLedgerRow): Promise<void> {
-  await pool.query(
-    `INSERT INTO bank_ledger
+  try {
+    await pool.query(
+      `INSERT INTO bank_ledger
        (realm, character_id, account_id, op, item_id, count, instance,
         copper_delta, purchased_slots_after, container, container_id,
         counterparty_copper_delta, counterparty_count)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-    [
-      row.realm,
-      row.characterId,
-      row.accountId,
-      row.op,
-      row.itemId,
-      row.count,
-      row.instance == null ? null : JSON.stringify(row.instance),
-      row.copperDelta,
-      row.purchasedSlotsAfter,
-      row.container,
-      row.containerId,
-      row.counterpartyCopperDelta ?? null,
-      row.counterpartyCount ?? null,
-    ],
-  );
+      [
+        row.realm,
+        row.characterId,
+        row.accountId,
+        row.op,
+        row.itemId,
+        row.count,
+        row.instance == null ? null : JSON.stringify(row.instance),
+        row.copperDelta,
+        row.purchasedSlotsAfter,
+        row.container,
+        row.containerId,
+        row.counterpartyCopperDelta ?? null,
+        row.counterpartyCount ?? null,
+      ],
+    );
+  } catch (error) {
+    throw bankLedgerGrowthLimitFromError(error) ?? error;
+  }
 }

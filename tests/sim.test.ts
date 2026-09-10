@@ -20,6 +20,7 @@ import {
   xpForLevel,
 } from '../src/sim/types';
 import { terrainHeight, WATER_LEVEL } from '../src/sim/world';
+import { completeCorpseHarvest } from './helpers/complete_corpse_harvest';
 import {
   COMBAT_TEST_WORLD,
   despawnMobs,
@@ -60,19 +61,21 @@ describe('classic formulas', () => {
     expect(mobXpValue(2, 8)).toBe(0);
   });
 
-  it('spell resist rises with the level gap but is capped (~25% max)', () => {
+  it('spell resist rises with the level gap but is capped (~18% max)', () => {
+    // The Crucible hit rebalance lowered the above-level ramp to [0, 2.5, 8, 14]
+    // so the heroic-raid caps sit within the tier's elective hit budget.
     expect(spellHitChance(5, 5)).toBeCloseTo(0.96); // equal level -> 4% resist
     expect(spellHitChance(4, 5)).toBeCloseTo(0.935); // +1 -> 6.5% resist (preserved)
-    expect(spellHitChance(3, 5)).toBeCloseTo(0.82); // +2 -> ~18% resist
-    expect(spellHitChance(3, 7)).toBeCloseTo(0.75); // +4 -> capped ~25% resist
+    expect(spellHitChance(3, 5)).toBeCloseTo(0.88); // +2 -> 12% resist
+    expect(spellHitChance(3, 7)).toBeCloseTo(0.82); // +4 -> capped 18% resist
   });
 
-  it('melee/ranged miss rises with the level gap but is capped (~26% max)', () => {
+  it('melee/ranged miss rises with the level gap but is capped (~19% max)', () => {
     expect(meleeMissChance(5, 5)).toBeCloseTo(0.05); // equal level -> 5% base
     expect(meleeMissChance(4, 5)).toBeCloseTo(0.075); // +1 -> 7.5% miss (preserved)
-    expect(meleeMissChance(3, 5)).toBeCloseTo(0.19); // +2 (L3 vs L5) -> ~19%
-    expect(meleeMissChance(3, 7)).toBeCloseTo(0.26); // +4 -> capped ~26%
-    expect(meleeMissChance(3, 9)).toBeCloseTo(0.26); // +6 -> still capped ~26%
+    expect(meleeMissChance(3, 5)).toBeCloseTo(0.13); // +2 (L3 vs L5) -> 13%
+    expect(meleeMissChance(3, 7)).toBeCloseTo(0.19); // +4 -> capped 19%
+    expect(meleeMissChance(3, 9)).toBeCloseTo(0.19); // +6 -> still capped 19%
     // hunter Auto Shot + wands resolve through meleeMissChance too, so this covers them
   });
 
@@ -443,6 +446,9 @@ describe('combat', () => {
       respawnSeconds: 2,
       world: COMBAT_TEST_WORLD,
     });
+    // The real corpse-harvest cast (Intentional Gathering, PR3) requires a
+    // carried Field Kit at admission; grant it up front.
+    sim.addItem('field_kit', 1);
     const wolf = nearestMob(sim, 'forest_wolf');
     const spawn = { ...wolf.spawnPos };
     wolf.hp = 1;
@@ -452,10 +458,23 @@ describe('combat', () => {
     facePlayerAt(sim, wolf);
     for (let i = 0; i < 20 * 30 && !wolf.dead; i++) sim.tick();
     expect(wolf.dead).toBe(true);
+
+    // The killing blow just reset the player's own combatTimer to 0, and
+    // corpseHarvestStillValid refuses admission while inCombat; run real
+    // ticks (no other hostile nearby) until it clears, keeping the actor
+    // grounded and coherently at rest beside the corpse throughout.
+    for (let i = 0; i < 20 * 6 && sim.player.inCombat; i++) sim.tick();
+    expect(sim.player.inCombat).toBe(false);
+
     // Consume BOTH halves (harvest then loot); a tagged corpse with
-    // an unclaimed harvest would otherwise hold its 30s grace window and defer
-    // the respawn past this loop.
-    sim.harvestCorpse(wolf.id);
+    // an unclaimed harvest would otherwise hold its lootable window and defer
+    // the respawn past this loop. The harvest is a real 1.5s cast: start it
+    // and tick the real sim to completion before asserting the claim landed.
+    const harvest = completeCorpseHarvest(sim, wolf.id, sim.playerId);
+    expect(harvest.started).toBe(true);
+    expect(harvest.events.some((e) => e.type === 'harvestResult')).toBe(true);
+    expect(wolf.harvestClaimedBy).not.toBeNull();
+
     sim.lootCorpse(wolf.id);
     for (let i = 0; i < 20 * 10 && wolf.dead; i++) sim.tick();
     expect(wolf.dead).toBe(false);

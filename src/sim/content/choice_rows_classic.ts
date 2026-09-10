@@ -1,3 +1,4 @@
+import { EXTENDED_DAWN_ASCENSION_CHARGE_BONUS } from '../paladin_devotion';
 import type { ClassChoiceRows } from './talent_rows';
 
 const rogueBuilderAbilityIds = [
@@ -61,14 +62,14 @@ export const MAGE_CHOICE_ROWS: ClassChoiceRows = {
         {
           id: 'mag_r5_double_blink',
           name: 'Double Blink',
-          description: 'Flickerstep stores 2 charges, but each recharges 30% more slowly.',
+          description: 'Flitstep stores 2 charges, but each recharges 30% more slowly.',
           icon: 'double_blink',
           effect: { ability: [{ ability: 'blink', bonusCharges: 1, cooldownPct: 0.3 }] },
         },
         {
           id: 'mag_r5_blink_cast',
           name: 'Blink While Casting',
-          description: 'You can use Flickerstep in the middle of a cast without interrupting it.',
+          description: 'You can use Flitstep in the middle of a cast without interrupting it.',
           icon: 'blink_while_casting',
           effect: { global: { blinkCast: 1 } },
         },
@@ -199,7 +200,7 @@ export const MAGE_CHOICE_ROWS: ClassChoiceRows = {
           id: 'mag_r17_cold_snap',
           name: "Winter's Recall",
           description:
-            "Grants Winter's Recall: instantly finishes the cooldown of Flickerstep, Frostveil and Greater Invisibility.",
+            "Grants Winter's Recall: instantly finishes the cooldown of Flitstep, Frostveil and Greater Invisibility.",
           icon: 'cold_snap',
           effect: { grant: { ability: 'cold_snap' } },
         },
@@ -389,20 +390,20 @@ export const PALADIN_CHOICE_ROWS: ClassChoiceRows = {
     {
       level: 17,
       theme: 'dawn',
-      decision: 'more Ascension charges vs longer Avenging Wrath vs crit and haste during it',
+      decision: 'more Ascension charges vs longer Zealwing vs crit and haste during it',
       options: [
         {
           id: 'pal_r17_extended_dawn',
           name: 'Extended Dawn',
           description: 'Divine Ascension empowers 2 additional abilities.',
           icon: 'pal_r17_extended_dawn',
-          effect: { global: { ascensionChargeBonus: 2 } },
+          effect: { global: { ascensionChargeBonus: EXTENDED_DAWN_ASCENSION_CHARGE_BONUS } },
         },
         {
           id: 'pal_r17_radiant_wrath',
           name: 'Radiant Wrath',
           description:
-            'Avenging Wrath lasts 5 sec longer (20 sec total) and its cooldown is reduced to 100 sec.',
+            'Zealwing lasts 5 sec longer (20 sec total) and its cooldown is reduced to 100 sec.',
           icon: 'pal_r17_radiant_wrath',
           effect: {
             ability: [{ ability: 'avenging_wrath', cooldownFlat: -20, durationFlat: 5 }],
@@ -411,7 +412,7 @@ export const PALADIN_CHOICE_ROWS: ClassChoiceRows = {
         {
           id: 'pal_r17_sanctified_fervor',
           name: 'Sanctified Fervor',
-          description: 'Avenging Wrath also grants 15% critical strike chance and 15% haste.',
+          description: 'Zealwing also grants 15% critical strike chance and 15% haste.',
           icon: 'pal_r17_sanctified_fervor',
           effect: {
             ability: [
@@ -1042,7 +1043,7 @@ export const ROGUE_CHOICE_ROWS: ClassChoiceRows = {
         {
           id: 'rog_r20_kill_chain',
           name: 'Kill Chain',
-          description: 'Killing blows refresh Smokestep and grant 5 combo points.',
+          description: 'Killing blows refresh Smokefade and grant 5 combo points.',
           icon: 'vanish',
           effect: { global: { onKillCombo: 5, onKillVanishReset: 1 } },
         },
@@ -1468,7 +1469,7 @@ export const SHAMAN_CHOICE_ROWS: ClassChoiceRows = {
           id: 'sha_r17_earthbind',
           name: 'Primal Exaltation',
           description:
-            'For 12 sec, Thundercall Arc Bolt and Skybranch cast 50% faster, while Arc Bolt grants 2 Thunder; Warspirit triggers its cadence every 2 weapon hits; Spiritmend adds 50% more healing to Mending Current. 120 sec cooldown.',
+            'For 12 sec, Thundercall Arc Bolt and Skybranch cast 50% faster, while Arc Bolt grants 2 Thunder; Warspirit triggers its cadence every 2 weapon hits; Spiritcall adds 50% more healing to Mending Current. 120 sec cooldown.',
           icon: 'elemental_mastery',
           effect: { grant: { ability: 'primal_exaltation' } },
         },
@@ -1517,11 +1518,11 @@ export const SHAMAN_CHOICE_ROWS: ClassChoiceRows = {
           id: 'sha_r20_tidal_waves',
           name: 'Living Weapon',
           description:
-            "After Earthen Jolt or Faultwake consumes all Thunder, Pyrebrand makes the next Arc Bolt instant. Galeheart's final echo deals 50% damage to up to 2 enemies within 8 yards. A Stonebound spell that consumes Stormcast grants an absorb equal to 8% of your maximum health. With Lifespring active, Tidecall also adds 50% of its full heal to the most injured ally within 10 yards.",
+            "After Earthen Jolt or Faultwake consumes all Thunder, Pyrebrand makes the next Arc Bolt instant. Galeheart's echoes each deal 40% damage to up to 2 enemies within 8 yards. A Stonebound spell that consumes Stormcast grants an absorb equal to 8% of your maximum health. With Lifespring active, Tidecall also adds 50% of its full heal to the most injured ally within 10 yards.",
           icon: 'rockbiter_weapon',
           effect: {
             runtime: {
-              cleavePercent: 50,
+              cleavePercent: 40,
               cleaveTargets: 2,
               absorbPercent: 8,
               allyDepositPercent: 50,
@@ -1574,9 +1575,9 @@ export const WARLOCK_CHOICE_ROWS: ClassChoiceRows = {
       options: [
         {
           id: 'wlk_r8_voidfeast',
-          name: 'Abyssal Gag',
+          name: 'Improved Abyssal Gag',
           description:
-            'Grants Abyssal Gag early. It interrupts the enemy and silences all of its spells for 4 sec.',
+            'Improves Abyssal Gag and grants it two levels early. It interrupts the enemy and silences all of its spells for 4 sec.',
           icon: 'wlk_r8_voidfeast',
           effect: {
             grant: { ability: 'spell_lock' },
@@ -1592,7 +1593,7 @@ export const WARLOCK_CHOICE_ROWS: ClassChoiceRows = {
           id: 'wlk_r8_howl_of_terror',
           name: 'Dread Chorus',
           description:
-            'Grants Dread Chorus: frighten enemies within 8 yards for up to 3 sec. Damage may break the effect. 40 sec cooldown.',
+            "Grants Dread Chorus: frighten enemies within 8 yards for up to 5 sec. Damage totaling 8% of a target's maximum health breaks its fear. 40 sec cooldown.",
           icon: 'wlk_r8_howl_of_terror',
           effect: { grant: { ability: 'howl_of_terror' } },
         },
@@ -1600,14 +1601,14 @@ export const WARLOCK_CHOICE_ROWS: ClassChoiceRows = {
           id: 'wlk_r8_curse_of_exhaustion',
           name: 'Leaden Hex',
           description:
-            'Damaging spells apply a 5% slow for 5 sec, stacking 3 times. At 3 stacks, the next spell roots for 1.5 sec and consumes them. A target can be rooted once every 15 sec.',
+            'Damaging spells apply a 5% slow for 5 sec, stacking 3 times. At 3 stacks, the next spell roots for 3.5 sec and consumes them. A target can be rooted once every 15 sec.',
           icon: 'wlk_r8_curse_of_exhaustion',
           effect: {
             global: { warlockLeadenHex: 0.05 },
             tuning: {
               maxStacks: 3,
               slowDuration: 5,
-              rootDuration: 1.5,
+              rootDuration: 3.5,
               rootLockDuration: 15,
             },
           },

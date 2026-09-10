@@ -2,14 +2,15 @@
 // refuses salvage, profession-craft reagent consumption, and vendor sell
 // (single and bulk) until the player unlocks it again.
 //
-// Covers the pure core (isItemLocked, setItemLocked's in-place mutate vs.
-// stack-split, countUnlockedItem/InSlots), the three protected-action
-// boundaries end to end through a real Sim, and the save/load round trip.
+// Covers the pure core (isItemLocked, setItemLocked's in-place whole-stack
+// mutate, countUnlockedItem/InSlots), the three protected-action boundaries
+// end to end through a real Sim, and the save/load round trip.
 
 import { describe, expect, it } from 'vitest';
 import { BACKPACK_SLOTS } from '../src/sim/bags';
 import { recipeById } from '../src/sim/content/recipes';
 import {
+  countRawInSlots,
   countUnlockedInSlots,
   countUnlockedItem,
   isItemLocked,
@@ -111,6 +112,39 @@ describe('countUnlockedItem / countUnlockedInSlots / removeUnlockedFromSlots', (
     );
     expect(countUnlockedItem(meta, 'bone_fragments')).toBe(4);
   });
+
+  // The raw twin (Phase 14): the shared walk Sim.countItem runs and the five
+  // former src/ui copies consume. Locked copies COUNT here; the raw-vs-unlocked
+  // difference is exactly what splits a locked-copy shortfall from a plain
+  // shortage in the deny sites.
+  it('countRawInSlots counts every stack, locked included, and 0 for an absent id', () => {
+    const inv: InvSlot[] = [
+      { itemId: 'bone_fragments', count: 5, instance: { locked: true } },
+      { itemId: 'bone_fragments', count: 3 },
+      { itemId: 'wolf_fang', count: 7 },
+    ];
+    expect(countRawInSlots(inv, 'bone_fragments')).toBe(8);
+    expect(countRawInSlots(inv, 'wolf_fang')).toBe(7);
+    expect(countRawInSlots(inv, 'no_such_item')).toBe(0);
+    // The deny-split property on ONE fixture: raw exceeds unlocked exactly by
+    // the locked units, so a raw >= 1 with unlocked < 1 reads as 'locked'.
+    expect(countRawInSlots(inv, 'bone_fragments')).toBe(
+      countUnlockedInSlots(inv, 'bone_fragments') + 5,
+    );
+  });
+
+  it('countRawInSlots matches Sim.countItem over the live inventory (the shared-walk pin)', () => {
+    const sim = makeSim();
+    const pid = sim.playerId;
+    const meta = sim.players.get(pid)!;
+    meta.inventory.length = 0;
+    meta.inventory.push(
+      { itemId: 'bone_fragments', count: 2, instance: { locked: true } },
+      { itemId: 'bone_fragments', count: 4 },
+    );
+    expect(sim.countItem('bone_fragments', pid)).toBe(6);
+    expect(countRawInSlots(meta.inventory, 'bone_fragments')).toBe(6);
+  });
 });
 
 describe('setItemLocked: the toggle command', () => {
@@ -134,7 +168,7 @@ describe('setItemLocked: the toggle command', () => {
     expect(meta.inventory[0].instance).toBeUndefined();
   });
 
-  it('locking one unit out of a stack splits it into its own slot', () => {
+  it('locks the WHOLE stack in place, no split and no extra slot minted', () => {
     const sim = makeSim();
     const pid = sim.playerId;
     const meta = sim.players.get(pid)!;
@@ -143,37 +177,48 @@ describe('setItemLocked: the toggle command', () => {
 
     const result = setItemLocked(ctxOf(sim), 'bone_fragments', true, pid, 0);
     expect(result).toEqual({ ok: true, itemId: 'bone_fragments', locked: true });
+    // Still exactly one slot: every unit of the stack is now locked together,
+    // never a lone unit peeled off into a second slot.
     const stacks = meta.inventory.filter((s) => s.itemId === 'bone_fragments');
-    expect(stacks).toHaveLength(2);
-    const [unlockedStack] = stacks.filter((s) => !isItemLocked(s.instance));
-    const [lockedStack] = stacks.filter((s) => isItemLocked(s.instance));
-    expect(unlockedStack.count).toBe(4);
-    expect(lockedStack.count).toBe(1);
+    expect(stacks).toHaveLength(1);
+    expect(stacks[0].count).toBe(5);
+    expect(isItemLocked(stacks[0].instance)).toBe(true);
   });
 
-  it('refuses no_bag_space when a split needs a fresh slot and bags are full', () => {
+  it('unlocks the whole locked stack in place, count and slot count preserved', () => {
+    const sim = makeSim();
+    const pid = sim.playerId;
+    const meta = sim.players.get(pid)!;
+    meta.inventory.length = 0;
+    meta.inventory.push({ itemId: 'bone_fragments', count: 5, instance: { locked: true } });
+
+    const result = setItemLocked(ctxOf(sim), 'bone_fragments', false, pid, 0);
+    expect(result).toEqual({ ok: true, itemId: 'bone_fragments', locked: false });
+    expect(meta.inventory).toHaveLength(1);
+    expect(meta.inventory[0].count).toBe(5);
+    expect(meta.inventory[0].instance).toBeUndefined();
+  });
+
+  it('locks a full stack even with a completely full bag, since no fresh slot is needed', () => {
     const sim = makeSim();
     const pid = sim.playerId;
     const meta = sim.players.get(pid)!;
     meta.inventory.length = 0;
     meta.inventory.push({ itemId: 'bone_fragments', count: 5 });
-    // Fill every remaining slot with distinct plain stacks so no fresh slot
-    // is free for the split.
+    // Fill every remaining slot: locking in place needs no room, unlike the
+    // old stack-split behavior that refused here with no_bag_space.
     for (let i = 1; i < BACKPACK_SLOTS; i++) {
       meta.inventory.push({ itemId: `filler_${i}`, count: 1 });
     }
     expect(meta.inventory).toHaveLength(BACKPACK_SLOTS);
 
     const result = setItemLocked(ctxOf(sim), 'bone_fragments', true, pid, 0);
-    expect(result).toEqual({
-      ok: false,
-      itemId: 'bone_fragments',
-      locked: true,
-      reason: 'no_bag_space',
-    });
-    // Nothing changed: still one plain stack of 5, no split slot minted.
+    expect(result).toEqual({ ok: true, itemId: 'bone_fragments', locked: true });
+    expect(meta.inventory).toHaveLength(BACKPACK_SLOTS);
     const stacks = meta.inventory.filter((s) => s.itemId === 'bone_fragments');
-    expect(stacks).toEqual([{ itemId: 'bone_fragments', count: 5 }]);
+    expect(stacks).toHaveLength(1);
+    expect(stacks[0].count).toBe(5);
+    expect(isItemLocked(stacks[0].instance)).toBe(true);
   });
 
   it('refuses not_held for a missing, stale, or mismatched slot selection', () => {
@@ -232,6 +277,33 @@ describe('the lock, threaded through save/load', () => {
     const pid2 = sim2.addPlayer('warrior', 'Lockwright', { state: state ?? undefined });
     const loaded = inventoryOf(sim2, pid2).find((s) => s.itemId === COMMON_WEAPON);
     expect(loaded?.instance?.locked).toBe(true);
+  });
+
+  it('round-trips a locked counted stack without capping the count to one', () => {
+    const sim = makeSim();
+    const pid = sim.playerId;
+    const meta = sim.players.get(pid)!;
+    meta.inventory.length = 0;
+    meta.inventory.push({ itemId: 'bone_fragments', count: 5 });
+
+    expect(setItemLocked(ctxOf(sim), 'bone_fragments', true, pid, 0)).toEqual({
+      ok: true,
+      itemId: 'bone_fragments',
+      locked: true,
+    });
+    const state = sim.serializeCharacter(pid);
+    const saved = state?.inventory.find((s) => s.itemId === 'bone_fragments');
+    expect(saved).toEqual({ itemId: 'bone_fragments', count: 5, instance: { locked: true } });
+
+    const sim2 = new Sim({ seed: 11, playerClass: 'warrior', noPlayer: true });
+    const pid2 = sim2.addPlayer('warrior', 'Lockwright', { state: state ?? undefined });
+    const loaded = inventoryOf(sim2, pid2).find((s) => s.itemId === 'bone_fragments');
+    expect(loaded).toEqual({
+      itemId: 'bone_fragments',
+      count: 5,
+      instance: { locked: true },
+      materialSources: [{ source: {}, count: 5 }],
+    });
   });
 });
 

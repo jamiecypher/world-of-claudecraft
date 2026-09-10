@@ -16,23 +16,33 @@ function stripComments(code: string): string {
 }
 
 const HUD = stripComments(readFileSync(resolve(process.cwd(), 'src/ui/hud.ts'), 'utf8'));
+// The maps and their fallbacks live in their own module (hud.ts is the thin
+// consumer); the dispatch ARM still has to be in hud.ts, only the declaration
+// moved.
+const KEYS = stripComments(
+  readFileSync(resolve(process.cwd(), 'src/ui/result_code_keys.ts'), 'utf8'),
+);
 
 const FAMILIES: { arm: string; decl: RegExp }[] = [
   {
     arm: 'MAIL_RESULT_ERROR_KEYS[ev.code] ?? MAIL_RESULT_FALLBACK_KEY',
-    decl: /MAIL_RESULT_FALLBACK_KEY: TranslationKey = '([^']+)'/,
+    decl: /MAIL_RESULT_FALLBACK_KEY: TranslationKey =\s*'([^']+)'/,
   },
   {
     arm: 'CALENDAR_RESULT_KEYS[ev.code] ?? CALENDAR_RESULT_FALLBACK_KEY',
-    decl: /CALENDAR_RESULT_FALLBACK_KEY: TranslationKey = '([^']+)'/,
+    decl: /CALENDAR_RESULT_FALLBACK_KEY: TranslationKey =\s*'([^']+)'/,
   },
   {
     arm: 'MOTD_RESULT_KEYS[ev.code] ?? MOTD_RESULT_FALLBACK_KEY',
-    decl: /MOTD_RESULT_FALLBACK_KEY: TranslationKey = '([^']+)'/,
+    decl: /MOTD_RESULT_FALLBACK_KEY: TranslationKey =\s*'([^']+)'/,
+  },
+  {
+    arm: 'GUILD_ROSTER_RESULT_KEYS[ev.code] ?? GUILD_ROSTER_RESULT_FALLBACK_KEY',
+    decl: /GUILD_ROSTER_RESULT_FALLBACK_KEY: TranslationKey =\s*'([^']+)'/,
   },
   {
     arm: 'HONOR_REASON_KEYS[ev.reason] ?? HONOR_REASON_FALLBACK_KEY',
-    decl: /HONOR_REASON_FALLBACK_KEY: TranslationKey = '([^']+)'/,
+    decl: /HONOR_REASON_FALLBACK_KEY: TranslationKey =\s*'([^']+)'/,
   },
 ];
 
@@ -65,10 +75,13 @@ describe('the trade panel first-paint visibility (R34 review)', () => {
     // A throw on the FIRST paint used to leave a live trade with no panel at
     // all (no Accept, no Cancel): the visible-before-render ordering is the
     // fix, and only source order can pin it (the render is throw-free by
-    // construction today).
-    const guardAt = HUD.indexOf('if (sig === this.lastTradeSig) return;');
+    // construction today). The trade window lives in the woc_trade domain.
+    const controller = stripComments(
+      readFileSync(resolve(process.cwd(), 'src/ui/hud/woc_trade/woc_trade_controller.ts'), 'utf8'),
+    );
+    const guardAt = controller.indexOf('if (sig === this.lastTradeSig) return;');
     expect(guardAt).toBeGreaterThan(-1);
-    const window = HUD.slice(guardAt, guardAt + 600);
+    const window = controller.slice(guardAt, guardAt + 600);
     const displayAt = window.indexOf("el.style.display = 'block';");
     const tryAt = window.indexOf('try {');
     expect(displayAt).toBeGreaterThan(-1);
@@ -78,7 +91,7 @@ describe('the trade panel first-paint visibility (R34 review)', () => {
 });
 
 describe('the hud wire-enum fallback family', () => {
-  it('all four dispatch sites carry their ?? fallback arm', () => {
+  it('every dispatch site carries its ?? fallback arm', () => {
     for (const family of FAMILIES) {
       expect(HUD.includes(family.arm), family.arm).toBe(true);
     }
@@ -86,7 +99,7 @@ describe('the hud wire-enum fallback family', () => {
 
   it('every fallback key literal resolves to a real English string', () => {
     for (const family of FAMILIES) {
-      const match = HUD.match(family.decl);
+      const match = KEYS.match(family.decl);
       expect(match, String(family.decl)).toBeTruthy();
       const key = match?.[1] ?? '';
       const value = resolveDotted(key);

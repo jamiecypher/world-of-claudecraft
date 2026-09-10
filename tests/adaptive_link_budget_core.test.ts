@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ADAPTIVE_LINK_BUDGET_MAX_TRANSITIONS,
   type AdaptiveLinkBudgetClock,
   type AdaptiveLinkBudgetConfig,
   createAdaptiveLinkBudget,
+  type SettlementSample,
+  type SettlementVerdict,
 } from '../src/render/adaptive_link_budget_core';
 
 const CONFIG: AdaptiveLinkBudgetConfig = {
@@ -52,8 +55,97 @@ describe('adaptive link budget core', () => {
       state: 'ramp',
       windowLinks: 16,
       inFlightLinks: 12,
+      peakInFlightLinks: 12,
       estimatedLinksPerUnit: 12,
       submittedUnits: 1,
+    });
+  });
+
+  it('keeps a bounded transition trace and records the peak global in-flight links', () => {
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget(CONFIG, clock);
+    budget.markSubmitted('scene:0');
+    budget.markSyncEnd('scene:0', 12);
+    budget.markSubmitted('scene:1');
+    budget.markSyncEnd('scene:1', 8);
+    clock.advance(CONFIG.slowSettlementMs ?? 0);
+    budget.markSettled('scene:0');
+    budget.markReveal();
+
+    expect(budget.snapshot()).toMatchObject({
+      peakInFlightLinks: 24,
+      transitions: [
+        expect.objectContaining({ from: 'ramp', to: 'backoff', reason: 'slow-settlement' }),
+        expect.objectContaining({ from: 'backoff', to: 'revealed', reason: 'reveal' }),
+      ],
+    });
+    expect(budget.snapshot().transitions.length).toBeLessThanOrEqual(
+      ADAPTIVE_LINK_BUDGET_MAX_TRANSITIONS,
+    );
+  });
+
+  it('bounds transition history when the adaptive state oscillates', () => {
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget(CONFIG, clock);
+    let id = 0;
+    for (let cycle = 0; cycle < 20; cycle++) {
+      for (const duration of [1_500, 800, 2_500]) {
+        const unitId = `oscillating:${id++}`;
+        budget.markSubmitted(unitId);
+        budget.markSyncEnd(unitId, 8);
+        clock.advance(duration);
+        budget.markSettled(unitId);
+      }
+    }
+
+    expect(budget.snapshot().transitions).toHaveLength(ADAPTIVE_LINK_BUDGET_MAX_TRANSITIONS);
+    expect(ADAPTIVE_LINK_BUDGET_MAX_TRANSITIONS).toBe(32);
+  });
+
+  it('records the fast, mid, failed, and no-progress transition reasons', async () => {
+    const fastClock = virtualClock();
+    const fast = createAdaptiveLinkBudget({ ...CONFIG, initialWindowLinks: 28 }, fastClock);
+    fast.markSubmitted('fast');
+    fast.markSyncEnd('fast', 8);
+    fastClock.advance(800);
+    fast.markSettled('fast');
+    expect(fast.snapshot().transitions[0]).toMatchObject({
+      from: 'ramp',
+      to: 'steady',
+      reason: 'fast-settlement',
+    });
+
+    const midClock = virtualClock();
+    const mid = createAdaptiveLinkBudget(CONFIG, midClock);
+    mid.markSubmitted('mid');
+    mid.markSyncEnd('mid', 8);
+    midClock.advance(1_600);
+    mid.markSettled('mid');
+    expect(mid.snapshot().transitions[0]).toMatchObject({
+      from: 'ramp',
+      to: 'steady',
+      reason: 'mid-settlement',
+    });
+
+    const failed = createAdaptiveLinkBudget(CONFIG, virtualClock());
+    failed.markSubmitted('failed');
+    failed.markSyncEnd('failed', 8);
+    failed.markFailed('failed');
+    expect(failed.snapshot().transitions[0]).toMatchObject({
+      from: 'ramp',
+      to: 'backoff',
+      reason: 'failed',
+    });
+
+    const stalledClock = virtualClock();
+    const stalled = createAdaptiveLinkBudget(CONFIG, stalledClock);
+    stalled.markSubmitted('stalled');
+    stalled.markSyncEnd('stalled', 12);
+    await stalled.awaitSlot(() => false);
+    expect(stalled.snapshot().transitions[0]).toMatchObject({
+      from: 'ramp',
+      to: 'stalled',
+      reason: 'no-progress',
     });
   });
 
@@ -75,6 +167,58 @@ describe('adaptive link budget core', () => {
       maxWindowObserved: 32,
       settledUnits: 8,
       backoffCount: 0,
+    });
+  });
+
+  it('gives a zero-delta settle no window credit (the cheap-unit discount)', () => {
+    // Measured (iGPU, far login, 2026-08-17): a boot sweep that also collects
+    // views hidden behind their live compile gates submits units whose
+    // programs are ALREADY linked. They settle instantly having created no
+    // program, the window read that as headroom, ramped to the cap, and the
+    // lane kept submitting until the hard deadline while the whole manifest
+    // behind it timed out (tests/reveal_gate_wiring.test.ts).
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget(CONFIG, clock);
+
+    for (let index = 0; index < 200; index++) {
+      const id = `hidden:${index}`;
+      budget.markSubmitted(id);
+      budget.markSyncEnd(id, 0);
+      budget.markSettled(id);
+    }
+
+    expect(budget.snapshot()).toMatchObject({
+      windowLinks: CONFIG.initialWindowLinks,
+      maxWindowObserved: CONFIG.initialWindowLinks,
+      settledUnits: 200,
+      backoffCount: 0,
+    });
+    // A unit that DID link programs still grows the window on the same clock:
+    // the discount is about the delta, never about the speed.
+    budget.markSubmitted('real:0');
+    budget.markSyncEnd('real:0', 8);
+    budget.markSettled('real:0');
+    expect(budget.snapshot()).toMatchObject({
+      windowLinks: CONFIG.initialWindowLinks + CONFIG.increaseLinks,
+      maxWindowObserved: CONFIG.initialWindowLinks + CONFIG.increaseLinks,
+    });
+  });
+
+  it('still backs off on a SLOW settle that linked nothing', () => {
+    // The discount withholds credit; it never withholds congestion evidence.
+    // A cheap unit that took two seconds to come back says the driver is
+    // busy, whatever this unit itself linked.
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget({ ...CONFIG, initialWindowLinks: 24 }, clock);
+    budget.markSubmitted('hidden:0');
+    budget.markSyncEnd('hidden:0', 0);
+    clock.advance(2_500);
+    budget.markSettled('hidden:0');
+
+    expect(budget.snapshot()).toMatchObject({
+      state: 'backoff',
+      windowLinks: 12,
+      backoffCount: 1,
     });
   });
 
@@ -159,6 +303,33 @@ describe('adaptive link budget core', () => {
     expect(budget.snapshot()).toMatchObject({ state: 'backoff', backoffCount: 3 });
   });
 
+  it('reopens a stalled lane on the next settle, halved, and grows it again after', async () => {
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget(CONFIG, clock);
+    budget.markSubmitted('slow:0');
+    budget.markSyncEnd('slow:0', 12);
+    expect(await budget.awaitSlot(() => false)).toBe(false);
+    expect(budget.snapshot()).toMatchObject({ state: 'stalled', noProgressCount: 1 });
+    expect(budget.canSubmit()).toBe(false);
+    // The settle arrives after the stall: the driver was slow, not wedged.
+    clock.advance(500);
+    budget.markSettled('slow:0');
+    expect(budget.snapshot()).toMatchObject({ state: 'backoff', windowLinks: 8, settledUnits: 1 });
+    expect(budget.canSubmit()).toBe(true);
+    expect(await budget.awaitSlot(() => false)).toBe(true);
+    budget.markSubmitted('fast:0');
+    budget.markSyncEnd('fast:0', 4);
+    clock.advance(100);
+    budget.markSettled('fast:0');
+    expect(budget.snapshot()).toMatchObject({ state: 'ramp', windowLinks: 12 });
+    const reasons = budget.snapshot().transitions.map((t) => `${t.from}>${t.to}:${t.reason}`);
+    expect(reasons).toEqual([
+      'ramp>stalled:no-progress',
+      'stalled>backoff:slow-settlement',
+      'backoff>ramp:fast-settlement',
+    ]);
+  });
+
   it('stops admission after bounded no-progress waits', async () => {
     const clock = virtualClock();
     const budget = createAdaptiveLinkBudget(CONFIG, clock);
@@ -186,10 +357,12 @@ describe('adaptive link budget core', () => {
     expect(await budget.awaitSlot(() => false)).toBe(false);
     expect(budget.snapshot()).toMatchObject({ state: 'stalled', noProgressCount: 1 });
 
+    // The old tail's settle is the progress the stall waited for: the lane
+    // reopens on the halved window (the settle was slow by definition).
     clock.advance(1_000);
     budget.markSettled('ghost-fade-variants:1');
-    expect(budget.canSubmit()).toBe(false);
-    expect(budget.snapshot()).toMatchObject({ state: 'stalled', settledUnits: 1 });
+    expect(budget.canSubmit()).toBe(true);
+    expect(budget.snapshot()).toMatchObject({ state: 'backoff', settledUnits: 1, windowLinks: 16 });
   });
 
   it('rechecks the caller deadline during a capacity wait', async () => {
@@ -240,5 +413,139 @@ describe('adaptive link budget core', () => {
     expect(budget.canSubmit()).toBe(false);
     expect(await budget.awaitSlot(() => false)).toBe(false);
     expect(budget.snapshot().state).toBe('revealed');
+  });
+});
+
+describe('a settlement judge in place of the absolute bounds', () => {
+  it('hands the judge the settle, the unit weight and its peak concurrency, and moves on its verdict', () => {
+    // The judge sees what a millisecond bound cannot: how heavy the unit was
+    // and how many units shared the driver with it at its busiest moment.
+    const clock = virtualClock();
+    const samples: SettlementSample[] = [];
+    const verdicts: SettlementVerdict[] = ['fast', 'slow', 'mid'];
+    const budget = createAdaptiveLinkBudget(
+      {
+        ...CONFIG,
+        fastSettlementMs: undefined,
+        slowSettlementMs: undefined,
+        judgeSettlement: (sample) => {
+          samples.push(sample);
+          return verdicts[samples.length - 1] ?? 'mid';
+        },
+      },
+      clock,
+    );
+    budget.markSubmitted('a', 2.5);
+    budget.markSyncEnd('a', 8);
+    budget.markSubmitted('b');
+    budget.markSyncEnd('b', 8);
+    budget.markSubmitted('c');
+    budget.markSyncEnd('c', 8);
+    clock.advance(300);
+    budget.markSettled('a');
+    expect(samples).toEqual([
+      { settlementMs: 300, weight: 2.5, concurrency: 3, windowLinks: 16, cheap: false },
+    ]);
+    // 300 ms would have read slow against the 1_200/2_000 bounds; the judge
+    // said fast, and fast is what moved the window.
+    expect(budget.snapshot()).toMatchObject({ windowLinks: 20, state: 'ramp' });
+
+    // A unit submitted alone after the others settled is alone at its peak.
+    budget.markSettled('b');
+    expect(samples[1]).toEqual({
+      settlementMs: 300,
+      weight: 1,
+      concurrency: 3,
+      windowLinks: 20,
+      cheap: false,
+    });
+    expect(budget.snapshot()).toMatchObject({ windowLinks: 10, state: 'backoff' });
+    budget.markSettled('c');
+    expect(budget.snapshot()).toMatchObject({ windowLinks: 10, state: 'steady' });
+    clock.advance(50);
+    budget.markSubmitted('d');
+    budget.markSyncEnd('d', 8);
+    budget.markSettled('d');
+    expect(samples[3]).toEqual({
+      settlementMs: 0,
+      weight: 1,
+      concurrency: 1,
+      windowLinks: 10,
+      cheap: false,
+    });
+
+    // A weight that is not a positive number is one.
+    budget.markSubmitted('e', Number.NaN);
+    budget.markSyncEnd('e', 8);
+    budget.markSettled('e');
+    budget.markSubmitted('f', -1);
+    budget.markSyncEnd('f', 8);
+    budget.markSettled('f');
+    expect(samples.slice(4).map((sample) => sample.weight)).toEqual([1, 1]);
+  });
+
+  it('keeps the cheap-unit discount under a judge: a fast verdict on a unit that linked nothing buys no admission', () => {
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget({ ...CONFIG, judgeSettlement: () => 'fast' }, clock);
+    budget.markSubmitted('scene:0');
+    budget.markSyncEnd('scene:0', 0);
+    budget.markSettled('scene:0');
+    expect(budget.snapshot()).toMatchObject({
+      windowLinks: CONFIG.initialWindowLinks,
+      settledUnits: 1,
+    });
+  });
+
+  it('tells the judge which units linked nothing, so a judge that keeps state can set them aside', () => {
+    // The discount is applied AFTER the judge has seen the sample: a judge
+    // with an etalon would otherwise learn a zero-link settle as the price of
+    // a link. The flag rides the sample; the discount itself still holds.
+    const clock = virtualClock();
+    const samples: SettlementSample[] = [];
+    const budget = createAdaptiveLinkBudget(
+      {
+        ...CONFIG,
+        judgeSettlement: (sample) => {
+          samples.push(sample);
+          return 'fast';
+        },
+      },
+      clock,
+    );
+    budget.markSubmitted('hidden:0');
+    budget.markSyncEnd('hidden:0', 0);
+    budget.markSettled('hidden:0');
+    budget.markSubmitted('real:0');
+    budget.markSyncEnd('real:0', 3);
+    budget.markSettled('real:0');
+    // A unit whose prologue never reported keeps the provisional estimate: not cheap.
+    budget.markSubmitted('silent:0');
+    budget.markSettled('silent:0');
+    expect(samples.map((sample) => sample.cheap)).toEqual([true, false, false]);
+    expect(budget.snapshot()).toMatchObject({
+      windowLinks: CONFIG.initialWindowLinks + 2 * CONFIG.increaseLinks,
+      settledUnits: 3,
+    });
+  });
+
+  it('reads every settle as mid when given neither bounds nor a judge', () => {
+    const clock = virtualClock();
+    const budget = createAdaptiveLinkBudget(
+      { ...CONFIG, fastSettlementMs: undefined, slowSettlementMs: undefined },
+      clock,
+    );
+    budget.markSubmitted('scene:0');
+    budget.markSyncEnd('scene:0', 8);
+    budget.markSettled('scene:0');
+    clock.advance(10_000);
+    budget.markSubmitted('scene:1');
+    budget.markSyncEnd('scene:1', 8);
+    clock.advance(10_000);
+    budget.markSettled('scene:1');
+    expect(budget.snapshot()).toMatchObject({
+      windowLinks: CONFIG.initialWindowLinks,
+      state: 'steady',
+      backoffCount: 0,
+    });
   });
 });

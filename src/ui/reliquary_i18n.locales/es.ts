@@ -150,4 +150,32 @@ export const table: ReliquaryLocaleTable = {
     name: 'Anillos de Brecha',
     desc: 'Los anillos de Brecha personales, acuñados para cada campeón del grupo que logra la primera conquista de una Brecha clasificada. Cada personaje solo puede tener el suyo.',
   },
+  conquerors_ignivar: {
+    name: 'Crisol de la Última Fuente',
+    desc: 'Botines épicos de Ignivar, Heraldo de la Última Llama.',
+  },
+  conquerors_ignivar_heroic: {
+    name: 'Heroico: Crisol de la Última Fuente',
+    desc: 'Armas exclusivas del modo heroico de Ignivar, Heraldo de la Última Llama.',
+  },
+  conquerors_varkhul: {
+    name: 'El Crisol Interior',
+    desc: 'Botines épicos de Varkhul, Padre de la Forja de la Última Llama.',
+  },
+  conquerors_varkhul_heroic: {
+    name: 'Heroico: El Crisol Interior',
+    desc: 'Escudos y armas exclusivos del modo heroico de Varkhul, Padre de la Forja de la Última Llama.',
+  },
+  conquerors_set_bramblehide: {
+    name: 'Piel de Zarza de Roots',
+    desc: 'La familia completa de cuero Piel de Zarza de Roots.',
+  },
+  professions_crucible: {
+    name: 'Artesanía del Crisol',
+    desc: 'Once colecciones creadas en incursiones, cada una con piezas de pecho, cintura y pies. Los manuales y las fórmulas son conocimientos, no reliquias.',
+  },
+  professions_forgebreaker: {
+    name: 'Rompeforjas',
+    desc: 'La voz de la Última Fuente, liberada de la forja y llevada en un martillo hecho por tus propias manos.',
+  },
 };

@@ -41,7 +41,12 @@ COSMETIC (may be tiered down on lower presets):
 - Minimap redraw smoothness. It is a coarse overview; the 3D world and nameplates carry the
   same signal at full rate.
 - Buff-icon overflow when the bar is full. A buff is active whether or not its icon is on
-  screen, so hiding a buff icon removes no actionable information.
+  screen, so hiding a buff icon removes no actionable information. (2026-08-27: a
+  short-duration buff, e.g. a tank's active-mitigation cooldown, is exempted FIRST when the
+  cap must shed something -- see "The 2026-08-27 short-buff priority pass" below -- and a
+  player may opt fully out of the shed via the "Always Show All Buffs" interface setting,
+  which pays the cap's usual per-frame cost. Neither changes the rule itself: the cap
+  still only ever hides cosmetic icon information, never a mechanical effect.)
 - Portrait and HP-bar redraw smoothness within human reaction tolerance (about 200 ms).
 - Sun-shadow refresh cadence under budget pressure (`src/render/shadow_cadence_core.ts`).
   Under sustained over-budget readings the shadow map updates every other frame instead of
@@ -49,6 +54,23 @@ COSMETIC (may be tiered down on lower presets):
   conveys nothing a player acts on. This is a GOVERNOR-driven shed by design, like the
   weapon-VFX `vfx` bucket arm below: a perf-governor output, not a UI tier knob, so the
   static-preset rule at the bottom of this doc does not apply to it.
+- Sun-shadow ortho EXTENT under the same pressure (`src/render/shadow_extent_core.ts`), the
+  deeper step below that cadence. The one orthographic box the sun renders shrinks from its
+  105 yd half-extent to 78.75 and then 67 (the third step's 0.6 multiplier would give 63, and
+  the world-space floor below clamps it up), one step per 3 s of sustained over-budget
+  readings, and widens back one step per 6 s of calm. A caster whose shadow the narrower box
+  drops is STILL DRAWN, still nameplated and still clickable at exactly the same range: only
+  the shadow it casts on distant ground goes, which is the same class of information the
+  cadence already sheds. What makes it safe near the player is a WORLD-SPACE floor rather
+  than a multiplier: `shadowExtentHalf` never returns less than `SHADOW_EXTENT_FLOOR_YARDS`
+  (67), the 62 yd range past which a character stops casting a shadow at all
+  (`ENTITY_PROXY_SHADOW_RANGE_SQ` in `renderer.ts`) plus the 4 yd caster margin the other
+  shadow culls use plus a 1 yd rig radius. So no rig that still casts can lose its shadow to
+  the shed, on either tier base: the lean 85 yd base would have floored at 51 yd on a plain
+  scale, inside the proxy band, and the clamp is what stops it. Governor-driven like the
+  cadence, so the static-preset rule does not apply, and the live step is on the perf
+  snapshot (`shadowExtentStep` / `shadowExtentScale` / `shadowExtentHalf`) so a capture
+  cannot silently compare two different extents.
   VFX-bearing weapon skin (glow, motes, aurora, shell, cast light) FADES on two inputs.
   Neither reaches zero: what removes a rig is the character LOD swap, which replaces the whole
   articulated rig with one baked mesh and is shared by the entire render path. The fade exists
@@ -64,17 +86,133 @@ COSMETIC (may be tiered down on lower presets):
     that differs between two players looking at the same wearer, and it can only dim.
   What is faded is decoration ON a weapon. The wearer, their nameplate, their cast bar, their
   auras, their position and the weapon model itself are untouched at every scale.
-- The deed border accent's decorative bloom (the Book of Deeds border rewards worn in-world).
-  The accent is IDENTITY: it encodes no health, range, rank, or threat, so it may never be
-  hidden, but its outer glow is pure richness. The identity arms are tier-invariant by
-  construction: the nameplate cartouche is canvas shapes resolved from entity state on the
-  same cadence as the title text (no tier input on the accent path, pinned by the path scan
-  in `tests/deed_border_accent.test.ts`), and the portrait ring's frame border, edge outline,
-  and inset shadow never read a tier token (pinned by the CSS arm of the same suite). The ONE
-  tier-scaled quantity is the ring's outer box-shadow bloom, which rides `--fx-shadow` (0 at
-  low) exactly like the sibling portrait combat glow. The ring also repaints on the existing
-  low-tier target-frame body throttle (about 10 Hz, target swap bypasses), a redraw-smoothness
-  shed this list already sanctions for the portrait.
+- The legendary-regalia forge motes (`src/render/legendary_regalia_core.ts` plus the
+  `Vfx.legendaryRegalia` pooled emitter): the sparse orange drift rising off a wearer whose
+  worn set includes a legendary-rolled copy. Worn-gear PRESTIGE display, not actionable
+  state: the predicate reads only the eqi wire allowlist (never `perfected`, hp, auras, or
+  target state), so shedding it hides nothing a player acts on (the classification is a
+  recorded maintainer read in the masterwrought Phase 16 ledger). The shed's shape: gated
+  at the medium effects tier by the STATIC preset stamp (`gfxTierAtLeast(GFX.effectsTier)`,
+  never the FPS governor), distance-faded against the fixed `CHARACTER_LOD_RANGE_SQ` anchor
+  exactly like the weapon-VFX fade above, floored above zero, and dimmed only through the
+  pooled cloud's own governor quality floor. Suppressed under the viewer's
+  prefers-reduced-motion setting, the lich-aura precedent (an accessibility choice by the
+  viewer, not a graphics shed).
+- Ambient plant motion in the world: the foliage wind sway on canopies, bushes and grass
+  cards, and the farm crops' idle lean (`src/render/farm_patches.ts`). This is the class
+  boundary for the reduced-motion clause directly above, which is about a CHARACTER-borne
+  identity effect and does not generalize to the scenery. The exempt class is the CONTINUOUS
+  AMBIENT motion itself, the wind sway and the idle lean, and it is narrow in both
+  directions. Neither is gated on `prefers-reduced-motion` and neither ever has been: the
+  foliage sway reads only the STATIC `GFX.windSway` preset knob against the shared `uTime`
+  clock the renderer advances every frame, and the crop lean is a per-plot phase advanced by
+  `dt` and composed onto the bed's seat quaternion, so a crop always stands normal to the
+  ground it grows in. The two share the class, not the clock. Note the binding time before
+  reusing the knob, and note that it is NOT one story across the three wind paths: on the
+  grass cards `GFX.windSway` is read inside `onBeforeCompile` and selects vertex shader
+  SOURCE (`foliage.ts` `applyGrassShader`), while the cache key beside it
+  (`grassCardProgramCacheKey`, `grass_cap_collapse_core.ts`) does not mention the knob, so a
+  varying grass sway is a program-key change owing a prewarm story. On the impostor sprites
+  (`foliage_impostor.ts`) and on the canopies and bushes (`foliage.ts` `addWind`, wherever it
+  installs its hook at all, which today is every leaf material) the injected source is
+  identical either way and the knob only sets the VALUE of `uWindStrength` or `uImpWind`;
+  `addWind` also has an arm that installs NO hook, so on that arm the knob is a program change
+  too. Even on the uniform arms it is not a live flip, which is the half a first draft of this
+  paragraph got wrong in both directions: nothing retains those uniform objects, both are
+  minted inside the compile hook at material-creation time, so a tier- or preference-varying
+  sway means new plumbing or rebuilt materials on every path, never a uniform write. One more
+  reader is easy to miss and is pinned: the renderer reports `windSway` in its quality bucket
+  (`renderer.ts`), which `tests/perf_reporter.test.ts` asserts on. Price the arm you are
+  actually taking. What is NOT exempt, and the two nearest examples
+  are both inside the same subsystems: a camera-driven TRANSITION is a fade, not ambient
+  motion, so `src/render/tree_hide_fade.ts`'s occluder ghost ramp honors the setting
+  (`updateTreeHides` threads it in from `foliage.ts`); and an ability marker drawn in the
+  world is not scenery, so `src/render/umbral_anchor_marker.ts` freezes its uTime to zero,
+  which it can do precisely because it owns a PRIVATE `uTime` uniform rather than the shared
+  clock. Gating the crops alone would make farm beds the one plant in the game that stops,
+  which is a fidelity break rather than an accessibility win. The classification is a
+  recorded maintainer read in the masterwrought Phase 19 ledger, ruling
+  `qr-19-idle-sway-reducedmotion`.
+- Terrain-detail shed under budget pressure (`src/render/terrain_detail_shed_core.ts`,
+  `render_budget.ts`'s `detail` bucket). Ultra/insane's own terrain fragment knobs
+  (`terrainRelief`, `surfaceDetailTaps`, `surfaceDetailClampK`, and worn-stone's matching
+  parallax taps/clamp) are relief parallax steps at grazing angles and micro sun-shadow
+  shading on the ground: depth CUES, never a mechanical read. A GOVERNOR-driven shed, same
+  as the shadow cadence above: reading the LIVE budget governor is correct here because it is
+  a perf-governor output like the grass/vfx levels, not a HUD tier knob, so the static-preset
+  rule for HUD tier knobs does not apply to it. Dwell-hysteresis timed (shadow_cadence_core.ts's
+  shape: sustained pressure before each shed step, sustained calm before each restore step,
+  a dead band that holds the plan), and the applied level slews toward the stepped plan so a
+  step is a short crossfade of the relief, never a one-frame pop at a chunk edge. The live
+  0..1 level only ever pulls a knob DOWN toward high's own static profile (relief 1, taps 0,
+  clamp 0, the floor every tier at or above high already ships), never past a tier's own
+  request in either direction. A high TABLE session is untouched twice over: its `detail`
+  band is not governable and its request equals the floor, where the mapping is a proven
+  no-op (medium and low sit below it and are no-ops the same way). The governor admits the
+  shed from the session's OWN request beside the band, so an Advanced session (tier high
+  with the Terrain or Surface Detail dial raised above the floor) sheds like ultra does.
+  What the level touches, and nothing else: the ground parallax offset, the ground micro
+  sun-shadow shade term, and worn-stone's parallax offset, refinement taps and offset clamp;
+  none of those shader terms carries any information a player acts on. Consumed as live
+  uniform VALUES that weigh the shaders' EXISTING distance fades inside the same compiled
+  branches (never a define, never a program relink, never a `.visible` or `.castShadow`
+  write): the governor can only ever dim a cosmetic depth cue that already varies with
+  viewing angle and distance, not remove terrain, change its collision height, or touch
+  anything a player reacts to.
+- Post-processing shed under budget pressure (`src/render/post_shed_core.ts`, applied by
+  `post_shed.ts`, `render_budget.ts`'s `post` level). Under sustained over-budget readings the
+  composer tiers shed their post chain one rung at a time, in this order: the tail SMAA gives
+  way to the fused FXAA arm compiled into a twin of the output grade pass (the same arm medium
+  ships), bloom drops its two smallest blur mips, bloom goes dark, and N8AO becomes a white
+  passthrough (its evaluate and denoise passes skip; the scene still draws through its own
+  scene pass). Edge anti-aliasing, bloom and ambient occlusion all filter or shade the
+  DISPLAY-SPACE image after everything a player reads has been drawn into it: none of them
+  adds, removes, hides, delays or repositions a body, a nameplate, a cast bar, an aura or a
+  position, so an image with less AA, no glow or no contact shading carries the same
+  information at the same time. A GOVERNOR-driven shed by design, like the shadow cadence
+  above: it reads the live budget governor because it is a perf-governor output, not a HUD
+  tier knob, so the static-preset rule for HUD tier knobs does not apply to it. The FLOOR of the level is still a pure function of the STATIC preset: the
+  tier band (`GFX_BUCKET_BANDS[tier].post`, governable only on the composer tiers) plus which
+  sheddable passes the session's own static chain built (`postShedFloor`), never a live
+  reading, so two sessions on the same preset have the same rungs available. Every rung is a
+  pass `enabled` flag or a one-time clear of a target the chain already allocated: never a
+  program compile in a live frame (the FXAA twin compiles under the `post.initial-frame`
+  prewarm), never a render-target reallocation, never a `.visible` or `.castShadow` write.
+  There is no half-resolution AO rung on purpose: that switch reallocates the AO targets and
+  relinks the AO program, which the scheduler contract forbids mid-fight.
+- Deed Heraldry's decorative bloom (the Book of Deeds rewards worn in-world and on social
+  surfaces). Heraldry is IDENTITY: it encodes no health, range, rank, or threat, so its
+  forged seal, motif, material, and structural edge may never be hidden. The world seal and
+  name ribbon are canvas shapes resolved from entity state on the same cadence as the title
+  text. The player and valid-player-target headers, inspect banner, picker samples, and both
+  picker previews consume the same canonical slug-to-palette-and-motif mapping. None accepts
+  a graphics preset, tier, effects profile, or governor input. `tests/deed_border_accent.test.ts`
+  pins those identity arms and the four normalized motif paths. The ONE tier-scaled quantity
+  is outer box-shadow bloom, which rides `--fx-shadow` and may reach 0 on low. Structural
+  borders, inset edges, seals, motifs, and material fills remain. The target reveal repaints
+  on the existing low-tier target-frame body throttle (about 10 Hz, target swap bypasses), a
+  redraw-smoothness shed this list already sanctions for the portrait. Party, pet,
+  target-of-target, NPC, mob, and object frames receive no heraldry on any tier.
+
+- The armour DYE of a picked outfit colorway (`src/render/characters/armor_dye.ts`,
+  `outfitDye` in `modular.ts`). The colorway itself is IDENTITY the player chose in the
+  creator, so it may never be dropped outright; what a tier with no shader stage may shed is
+  its FIDELITY. On standard tier and above, `attachArmorDye` remaps the atlas's steel, trim,
+  leather, and cloth zones independently in a fragment shader. On low tier, every rig
+  material rebuilds as flat Lambert with no `onBeforeCompile` hook to run that shader in, so
+  `outfitDyeFallbackHex` (`modular.ts`) stands in with a single, value-normalized multiply
+  toward the colorway's own hue: a rougher, whole-armour approximation of the same colour
+  rather than the atlas's undyed default. Pinned by `tests/tinted_material.test.ts`.
+
+- Edge anti-aliasing, and WHICH edge anti-aliasing a tier gets. High and above run the SMAA
+  tail; medium (and any mix that resolves to the grade-only chain) runs the FXAA arm fused
+  into `OutputGradePass`; low and the memory-constrained WebKit rungs run none, because they
+  have no grade pass to fuse into. All three arms filter the display-space image AFTER
+  everything a player reads has been drawn into it, and none of them removes, hides, delays,
+  or repositions anything: an aliased silhouette and an anti-aliased one carry the same
+  information at the same time. Which arm a session gets is a pure function of the STATIC
+  device policy (`gfxAaPolicy`) plus the Anti-Aliasing dial, never of the frame-budget
+  governor, so it cannot vary between two players standing in the same spot.
 
 The test for any new tier knob: if a knob hides or delays something a player READS AND REACTS
 TO, it is not allowed. If it only reduces visual richness or redraw smoothness, it is fine.
@@ -108,6 +246,53 @@ What each knob does, and why it is gameplay-neutral:
   interleaves buffs and debuffs in sim-application order) is likewise never tier-gated: it can
   carry a purgeable buff, an allied maintained buff, or a group-coordinated foreign debuff that a
   player reacts to, so it repaints every frame on every preset just like the player's own bars.
+  **The 2026-08-26 buff-bar overflow badge:** the shed itself stayed a silent count for a while
+  (a player on low with more than `AURA_VISIBLE_CAP_LOW` buffs simply saw fewer icons than they
+  had, with nothing distinguishing "hidden" from "gone"), which read as a bug report even though
+  no rule here was actually violated. The fix restores no information (the classification above
+  is unchanged: a buff icon is still cosmetic, and the cap still never touches a debuff); it only
+  makes the shed HONEST. `AurasPainter` now accepts an optional `overflowEl`, a static sibling
+  `hud.ts` mints once into `#buff-bar` ahead of the pooled aura nodes; on a paint that actually
+  sheds N buffs, the badge shows a dashed "+N" tile (`hudChrome.unitFrame.buffOverflowLabel`)
+  with a native tooltip (`hudChrome.plurals.buffsHidden`) explaining that those buffs are still
+  active. Full tiers never see it (the cap never bites there), and neither does the debuff bar or
+  the target strip (their `overflowEl` stays null: neither can ever shed).
+  **The 2026-08-27 short-buff priority pass:** player feedback on the overflow badge (PR #3668)
+  pointed out that an HONEST shed is still a shed: a tank's Raised Guard (2 charges, 6 sec active
+  mitigation, 12 sec recharge) applied AFTER a wall of long-lived raid buffs could still lose its
+  icon to them under the flat first-N cap, hiding the one piece of timing information a tank
+  actually needs from the bar. The selection itself is now priority-ordered, not just honestly
+  reported: `AurasPainter.paint()` delegates the shed decision to
+  `aura_overflow_priority.ts::selectShedSlots`, which keeps `cap` ordinary buffs (exempt slots
+  render on top, unconditionally, exactly as before) but fills that budget with short-duration
+  buffs FIRST (`AuraSlotState.shortDuration`, `auras_view.ts::isShortDurationBuff`, at or under
+  `SHORT_BUFF_PRIORITY_SEC` = 60 sec, the natural gap in the content catalog's selfBuff
+  durations between active-cooldown buffs and raid/world buffs) and only sheds a long-duration
+  buff once every short one already fits. This restores no NEW information a full tier does not
+  already show (a long buff was always the one shed on low; this only changes WHICH long buff,
+  never whether a debuff or an actionable/always-visible buff sheds), so the rule above is
+  unchanged. The same PR also added an opt-out: "Always Show All Buffs"
+  (`game.settings.alwaysShowAllBuffs`, Interface panel, Frames tab, off by default) makes the
+  buff bar's own `AurasPainter` report the 'ultra' tier to `auraVisibleCap` regardless of the
+  real preset (`Hud.buffBarFxTier()`), so the cap never bites for a player who opts in, at the
+  cap's usual per-frame cost. It touches only that one painter instance; every other low-tier
+  knob (FCT, minimap, the debuff bar, the target strip) is unaffected, so this is a player
+  PREFERENCE layered on top of the STATIC preset, never a second preset-like governor.
+  **The 2026-09-01 Well Fed cosmetic-shed ratification:** the farming packet's Phase 11 QA left
+  one fairness READ open against this classification. Well Fed runs 600 sec on the farm buff
+  dishes and 900 sec on the apex plates, an order of magnitude past `SHORT_BUFF_PRIORITY_SEC`, so
+  it sits in exactly the long-duration bucket the priority pass above sheds FIRST, on the one
+  preset, taken from the player whose only cue to re-eat is that icon. RULED
+  (`qr-19-aura-visible-cap-low-fairness`, under `qr-19-best-for-project`): the classification is
+  RATIFIED and Well Fed stays sheddable. The icon is upkeep, not an action: the buff runs whether
+  or not it is on screen, the honest plus-N badge names the shed instead of hiding it, and Always
+  Show All Buffs opts a player out of the cap entirely. Exempting it would spend one of the eight
+  low slots permanently and set a precedent every flask and every raid buff could claim, eroding
+  the cap the low preset exists to enforce. The one part of the QA note still simply true was that
+  nothing pinned the contract either way; `tests/professions_graphics_fairness.test.ts` now does,
+  over the real `selectShedSlots`: a 900 sec Well Fed slot sheds, a debuff does not, an
+  `ALWAYS_VISIBLE_AURA_IDS` id does not, exempt slots do not spend the cap budget, and the
+  `'ultra'` override never caps at all.
 - Target frame, hud + `unit_frame_painter.ts`: on low, the target frame BODY (HP / level /
   portrait) refreshes at about 10 Hz; a target SWAP bypasses the throttle
   (`nonSelfRepaintDue`), and the cast bar and the debuffs strip are both painted OUTSIDE the
@@ -157,15 +342,172 @@ cosmetic surface as though it carried the read. `tests/map_terrain.test.ts` pins
 both directions, including that no pixel near the limit is drawn brighter than the water inside
 it, so the boundary cannot creep back in as decoration.
 
+### Low-tier rocks with a real collider stayed invisible (2026-08-15)
+
+Not a HUD tier this time: the same principle applies to a WORLD-scenery LOD trim, and the
+answer is that a physical collision is the sharpest form of actionable information there is,
+sharper than anything on this list so far.
+
+`src/render/foliage.ts` sheds triangle count on `GFX.leanFoliage` tiers (Low, and Medium on a
+weak integrated GPU) by randomly dropping a fraction of scatter decorations from rendering. That
+trim treated every rock the same, with no awareness that `src/sim/colliders.ts` had already given
+some of them a real physical collider (rocks at or above `ROCK_COLLIDER_MIN_SCALE`). The sim side
+is correctly tier-agnostic (the server is authoritative and knows nothing about a client's
+graphics preset), so the collider always existed; only the client's decision about what to draw
+was missing the check. A player on Low could walk into an empty-looking patch of ground and be
+stopped by a rock they could not see.
+
+The fix is a shared predicate, `decorationHasCollider` (`src/sim/decoration_dims.ts`), consumed
+by both `colliders.ts` (which already had the same check inline; it now calls the named,
+shared version instead) and a new pure core, `src/render/foliage_decimation_core.ts`
+(`survivesLeanDecimation`), which exempts any rock the predicate calls solid from the trim before
+falling back to the previous tuned keep rates for everything else. Trees carry the identical
+architectural gap (every tree/tree2 trunk gets an unconditional collider, with no size gate at
+all), but a correct fix there would exempt effectively every tree from the trim, a much larger
+triangle-count and frame-time tradeoff on the weak/software GPUs this tier targets than the rock
+fix is, so it was tracked separately rather than folded in blind at
+levy-street/world-of-claudecraft#3415: see the entry below, where its decimation-trim half is
+fixed for real (the distinct bucket-culling half identified there is fixed in its own entry
+below). A second,
+unrelated invisible-collision gap was found in the same review, in the Evergarden's parterre
+beds and garden-biome pines (a zone-curation exclusion, unconditional on every preset, not this
+tier trim), tracked at levy-street/world-of-claudecraft#3417 and still open.
+
+The rule this adds to the list at the top: ACTIONABLE now explicitly includes "the presence of
+any entity a player can physically collide with", not only HUD/map reads. A render-side decision
+about what to draw must never diverge from what the sim decides a player can be blocked by.
+`tests/foliage_decimation_core.test.ts` pins the predicate itself, and
+`tests/foliage_decimation_wiring.test.ts` source-scans `foliage.ts` so a future re-inlining of
+the old hash-vs-keep-rate filter (which is exactly what caused this) fails loudly instead of
+silently reopening the bug behind a green core test.
+
+### Low-tier trees with a real collider stayed invisible too (2026-08-20)
+
+`levy-street/world-of-claudecraft#3415` (opened alongside the rock fix above) was closed as
+completed on 2026-08-17 with no linked commit or PR: the gap it tracked was never actually
+closed. A player reported the live symptom again on Low graphics: a tree visible from one camera
+angle, then gone after a small camera turn, while still blocking movement in a straight line.
+
+The deliberation the issue asked for (accept the full triangle-count cost, or invent a cheaper
+"kept but budget" stand-in visual) resolves the same way the graphics-fairness principle at the
+top of this file already states it: a preset may shed COSMETIC richness, never ACTIONABLE
+information, and there is no "unless it is expensive" clause. A collider a player cannot see is
+the sharpest form of hidden actionable information there is, so the answer is the rock fix's
+exemption, generalized: `survivesLeanDecimation` now exempts ANY decoration `decorationHasCollider`
+calls solid, not only rocks. Since every tree/tree2 trunk carries an unconditional collider, this
+removes the lean-tier trim for trees entirely; the hash-based keep rate that used to thin them
+(0.68 standard materials / 0.46 otherwise) is now unreachable dead weight and was deleted along
+with the tree-specific branch in `leanKeepRate` (renamed `leanRockKeepRate`, the only decoration
+kind that can still lack a collider).
+
+This is a real, accepted frame-time tradeoff on the weak/software GPUs `GFX.leanFoliage`
+targets, not an oversight, and it is smaller than it first looks: the LEAN arm never had
+impostors to begin with (`src/render/foliage_lod.ts`'s own header: "THE LEAN ARM HAS NO
+IMPOSTORS AT ALL: past the tree-detail distance its trees simply end"), so a tree exempted
+from the decimation trim does not draw at full detail out to the render horizon, only out to
+the same `treeDetailDistance` every other lean-tier tree already ends at. It also still holds
+every species to a single model variant per bucket and skips shadow casters entirely on
+`GFX.leanFoliage` (both unconditional on this tier, collider status aside). Correction from an
+earlier draft of this entry: the bark-cull and billboard-impostor sheds do NOT apply here at
+all; `cullBark` requires `GFX.standardMaterials`, which is false for the plain Low preset (it
+only fires on the lean-MEDIUM weak-integrated-GPU cohort), and impostors require
+`!leanFoliage`. Neither was ever part of what a lean-tier tree degrades through.
+
+`tests/foliage_decimation_core.test.ts` pins the new behavior directly (a tree at either scale
+extreme survives the unluckiest possible hash draw, on both material tiers), and
+`tests/decoration_dims.test.ts` already pinned `decorationHasCollider`'s tree arm before this
+fix, so the only thing that changed is `survivesLeanDecimation` actually trusting it for every
+decoration kind rather than only rocks.
+
+**A second, distinct mechanism used to hide a collider-bearing rock, and every bush, fern and
+mushroom around it, on this tier, found during this entry's own review and fixed in its own
+change:** `bucketVisible()` (`src/render/foliage_lod.ts`) culls a whole scatter bucket by
+comparing CAMERA distance to the bucket's CENTER against a numeric cap, and the shipped world's
+buckets run 273-307 yards in radius (two columns splitting the world in half, times depth
+bands), against an effective 106-190 yard lean-tier rock cap. A player standing right next to a
+rock near a huge bucket's edge, whose content-weighted center is far away, had the rock's entire
+InstancedMesh set invisible while the sim's collider (which knows nothing about camera position)
+kept it solid: the same invisible-but-solid shape, through a real-time, camera-position-dependent
+path. Because the probe is the camera, not the player, a third-person orbit moved it by the
+camera's own offset, which is what a player saw as rocks and bushes popping in and out "at
+certain angles" on Low. Tracked at levy-street/world-of-claudecraft#3525; fixed as follows.
+
+The fix keeps the center rule for every row it was designed for (the near-fill density cull and
+the early bark cull, whose measured cost of a near-edge probe was ~4.6x the foliage triangles)
+and gives the lean rock and dressing rows an explicit opt-in, `maxNearEdge`: their slab survives
+until its NEAREST instance crosses the cap. On its own that would keep a half-slab of live
+boulders past the cap, so the same change binds those rows' vertex-shader collapse window
+(`foliage_collapse.ts`, roles `rock` and `dress`, which the lean arm previously left at `plain`
+and the fog wall) to the very same cap through one shared per-frame resolver,
+`src/render/foliage_frame_windows_core.ts`: every instance past the cap is a vertex-shader
+early-out, never a rasterized triangle. The accepted tradeoff is therefore one extra draw call
+per surviving slab plus the vertex-shader cost of its collapsed instances, on the lean tier only;
+the sprite arm already measured these rows radius-aware against their swap and is unchanged.
+Measured with `scripts/rock_bucket_cull_visibility_shot.mjs` (Low preset, offline world, the
+Willowfen pose in the fixing PR's before/after captures, foliage `perfStats()` at the
+capture frame): before, 24 submitted slabs (all tree rows: at that pose the center rule had
+culled EVERY rock and dressing slab, which is the bug); after, 47 slabs (24 tree, 8 rock, 15
+dressing), with submitted triangles rising from ~1.71M to ~2.21M, of which the rock and dressing
+share (~0.51M) is what the per-instance window collapses beyond the cap. Draw submission and
+vertex-shader work are the honest cost; fragment work past the cap is zero. If a Low-tier perf
+tour ever shows that vertex cost biting, the next lever is finer x-splitting of the rock and
+dressing slabs (shrinking their radius), not a return to the center rule.
+Near-fill trees keep the center rule: their cap carries a per-bucket reveal jitter the shared
+shader window cannot express, and every tree already stays visible to the runtime detail
+distance (issue #3526), which is the collider-visibility guarantee that matters for a trunk. Two
+deliberate edges: a sprite-arm build whose impostor bake failed keeps its rock and dressing rows
+drawing to the fog wall (they were registered expecting a sprite behind the swap, so the resolver
+keys the cap binding on the BUILT far-field policy, `impostorsActive`, not just the live sprite
+flag); and on the sprite arm ferns and mushrooms, which have no sprite side, still take the
+center-keyed dressing cap, so a fern under the player can still drop with the orbit on Medium and
+up. That residue is cosmetic only (no dressing kind carries a collider) and is left for a
+follow-up rather than paid for with live triangles here.
+
+### The foliage tier ladder gained three knobs (2026-09-02)
+
+Three foliage costs used to be flat across the whole tier ladder above lean, and all three are
+now derived per tier. Each is cosmetic richness and none of them hides or delays anything a
+player acts on, but the tree one deserves its reasoning written down rather than assumed.
+
+- **`GFX.grassCardsPerTuft`** (`src/render/grass_tuft_cards_core.ts`): alpha-tested quads per
+  grass tuft. Lean 2, medium and high 3, ultra and insane 4; the shed card is the near-horizontal
+  sky-facing one. Grass is the one scatter layer the constrained profile is already allowed to
+  thin, precisely because it is NON-OCCLUDING: it carries no collider, hides nothing a player
+  reacts to, and `gfx.ts` deliberately keeps every tier on the full tree and rock placement set
+  for exactly that contrast. Dropping a card can only reveal slightly more ground, never less.
+- **`TREE_DETAIL_FAR_BY_TIER`** (`src/render/foliage_lod.ts`): how far real tree geometry reaches
+  before the baked sprite impostor takes over. This one moves a REPRESENTATION per tier, so it is
+  the one that needs an argument. The impostor is a picture of the same tree at the same base,
+  height, tint and sway, so a tree past the handoff is neither missing nor see-through and the
+  invisible-but-solid shape above cannot arise. The load-bearing fact, though, is arithmetic: the
+  nearest handoff ANY tier can take in clear air is `SPRITE_SWAP_MIN` (150 yd), undercut by at
+  most `IMPOSTOR_SWAP_FADE` (24 yd), and 126 yd is outside `PLAYER_INTEREST_DROP_RADIUS` (100 yd),
+  the radius at which the server will even tell a client another player exists. So no tier can
+  differ in how a player standing behind a tree reads, because on every tier that tree is still
+  real geometry wherever a player can be.
+- **`GFX.canopyDetailTaps`** (`src/render/canopy_detail_tier_core.ts`): triplanar taps per
+  surviving leaf fragment, 0 below ultra, 3 on ultra (the AO half), 6 on insane. Fragment shading
+  only, no displacement and no silhouette change, so it cannot move what a canopy occludes.
+
 ## Enforcing guards
 
 - `tests/auras_painter.test.ts`: a debuff past the buff cap still renders; an all-debuff bar
-  exceeds the cap; the cap is byte-identical on full tiers.
+  exceeds the cap; the cap is byte-identical on full tiers. The "overflow badge" block pins the
+  new honesty affordance: hidden and blank under the cap or on a full tier, revealed with the
+  EXACT shed count once the low-tier buff cap bites, the shed count excludes a debuff that
+  rendered past the cap (only dropped buffs count), a painter built with no `overflowEl` never
+  touches one, and the count clears again once the buff count drops back under the cap.
 - `tests/ui_tier_knobs.test.ts`: the LOW shed constants are literal-pinned; a `Hud.fxTier()`
   source-scan proves the knobs read the static `data-fx-level` stamp and never the FPS
   governor; a source-scan pins that party frames are not tiered.
 - `tests/architecture.test.ts`: `ui_tier_knobs.ts` is a registered UI_PURE_CORE (no governor,
   DOM, or render import).
+- `tests/tinted_material.test.ts`: an active outfit colorway renders as a genuinely different
+  colour on low tier too (never the atlas's undyed default), the low-tier fallback is
+  value-normalized so it cannot crush the whole armour toward black the way a naive multiply
+  of the swatch chip would, a non-armour material (skin) is proven untouched by the fallback,
+  and the standard-tier shader-dyed material's own `.color` is proven unchanged by the fix
+  (the shader still carries the dye there).
 - `tests/professions_graphics_fairness.test.ts`: the professions actionable set (the fishing
   bobber pair, the minimap markers and painter, the node tooltip, the node prop ladder) is
   scanned profile- and governor-free with comment-stripped sources, the tier ladder is
@@ -183,12 +525,72 @@ it, so the boundary cannot creep back in as decoration.
   cap path for the sap).
 - `tests/auras_view.test.ts`: `isAuraDebuff` classifies a negative-value `buff_*` sap identically
   for the Sim aura and its `ClientWorld` mirror.
+- `tests/shadow_extent_core.test.ts` + `tests/shadow_render_wiring.test.ts`: the sun-shadow
+  EXTENT shed. The policy core imports nothing (same blindness as the cadence: pressure,
+  enabled and dt only), the ladder is proven to walk ONE step per dwell and never to reach
+  the floor on a spike, the world-space floor is proven to clear the proxy-shadow band on
+  BOTH tier bases (the lean 85 yd arm included, where a plain scale would have floored
+  inside it) and never to widen the box past the base, the release order against the cadence
+  is pinned on one shared pressure trace rather than on prose, and the wiring scan
+  cross-pins the base half-extent and the proxy range the core restates from `renderer.ts`
+  and pins the perf-snapshot readout.
 - `tests/shadow_cadence_core.test.ts` + `tests/shadow_render_wiring.test.ts`: the sun-shadow
   cadence shed. The policy core imports nothing (preset, tier, and profile blind; its only
   inputs are the governor's pressure/enabled plus dt), the dwell thresholds are
   literal-pinned, the shed is strictly every-other-frame (never a removal: the application
   writes only the `shadowMap.autoUpdate`/`needsUpdate` flags), and the wiring scan pins the
   renderer call sites.
+- `tests/legendary_regalia.test.ts`: the legendary-regalia motes. The predicate core is
+  scanned free of preset, tier, profile, and governor inputs and of every actionable token
+  (`perfected` included, the host-forking read), the eqi wire allowlist is scrape-pinned in
+  `server/game.ts`, the distance shed is anchored to the fixed `CHARACTER_LOD_RANGE_SQ` with
+  a floored scale, the pooled emitter is proven light-, material-, and visibility-write-free,
+  and the renderer wiring is pinned cached, players-only, and static-preset-gated.
+- `tests/terrain_detail_shed_core.test.ts` + `tests/terrain_detail_shed_wiring.test.ts`: the
+  terrain-detail shed. `terrainDetailKnobs` never sheds a knob past its own tier request in
+  either direction, and a tier whose own request already sits at or below the floor (high,
+  medium) is proven untouched at every level; the dwell thresholds and the slew rate are
+  literal-pinned, each step needs SUSTAINED pressure/calm (never a single-frame spike) and
+  the applied level is proven to crossfade at the pinned rate rather than jump. The wiring
+  scan pins that the core imports nothing, that the renderer applies the level through
+  `applyTerrainDetailShed` in the one budget-application path with no `.visible` or
+  `.castShadow` write, that the applied level reaches the telemetry bucket readout, and that
+  the compiled tap count and program cache key still read the STATIC request.
+  `tests/render_budget.test.ts` pins the governor integration: ultra walks the rungs to the
+  floor under sustained pressure and back up under sustained calm, a high TABLE session stays
+  at level 1 under the SAME sustained pressure, an Advanced session on tier high is admitted
+  by its own request, the `?terraindetail=` pin overrides live pressure with the governor on or
+  off, and a
+  disabled governor without a pin holds level 1. `tests/terrain_fragment_shader.test.ts` and
+  `tests/worn_stone_shader.test.ts` prove the live uniforms are shared by reference with
+  `sharedUniforms`, weigh the existing fades inside the existing gates (worn-stone's marginal
+  tap by its fractional weight, the average by the live weight sum), that the program cache
+  key is byte-identical across levels, and that writing the uniforms changes nothing about
+  the compiled source (no relink).
+- `tests/post_shed_core.test.ts` + `tests/post_shed.test.ts` + `tests/post_shed_wiring.test.ts`:
+  the post-processing shed. The core imports nothing and is scanned free of any tier, preset,
+  profile or governor input (the level is its only input); the rung order, the step and the
+  bloom mip count are literal-pinned; the floor is proven a pure function of the chain (an
+  Advanced mix with bloom and AO dialed off floors at the SMAA rung, a chain with no post pass
+  is not governable); and the plan never enables a pass the chain did not build. The painter
+  tests drive the real three passes through `buildComposer` and pin every rung to its pass
+  flags and its one-time clear (bloom to transparent black, AO to white), that holding a rung
+  re-clears nothing, that restoring re-enables every pass with no clear, that a resize re-runs
+  the clears the rung relies on, that every clear restores the render target and clear colour
+  it found, that the SMAA rung is refused (the tail keeps running) until the twin's one prewarm
+  draw has linked it and that a draw that throws leaves it refused, and that a disposed painter
+  touches neither a pass nor WebGL on a late level, resize or prewarm.
+  The wiring scan pins the renderer's one application path (no pass flag or target write of
+  its own), the twin's boot compile under the presentation prewarm, the perfStats/overlay/fleet
+  readouts, that the painter compiles nothing, resizes nothing and hides nothing, and that the
+  governor steps the level with its existing ladder machinery and no timer of its own.
+  `tests/render_budget.test.ts` pins the governor integration: one rung per over-budget step
+  in the pinned order, the chain held until every density bucket is floored (except under
+  severe frame pressure), restored after the density buckets and before render scale, the
+  grade-only tiers held at 1 under the same pressure, the ladder walking only the rungs the
+  session's OWN chain carries (a chain with only AO steps 1 to 0 in one step, spending no
+  cooldown on a dead rung; a governor handed no chain holds 1 until the built pipeline hands
+  it one), the `?postshed=off` kill switch and the `?postshed=` pin with the governor on or off.
 - `tests/weapon_vfx_shed.test.ts`: the weapon-skin fade. Neither arm reaches zero and the
   lever's floor is proven to stay clear of the multiplier at which a part would stop drawing,
   so the fade can never be mistaken for a cull; the distance arm is anchored to the fixed
@@ -219,6 +621,40 @@ it, so the boundary cannot creep back in as decoration.
   that WON a slot, so a dropped one keeps reading through the burst. Pinned skips: a dead body,
   a frustum-culled non-actionable rig, and a cast-moment sequence for a band that is actually
   being drawn.
+- `tests/ability_vfx_cast_gate.test.ts`: the cast-readiness gate (the painter draws no cast
+  until every cast program is linked) never holds the hard-CC band, the area ring, or a windup
+  clip. The band is the one per-frame read that survives the closed gate: the gate sleeps the
+  entity to release its cosmetic pools, which deletes the band, so `holdWornCcBand` re-holds it
+  immediately after. Pinned skips stay a frustum-culled non-actionable rig and a dead body.
+- `tests/decoration_dims.test.ts`: `decorationHasCollider` classifies a rock at or above
+  `ROCK_COLLIDER_MIN_SCALE` as solid, one below it as dressing, and every tree/tree2 as solid
+  (colliders.ts gives every trunk a collider unconditionally).
+- `tests/foliage_decimation_core.test.ts`: `survivesLeanDecimation` never drops a solid rock or
+  any tree/tree2 regardless of its hash draw, and still decimates sub-floor dressing rocks (the
+  one decoration kind that can lack a collider) at the tuned keep rate.
+- `tests/foliage_lod.test.ts` ("the lean rock/dressing caps measure from the near edge"): the
+  center rule hid a slab whose near edge is under the player; a camera orbit no longer flips it;
+  the slab still culls once its nearest instance is past the cap; the budget still shrinks the
+  cap; and a sweep of the shipped world's real rock slabs proves most out-radius the lean cap.
+- `tests/foliage_frame_windows_core.test.ts`: the lean rock and dress shader collapse windows
+  EQUAL the bucket caps at every governor level (never the fog wall), the sprite arm is unchanged,
+  and a sprite-arm build whose bake failed keeps those rows to the fog wall.
+- `tests/foliage_lean_cull_wiring.test.ts`: source-scans `foliage.ts` to prove the lean rock and
+  dressing rows register with `nearEdge`, the rock material takes the `rock` window on both arms,
+  every lean dressing kind takes the `dress` window, and the windows resolve through the core.
+- `tests/foliage_decimation_wiring.test.ts`: source-scans `foliage.ts` to prove the leanFoliage
+  decoration filter actually calls `survivesLeanDecimation` and that the old bare
+  `hashAt(d.x, d.z, 83) < keep` shape has not been re-inlined.
+- `tests/foliage_impostor_core.test.ts`: the per-tier real-model radius, and the fairness floor
+  itself, that `SPRITE_SWAP_MIN - IMPOSTOR_SWAP_FADE` stays outside
+  `PLAYER_INTEREST_DROP_RADIUS` on every shipped tier, so no tier's billboard band can reach a
+  distance at which another player exists to be occluded differently.
+- `tests/grass_tuft_cards_core.test.ts`: the per-tier card and triangle ladder, tier
+  monotonicity, that the Advanced Foliage Density dial can never hand a lean session extra
+  cards, and that the knob and the geometry the build actually merges agree.
+- `tests/canopy_detail_tier_core.test.ts`: the per-tier tap ladder and its monotonicity, that
+  the taps knob and the `canopyDetail` flag can never disagree, and that the two arms key
+  distinct programs.
   The band's TYPE is itself actionable, not decoration, which is why the cast-moment stand-down
   answers on any band type rather than stun alone: the `cc` archetype flashes the same yellow
   stars for every control ability, so a rooted victim would otherwise read as stunned for the

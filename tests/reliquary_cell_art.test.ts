@@ -35,7 +35,9 @@ import { WEAPON_SKINS } from '../src/sim/content/weapon_skins';
 import { ITEMS } from '../src/sim/data';
 import { mountItemId } from '../src/sim/mounts';
 import {
+  DEED_ART_PENDING,
   deedImageUrl,
+  ITEM_ART_PENDING,
   iconDataUrl,
   isUnknownIconRecipe,
   itemIconRecipe,
@@ -44,6 +46,7 @@ import {
   weaponIconUrl,
 } from '../src/ui/icons';
 import {
+  RELIQUARY_GOLDEN_HARVEST_IMAGE_URL,
   RELIQUARY_PERFECT_SPECIMEN_IMAGE_URL,
   RELIQUARY_SLAIN_GLYPH_ID,
   RELIQUARY_SLAIN_GLYPH_URL,
@@ -181,14 +184,19 @@ describe('title relics resolve the deed crest', () => {
     expect(art).toEqual({ kind: 'crest', crestId: 'deed_col_reliquary_rank_2' });
   });
 
-  it('routes every title on the shelf to a committed per-deed crest', () => {
+  it('routes every title on the shelf to its per-deed crest, category fallback only while pinned art-pending', () => {
+    // A shelf title without committed art must be an enumerated DEED_ART_PENDING
+    // member (the docs/design/deeds.md "art can trail the deed" contract), never
+    // an unreviewed fallback; those route to their category crest until the
+    // commissioned painting lands. Exactly the Crucible flawless title today.
     const pending = RELIQUARY_HORIZON_TITLES.filter((id) => deedImageUrl(`deed_${id}`) === null);
-    expect(pending, 'the title shelf must not use category fallback art').toEqual([]);
+    expect(pending, 'artless shelf titles must be the pinned art-pending set').toEqual([
+      'dgn_varkhul_flawless',
+    ]);
+    for (const id of pending) expect(DEED_ART_PENDING.has(id), id).toBe(true);
     for (const id of RELIQUARY_HORIZON_TITLES) {
-      expect(reliquaryCellArt({ kind: 'title', id }), id).toEqual({
-        kind: 'crest',
-        crestId: `deed_${id}`,
-      });
+      const crestId = pending.includes(id) ? `deed_cat_${DEEDS[id].category}` : `deed_${id}`;
+      expect(reliquaryCellArt({ kind: 'title', id }), id).toEqual({ kind: 'crest', crestId });
     }
   });
 });
@@ -230,6 +238,12 @@ describe('profession mark relics resolve the profession sheet', () => {
     expect(reliquaryCellArt({ kind: 'mark', id: 'gather_event:moonlit_bloom' })).toEqual({
       kind: 'url',
       url: '/ui/professions/gather_herbalism.webp',
+    });
+    expect(FIELD_NOTE_PROFESSIONS['gather_event:golden_harvest']).toBe('farming');
+    expect(reliquaryCellArt({ kind: 'mark', id: 'gather_event:golden_harvest' })).toEqual({
+      kind: 'url',
+      url: '/ui/professions/gather_farming.webp',
+      fallbackUrl: RELIQUARY_GOLDEN_HARVEST_IMAGE_URL,
     });
   });
 });
@@ -460,6 +474,13 @@ describe('unknown ids fall through to the caller fallback', () => {
     expect(skin !== null && reliquaryCellArtOpaque(skin)).toBe(true);
     for (const id of RELIQUARY_HORIZON_TITLES) {
       const painted = reliquaryCellArt({ kind: 'title', id });
+      // Art-pending shelf titles ride their category crest and are opaque
+      // (procedural radial); every painted title is bespoke and dark-card.
+      if (DEED_ART_PENDING.has(id)) {
+        expect(painted).toEqual({ kind: 'crest', crestId: `deed_cat_${DEEDS[id].category}` });
+        expect(painted !== null && reliquaryCellArtOpaque(painted), id).toBe(true);
+        continue;
+      }
       expect(painted).toEqual({ kind: 'crest', crestId: `deed_${id}` });
       expect(painted !== null && reliquaryCellArtOpaque(painted), id).toBe(false);
     }
@@ -483,22 +504,30 @@ describe('unknown ids fall through to the caller fallback', () => {
     expect(crests, 'anti-vacuity: the titles shelf really contributed crests').toBeGreaterThan(30);
   });
 
-  it('every catalogued item relic resolves to a COMMITTED dark-card pipeline', () => {
-    // The item arm of reliquaryCellArtOpaque answers false uncondition-
-    // ally, resting on this premise: every item the catalog can show ships
-    // either a /ui/items webp (non-weapons, alpha-less but dark-card) or a
-    // /ui/weapons rendered-model jpg (weapons via ITEM_WEAPON_VARIANTS,
-    // measured dark: mean luma ~25/255), both of which stay legible under
-    // the silhouette darken. A catalogued item that falls through to the
-    // procedural compositor instead would paint an opaque radial tile, so
-    // the FIRST such relic reds here and must extend the predicate rather
-    // than land silently on the wrong filter.
+  it('every catalogued item relic is dark-card committed art or an enumerated art-pending opaque', () => {
+    // Nearly every item the catalog can show ships one of two committed
+    // dark-card pipelines: a /ui/items webp (non-weapons, alpha-less but
+    // dark-card) or a /ui/weapons rendered-model jpg (weapons via
+    // ITEM_WEAPON_VARIANTS, measured dark: mean luma ~25/255), both of which
+    // stay legible under the silhouette darken. A catalogued item that falls
+    // through to the procedural compositor instead paints an OPAQUE radial
+    // tile, which must not be darkened as though it were a cutout.
+    //
+    // Check both directions: reliquaryCellArtOpaque must agree with the live
+    // pipeline, and any procedural relic must be explicitly enumerated in
+    // ITEM_ART_PENDING. The completed Masterwrought wave leaves that list
+    // empty today, while the guard still catches a future unpainted catalog
+    // item by name.
     const procedural: string[] = [];
     let itemsWebp = 0;
     let weaponsJpg = 0;
     for (const slot of CATALOG_SLOTS) {
       const art = reliquaryCellArt(slot);
       if (art === null || art.kind !== 'item') continue;
+      const committed = itemImageUrl(art.itemId) !== null || weaponIconUrl(art.itemId) !== null;
+      // The pipeline and the predicate must never disagree: a committed
+      // painting is darkened, a parked one is not.
+      expect(reliquaryCellArtOpaque(art), art.itemId).toBe(!committed);
       if (itemImageUrl(art.itemId) !== null) itemsWebp += 1;
       else if (weaponIconUrl(art.itemId) !== null) weaponsJpg += 1;
       else procedural.push(art.itemId);
@@ -511,10 +540,21 @@ describe('unknown ids fall through to the caller fallback', () => {
     expect(weaponsJpg, 'anti-vacuity: the weapons-jpg pipeline really contributed').toBeGreaterThan(
       10,
     );
+    // Every procedural relic must be an enumerated ITEM_ART_PENDING member; an
+    // unenumerated one reds here by name.
+    for (const itemId of procedural) {
+      expect(
+        ITEM_ART_PENDING.has(itemId),
+        `${itemId} has only procedural art and is not an enumerated ITEM_ART_PENDING member`,
+      ).toBe(true);
+    }
+    // The completion wave leaves no catalogued relic on procedural art. Any
+    // future growth is a deliberate exact-set edit here and in the debt ledger.
     expect(
       procedural,
-      `catalogued item relics with only procedural art (extend reliquaryCellArtOpaque):\n${procedural.join('\n')}`,
+      `catalogued item relics with only procedural art (park them here deliberately):\n${procedural.join('\n')}`,
     ).toEqual([]);
+    expect(procedural).toHaveLength(0);
   });
 
   it('preserves the item passthrough for a real item id (behavior unchanged)', () => {
@@ -667,6 +707,8 @@ function makeRig(seed: { recent?: string[]; marks?: string[] } = {}): ArtRig {
     captureFocus: () => opener,
     restoreFocus: () => {},
     onPinChanged: () => {},
+    trackerShown: () => true,
+    setTrackerShown: () => {},
     // The production body verbatim (Hud.itemIcon is `knownItemIconHtml(item)`,
     // pinned below), so the markup these tests read is the markup a player gets.
     itemIcon: (item) => knownItemIconHtml(item),
@@ -708,8 +750,10 @@ describe('ReliquaryWindow cell markup', () => {
       .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
       .map((line) => line.replace(/\s\/\/.*$/, ''))
       .join('\n');
+    // The dep widened at the phase 13 QA (the copy's effective quality rides
+    // to the rim); the delegation to knownItemIconHtml is the pinned half.
     expect(hud).toMatch(
-      /private itemIcon\(item: ItemDef\): string \{\s*return knownItemIconHtml\(item\);/,
+      /private itemIcon\(item: ItemDef, quality\?: ItemDef\['quality'\]\): string \{\s*return knownItemIconHtml\(item, quality\);/,
     );
   });
 

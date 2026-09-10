@@ -25,11 +25,17 @@
 // `src/sim`-pure: no DOM/Three/render/ui/game/net imports, no Math.random/Date.now
 // (enforced by tests/architecture.test.ts).
 
+import { questGateBlocksAggro } from '../mob/quest_gated_aggro';
 import type { SimContext } from '../sim_context';
 import { addThreat, HEAL_THREAT_FACTOR } from '../threat';
 import type { Entity } from '../types';
+import { onCraftedCollectionHeal } from './crafted_collection_effects';
 import { runWeaponProcs } from './equip_procs';
-import { BEACON_HEAL_FRACTION, BEACON_OF_LIGHT_NAME, beaconTransferTarget } from './paladin_beacon';
+import {
+  BEACON_OF_LIGHT_NAME,
+  beaconTransferFraction,
+  beaconTransferTarget,
+} from './paladin_beacon';
 import { paladinHealingDoneMultiplier } from './paladin_support';
 import { onSpellCrit } from './talent_procs';
 
@@ -143,6 +149,9 @@ export function applyHeal(
   // double-count. Rides the event for parses (fidelity 7.1).
   const overheal = beforeClamp - healed;
   target.hp += healed;
+  if (abilityId !== 'enchant_weapon_lastflame_zeal') {
+    onCraftedCollectionHeal(ctx, source, target, overheal);
+  }
   ctx.emit({
     type: 'heal2',
     sourceId: source.id,
@@ -178,10 +187,15 @@ function applyBeaconTransfer(
   const beacon = beaconTransferTarget(ctx, source, healedTarget);
   if (!beacon) return;
 
-  let healed = Math.round(effectiveHeal * BEACON_HEAL_FRACTION * healingTakenMult(ctx, beacon));
+  // The fraction reads from the PLACED beacon aura (Dawnforged 2pc bakes the
+  // wearer's 0.55 there at placement), so this arithmetic and the aura value
+  // are always the same number.
+  const fraction = beaconTransferFraction(beacon, source.id);
+  let healed = Math.round(effectiveHeal * fraction * healingTakenMult(ctx, beacon));
   healed = consumeHealAbsorb(ctx, beacon, healed);
   const intended = healed;
   healed = Math.min(healed, beacon.maxHp - beacon.hp);
+  onCraftedCollectionHeal(ctx, source, beacon, intended - healed);
   if (healed <= 0) return;
   beacon.hp += healed;
   const overheal = intended - healed;
@@ -211,6 +225,7 @@ export function healingThreat(
   const aware: Entity[] = [];
   for (const m of ctx.entities.values()) {
     if (m.kind !== 'mob' || m.dead || !m.hostile || !m.inCombat || m.threat.size === 0) continue;
+    if (questGateBlocksAggro(ctx.players, m, source)) continue;
     if (threatEntryMatchesEntity(ctx, m, target)) aware.push(m);
   }
   if (aware.length === 0) return;

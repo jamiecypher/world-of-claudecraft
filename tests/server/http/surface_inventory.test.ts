@@ -170,6 +170,10 @@ const REGISTRY_ONLY_PARAM_PATHS = new Set([
   // surface, so admin.ts holds no `*Match` regex for them either.
   '/admin/api/moderation/accounts/:id/cheater-mark',
   '/admin/api/moderation/accounts/:id/lift-cheater-mark',
+  // The phase 13 legendary-name strip, same registry-only shape.
+  '/admin/api/moderation/characters/:id/clear-item-name',
+  // The admin-panel kick: the same registry-only shape (server/admin_kick_api.ts).
+  '/admin/api/moderation/accounts/:id/kick',
 ]);
 const registryExactPaths = new Set(
   apiRoutes
@@ -180,6 +184,30 @@ const registryExactPaths = new Set(
     )
     .map((r) => r.path),
 );
+// Registry-only RouteDefs with a `:param` pattern (the woc_market family)
+// dispatch through the router's compiled pattern, never a source regex, so
+// their ledger rows join the expected set by registry path, exactly like the
+// exact-path RouteDefs above. A migrated dual-arm route keeps riding its
+// legacy regex row instead (the match-source comparison below), so only
+// param routes with NO regex twin in the ledger join here; a brand-new
+// registry param route with no ledger row at all still fails the equality.
+const inventoryRegexHumanPaths = new Set(
+  SURFACE_INVENTORY.filter((r) => r.match).map((r) => r.path),
+);
+// The one migrated route whose registry path differs from its ledger rows: the
+// moderation enum alternation was rewritten to :action (see completeness.test.ts
+// enumToActionParam), so its regex rows carry the enumerated human paths.
+inventoryRegexHumanPaths.add('/admin/api/moderation/accounts/:id/:action');
+const registryParamPaths = new Set(
+  apiRoutes
+    .filter(
+      (r) =>
+        r.path.includes(':') &&
+        !inventoryUnreachablePaths.has(r.path) &&
+        !inventoryRegexHumanPaths.has(r.path),
+    )
+    .map((r) => r.path),
+);
 
 describe('surface inventory: route-count freshness gate', () => {
   it('exact dispatched paths in source equal the inventory exact paths', () => {
@@ -187,6 +215,7 @@ describe('surface inventory: route-count freshness gate', () => {
     // Guard against a vacuous pass: the scan must actually find routes.
     expect(fromSource.size).toBeGreaterThan(50);
     for (const p of registryExactPaths) fromSource.add(p);
+    for (const p of registryParamPaths) fromSource.add(p);
     expect(sorted(fromSource)).toEqual(sorted(inventoryExactPaths));
   });
 

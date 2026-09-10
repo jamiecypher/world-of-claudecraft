@@ -77,6 +77,9 @@ type DisplayGlobalKey = Exclude<
   | 'barrierDrPct'
   | 'manaDefCdrPer10'
   | 'blinkCast'
+  // Set-bonus rider only (the Crucible caster/healer 2pc pushback immunity);
+  // never a talent-row stat line, so it needs no per-locale label.
+  | 'castPushbackReduction'
   | 'convergence'
   | 'ignitionPct'
   | 'manaPct'
@@ -178,6 +181,17 @@ export interface TalentLocaleText {
   roleLabels: Record<'tank' | 'healer' | 'dps', string>;
   perRank: string;
   noEffect: string;
+  // Localized connector words the generator splices between two label fragments in
+  // effectDescription/procDescription and their helpers, replacing the raw ASCII
+  // shorthand (@, ->, <=, >=) those functions used to hardcode regardless of locale.
+  // Kept as plain words rather than templates, matching statLabels: the surrounding
+  // sentence order is already English-structured for every locale, so a connector
+  // function could not reorder anything a caller does not already fix in place.
+  whileWord: string;
+  vsWord: string;
+  thenWord: string;
+  upToWord: string;
+  atLeastWord: string;
   chooseOne: (name: string) => string;
   specDescription: (className: string, role: string, abilityName: string) => string;
   // Hand-authored flavor prose per spec id, keyed exactly like the English
@@ -202,7 +216,9 @@ const grantAbilityIdByTitle = new Map(
     rows.flatMap((row) =>
       row.options.flatMap((option) => {
         const abilityId = option.effect.grant?.ability;
-        return abilityId ? ([[option.name, abilityId]] as const) : [];
+        return abilityId && ABILITIES[abilityId]?.name === option.name
+          ? ([[option.name, abilityId]] as const)
+          : [];
       }),
     ),
   ),
@@ -246,6 +262,11 @@ const enText: TalentLocaleText = {
   roleLabels: { tank: 'tank', healer: 'healer', dps: 'damage' },
   perRank: ' per rank',
   noEffect: 'Provides a specialization benefit.',
+  whileWord: 'while',
+  vsWord: 'vs.',
+  thenWord: 'then',
+  upToWord: 'up to',
+  atLeastWord: 'at least',
   specDescriptions: {
     fire: 'A master of flame who chains critical strikes into devastating explosions. Fast, aggressive, and capable of igniting many enemies.',
     frost:
@@ -304,6 +325,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'tanque', healer: 'sanación', dps: 'daño' },
     perRank: ' por rango',
     noEffect: 'Aporta una ventaja de especialización.',
+    whileWord: 'mientras',
+    vsWord: 'contra',
+    thenWord: 'luego',
+    upToWord: 'hasta',
+    atLeastWord: 'al menos',
     chooseOne: (name) => `Elige una opción de ${name}.`,
     specDescription: (className, role, abilityName) =>
       `Especialización de ${className} centrada en ${role}. Habilidad distintiva: ${abilityName}.`,
@@ -372,6 +398,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'tank', healer: 'soigneur', dps: 'dégâts' },
     perRank: ' par rang',
     noEffect: 'Apporte un avantage de spécialisation.',
+    whileWord: 'pendant',
+    vsWord: 'contre',
+    thenWord: 'puis',
+    upToWord: "jusqu'à",
+    atLeastWord: 'au moins',
     chooseOne: (name) => `Choisissez une option de ${name}.`,
     specDescription: (className, role, abilityName) =>
       `Spécialisation de ${className} axée sur ${role}. Technique signature : ${abilityName}.`,
@@ -422,6 +453,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'difesa', healer: 'cura', dps: 'danno' },
     perRank: ' per grado',
     noEffect: 'Fornisce un beneficio di specializzazione.',
+    whileWord: 'durante',
+    vsWord: 'contro',
+    thenWord: 'poi',
+    upToWord: 'fino a',
+    atLeastWord: 'almeno',
     chooseOne: (name) => `Scegli un'opzione di ${name}.`,
     specDescription: (className, role, abilityName) =>
       `Specializzazione da ${className} concentrata su ${role}. Abilità distintiva: ${abilityName}.`,
@@ -472,6 +508,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'Tank', healer: 'Heilung', dps: 'Schaden' },
     perRank: ' pro Rang',
     noEffect: 'Gewährt einen Spezialisierungsvorteil.',
+    whileWord: 'während',
+    vsWord: 'gegen',
+    thenWord: 'dann',
+    upToWord: 'bis zu',
+    atLeastWord: 'mindestens',
     chooseOne: (name) => `Wähle eine Option für ${name}.`,
     specDescription: (className, role, abilityName) =>
       `${className}-Spezialisierung mit Fokus auf ${role}. Signaturfähigkeit: ${abilityName}.`,
@@ -522,6 +563,11 @@ const localeTextByBase = {
     roleLabels: { tank: '坦克', healer: '治疗', dps: '伤害输出' },
     perRank: '/每级',
     noEffect: '提供一个专精增益。',
+    whileWord: '期间',
+    vsWord: '对',
+    thenWord: '然后',
+    upToWord: '至多',
+    atLeastWord: '至少',
     chooseOne: (name) => `选择一个${name}选项。`,
     specDescription: (className, role, abilityName) =>
       `${className}专精，侧重${role}。标志技能：${abilityName}。`,
@@ -572,6 +618,11 @@ const localeTextByBase = {
     roleLabels: { tank: '坦克', healer: '治療', dps: '傷害輸出' },
     perRank: '/每級',
     noEffect: '提供一個專精增益。',
+    whileWord: '期間',
+    vsWord: '對',
+    thenWord: '然後',
+    upToWord: '至多',
+    atLeastWord: '至少',
     chooseOne: (name) => `選擇一個${name}選項。`,
     specDescription: (className, role, abilityName) =>
       `${className}專精，側重${role}。代表技能：${abilityName}。`,
@@ -622,6 +673,11 @@ const localeTextByBase = {
     roleLabels: { tank: '방어', healer: '치유', dps: '피해' },
     perRank: '/등급',
     noEffect: '전문화 보너스를 제공합니다.',
+    whileWord: '중',
+    vsWord: '대상',
+    thenWord: '그 후',
+    upToWord: '최대',
+    atLeastWord: '최소',
     chooseOne: (name) => `${name} 선택지 하나를 고르세요.`,
     specDescription: (className, role, abilityName) =>
       `${role}에 집중하는 ${className} 전문화입니다. 대표 능력: ${abilityName}.`,
@@ -672,6 +728,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'タンク', healer: '回復', dps: 'ダメージ' },
     perRank: '/ランク',
     noEffect: '専門化ボーナスを提供します。',
+    whileWord: '中',
+    vsWord: '対象',
+    thenWord: 'その後',
+    upToWord: '最大',
+    atLeastWord: '最低',
     chooseOne: (name) => `${name}の選択肢を1つ選びます。`,
     specDescription: (className, role, abilityName) =>
       `${role}に重点を置く${className}専門化。シグネチャ能力: ${abilityName}。`,
@@ -722,6 +783,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'tanque', healer: 'cura', dps: 'dano' },
     perRank: ' por grau',
     noEffect: 'Concede um benefício de especialização.',
+    whileWord: 'durante',
+    vsWord: 'contra',
+    thenWord: 'então',
+    upToWord: 'até',
+    atLeastWord: 'pelo menos',
     chooseOne: (name) => `Escolha uma opção de ${name}.`,
     specDescription: (className, role, abilityName) =>
       `Especialização de ${className} focada em ${role}. Habilidade assinatura: ${abilityName}.`,
@@ -772,6 +838,11 @@ const localeTextByBase = {
     roleLabels: { tank: 'защиту', healer: 'исцеление', dps: 'урон' },
     perRank: ' за ранг',
     noEffect: 'Дает бонус специализации.',
+    whileWord: 'во время',
+    vsWord: 'против',
+    thenWord: 'затем',
+    upToWord: 'до',
+    atLeastWord: 'не менее',
     chooseOne: (name) => `Выберите один вариант для ${name}.`,
     specDescription: (className, role, abilityName) =>
       `Специализация класса ${className} с упором на ${role}. Ключевая способность: ${abilityName}.`,
@@ -1040,7 +1111,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Disparo Dividido',
     Springwell: 'Manantial',
     'Startle Shot': 'Disparo Sobresaltante',
-    'Storm Bolt': 'Proyectil de Tormenta',
+    Thunderhurl: 'Proyectil de Tormenta',
     'Storm Chorus': 'Tambores de Guerra',
     'Survival of the Fittest': 'Supervivencia del más apto',
     'Swift Verdicts': 'Veredictos veloces',
@@ -1051,7 +1122,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Fe retorcida',
     Typhoon: 'Tifón',
     'Vengeful Exorcism': 'Exorcismo vengativo',
-    'Victory Rush': 'Ímpetu de Victoria',
+    "Victor's Surge": 'Ímpetu de Victoria',
     Voidfeast: 'Festín del Vacío',
     Warbringer: 'Portador de guerra',
     'Weapon Fury': 'Furia de armas',
@@ -1315,7 +1386,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Concentración elemental',
     'Primal Heart': 'Corazón de lo salvaje',
     'Primal Mastery': 'Maestría elemental',
-    'Punishing Blows': 'Golpes de cruzado',
     'Pyre Tender': 'Piromántico',
     Pyromancy: 'Fuego',
     Quickblood: 'Reflejos relámpago',
@@ -1385,7 +1455,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Extracción de espíritu',
     'Spiked Harness': 'Armadura con cuchillas',
     'Spiritforged Arms': 'Armas espirituales',
-    Spiritmend: 'Restauración',
+    Spiritcall: 'Restauración',
     Splinterfrost: 'Esquirlas de hielo',
     Springflood: 'Marea de maná',
     'Stalwart Shield': 'Especialización en escudo',
@@ -1447,7 +1517,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Devastación',
     'Wraith Strike': 'Golpe Espectral',
     'Wrathful Psalm': 'Furia divina',
-    Wrathwing: 'Ala de Venganza',
+    Zealwing: 'Ala de Venganza',
   },
   es_ES: {
     'Adrenaline Junkie': 'Adicto a la adrenalina',
@@ -1553,7 +1623,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Disparo Dividido',
     Springwell: 'Manantial',
     'Startle Shot': 'Disparo Sobresaltante',
-    'Storm Bolt': 'Proyectil de Tormenta',
+    Thunderhurl: 'Proyectil de Tormenta',
     'Storm Chorus': 'Tambores de Guerra',
     'Survival of the Fittest': 'Supervivencia del más apto',
     'Swift Verdicts': 'Veredictos veloces',
@@ -1564,7 +1634,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Fe retorcida',
     Typhoon: 'Tifón',
     'Vengeful Exorcism': 'Exorcismo vengativo',
-    'Victory Rush': 'Ímpetu de Victoria',
+    "Victor's Surge": 'Ímpetu de Victoria',
     Voidfeast: 'Festín del Vacío',
     Warbringer: 'Portador de guerra',
     'Weapon Fury': 'Furia de armas',
@@ -1828,7 +1898,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Enfoque elemental',
     'Primal Heart': 'Corazón de lo salvaje',
     'Primal Mastery': 'Maestría elemental',
-    'Punishing Blows': 'Golpes de cruzado',
     'Pyre Tender': 'Piromántico',
     Pyromancy: 'Fuego',
     Quickblood: 'Reflejos relámpago',
@@ -1898,7 +1967,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Toque de espíritu',
     'Spiked Harness': 'Armadura con cuchillas',
     'Spiritforged Arms': 'Armas espirituales',
-    Spiritmend: 'Restauración',
+    Spiritcall: 'Restauración',
     Splinterfrost: 'Esquirlas de hielo',
     Springflood: 'Marea de maná',
     'Stalwart Shield': 'Especialización con escudo',
@@ -1960,7 +2029,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Devastación',
     'Wraith Strike': 'Golpe Espectral',
     'Wrathful Psalm': 'Furia divina',
-    Wrathwing: 'Ala de Venganza',
+    Zealwing: 'Ala de Venganza',
   },
   fr_FR: {
     Sentence: 'Sentence',
@@ -2067,7 +2136,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Tir fendu',
     Springwell: 'Puits de source',
     'Startle Shot': 'Tir de stupeur',
-    'Storm Bolt': 'Projectile-tempête',
+    Thunderhurl: 'Projectile-tempête',
     'Storm Chorus': 'Tambours de guerre',
     'Survival of the Fittest': 'Survie du plus apte',
     'Swift Verdicts': 'Verdicts rapides',
@@ -2078,7 +2147,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Foi distordue',
     Typhoon: 'Typhon',
     'Vengeful Exorcism': 'Exorcisme vengeur',
-    'Victory Rush': 'Ruée victorieuse',
+    "Victor's Surge": 'Ruée victorieuse',
     Voidfeast: 'Festin du Vide',
     Warbringer: 'Porte-guerre',
     'Weapon Fury': 'Fureur des armes',
@@ -2342,7 +2411,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Concentration élémentaire',
     'Primal Heart': 'Cœur du fauve',
     'Primal Mastery': 'Maîtrise élémentaire',
-    'Punishing Blows': 'Frappes du croisé',
     'Pyre Tender': 'Pyromancien',
     Pyromancy: 'Feu',
     Quickblood: 'Réflexes foudroyants',
@@ -2412,7 +2480,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: "Ponction d'esprit",
     'Spiked Harness': 'Armure à lames',
     'Spiritforged Arms': 'Armes spirituelles',
-    Spiritmend: 'Restauration',
+    Spiritcall: 'Restauration',
     Splinterfrost: 'Éclats de glace',
     Springflood: 'Marée de mana',
     'Stalwart Shield': 'Spécialisation bouclier',
@@ -2474,7 +2542,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Dévastation',
     'Wraith Strike': 'Frappe spectrale',
     'Wrathful Psalm': 'Fureur divine',
-    Wrathwing: 'Aile vengeresse',
+    Zealwing: 'Aile vengeresse',
   },
   fr_CA: {
     Sentence: 'Sentence',
@@ -2581,7 +2649,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Tir fendu',
     Springwell: 'Puits de source',
     'Startle Shot': 'Tir de stupeur',
-    'Storm Bolt': 'Projectile-tempête',
+    Thunderhurl: 'Projectile-tempête',
     'Storm Chorus': 'Tambours de guerre',
     'Survival of the Fittest': 'Survie du plus apte',
     'Swift Verdicts': 'Verdicts rapides',
@@ -2592,7 +2660,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Foi distordue',
     Typhoon: 'Typhon',
     'Vengeful Exorcism': 'Exorcisme vengeur',
-    'Victory Rush': 'Ruée victorieuse',
+    "Victor's Surge": 'Ruée victorieuse',
     Voidfeast: 'Festin du Vide',
     Warbringer: 'Porte-guerre',
     'Weapon Fury': 'Fureur des armes',
@@ -2856,7 +2924,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Focalisation élémentaire',
     'Primal Heart': 'Cœur sauvage',
     'Primal Mastery': 'Maîtrise élémentaire',
-    'Punishing Blows': 'Frappes du croisé',
     'Pyre Tender': 'Pyromancien',
     Pyromancy: 'Feu',
     Quickblood: 'Réflexes foudroyants',
@@ -2926,7 +2993,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Connexion spirituelle',
     'Spiked Harness': 'Armure lamée',
     'Spiritforged Arms': 'Armes spirituelles',
-    Spiritmend: 'Restauration',
+    Spiritcall: 'Restauration',
     Splinterfrost: 'Éclats de glace',
     Springflood: 'Marée de mana',
     'Stalwart Shield': 'Spécialisation du bouclier',
@@ -2988,7 +3055,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Dévastation',
     'Wraith Strike': 'Frappe spectrale',
     'Wrathful Psalm': 'Fureur divine',
-    Wrathwing: 'Aile vengeresse',
+    Zealwing: 'Aile vengeresse',
   },
   it_IT: {
     Sentence: 'Sentence',
@@ -3095,7 +3162,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Tiro Sdoppiato',
     Springwell: 'Fonte Viva',
     'Startle Shot': 'Tiro Sconcertante',
-    'Storm Bolt': 'Dardo della Tempesta',
+    Thunderhurl: 'Dardo della Tempesta',
     'Storm Chorus': 'Tamburi di Guerra',
     'Survival of the Fittest': 'Sopravvivenza del più adatto',
     'Swift Verdicts': 'Verdetti rapidi',
@@ -3106,7 +3173,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Fede contorta',
     Typhoon: 'Tifone',
     'Vengeful Exorcism': 'Esorcismo vendicativo',
-    'Victory Rush': 'Impeto della Vittoria',
+    "Victor's Surge": 'Impeto della Vittoria',
     Voidfeast: 'Banchetto del Vuoto',
     Warbringer: 'Araldo di guerra',
     'Weapon Fury': 'Furia delle armi',
@@ -3370,7 +3437,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Concentrazione elementale',
     'Primal Heart': 'Cuore della natura',
     'Primal Mastery': 'Maestria elementale',
-    'Punishing Blows': 'Colpi del crociato',
     'Pyre Tender': 'Piromante',
     Pyromancy: 'Fuoco',
     Quickblood: 'Riflessi fulminei',
@@ -3440,7 +3506,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Attingere allo Spirito',
     'Spiked Harness': 'Armatura lamata',
     'Spiritforged Arms': 'Armi spirituali',
-    Spiritmend: 'Ripristino',
+    Spiritcall: 'Ripristino',
     Splinterfrost: 'Schegge di ghiaccio',
     Springflood: 'Marea di mana',
     'Stalwart Shield': 'Specializzazione con scudo',
@@ -3502,7 +3568,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Devastazione',
     'Wraith Strike': 'Colpo Spettrale',
     'Wrathful Psalm': 'Furia divina',
-    Wrathwing: 'Alavendetta',
+    Zealwing: 'Alavendetta',
   },
   de_DE: {
     Sentence: 'Sentence',
@@ -3609,7 +3675,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Spaltschuss',
     Springwell: 'Quellbrunnen',
     'Startle Shot': 'Schreckschuss',
-    'Storm Bolt': 'Sturmblitz',
+    Thunderhurl: 'Sturmblitz',
     'Storm Chorus': 'Kriegstrommeln',
     'Survival of the Fittest': 'Überleben des Stärkeren',
     'Swift Verdicts': 'Schnelle Urteile',
@@ -3620,7 +3686,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Verdrehter Glaube',
     Typhoon: 'Taifun',
     'Vengeful Exorcism': 'Rachsüchtiger Exorzismus',
-    'Victory Rush': 'Siegesrausch',
+    "Victor's Surge": 'Siegesrausch',
     Voidfeast: 'Leerenmahl',
     Warbringer: 'Kriegsbringer',
     'Weapon Fury': 'Waffenfuror',
@@ -3884,7 +3950,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Elementarfokus',
     'Primal Heart': 'Herz der Wildnis',
     'Primal Mastery': 'Beherrschung der Elemente',
-    'Punishing Blows': 'Schläge des Kreuzfahrers',
     'Pyre Tender': 'Pyromant',
     Pyromancy: 'Feuer',
     Quickblood: 'Blitzschnelle Reflexe',
@@ -3954,7 +4019,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Anzapfen des Geistes',
     'Spiked Harness': 'Klingenrüstung',
     'Spiritforged Arms': 'Geistwaffen',
-    Spiritmend: 'Wiederherstellung',
+    Spiritcall: 'Wiederherstellung',
     Splinterfrost: 'Eissplitter',
     Springflood: 'Manaflut',
     'Stalwart Shield': 'Schildspezialisierung',
@@ -4016,7 +4081,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Verwüstung',
     'Wraith Strike': 'Geisterschlag',
     'Wrathful Psalm': 'Göttlicher Furor',
-    Wrathwing: 'Zornschwinge',
+    Zealwing: 'Zornschwinge',
   },
   zh_CN: {
     'Adrenaline Junkie': '肾上腺狂徒',
@@ -4122,7 +4187,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: '分裂射击',
     Springwell: '泉涌',
     'Startle Shot': '惊扰射击',
-    'Storm Bolt': '风暴之锤',
+    Thunderhurl: '雷霆投掷',
     'Storm Chorus': '战鼓',
     'Survival of the Fittest': '适者生存',
     'Swift Verdicts': '迅捷裁决',
@@ -4133,7 +4198,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': '扭曲信仰',
     Typhoon: '台风',
     'Vengeful Exorcism': '复仇驱邪',
-    'Victory Rush': '乘胜追击',
+    "Victor's Surge": '胜者之势',
     Voidfeast: '虚空盛宴',
     Warbringer: '战争使者',
     'Weapon Fury': '武器狂怒',
@@ -4397,7 +4462,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': '元素专注',
     'Primal Heart': '野性之心',
     'Primal Mastery': '元素掌握',
-    'Punishing Blows': '十字军打击',
     'Pyre Tender': '炎术师',
     Pyromancy: '火焰',
     Quickblood: '闪电反射',
@@ -4467,7 +4531,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: '精神分流',
     'Spiked Harness': '利刃护甲',
     'Spiritforged Arms': '精神武器',
-    Spiritmend: '恢复',
+    Spiritcall: '唤灵',
     Splinterfrost: '冰霜碎片',
     Springflood: '法力之潮',
     'Stalwart Shield': '盾牌专精',
@@ -4529,7 +4593,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: '毁坏',
     'Wraith Strike': '幽魂打击',
     'Wrathful Psalm': '神圣狂怒',
-    Wrathwing: '复仇之翼',
+    Zealwing: '热诚之翼',
   },
   zh_TW: {
     'Adrenaline Junkie': '腎上腺狂徒',
@@ -4635,7 +4699,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: '分裂射擊',
     Springwell: '泉湧',
     'Startle Shot': '驚擾射擊',
-    'Storm Bolt': '風暴之錘',
+    Thunderhurl: '雷霆投擲',
     'Storm Chorus': '戰鼓',
     'Survival of the Fittest': '適者生存',
     'Swift Verdicts': '迅捷裁決',
@@ -4646,7 +4710,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': '扭曲信仰',
     Typhoon: '颱風',
     'Vengeful Exorcism': '復仇驅邪',
-    'Victory Rush': '乘勝追擊',
+    "Victor's Surge": '勝者之勢',
     Voidfeast: '虛空盛宴',
     Warbringer: '戰爭使者',
     'Weapon Fury': '武器狂怒',
@@ -4910,7 +4974,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': '元素專注',
     'Primal Heart': '野性之心',
     'Primal Mastery': '元素掌握',
-    'Punishing Blows': '十字軍打擊',
     'Pyre Tender': '火法師',
     Pyromancy: '火焰',
     Quickblood: '閃電反射',
@@ -4980,7 +5043,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: '精神汲取',
     'Spiked Harness': '利刃護甲',
     'Spiritforged Arms': '精神武器',
-    Spiritmend: '恢復',
+    Spiritcall: '喚靈',
     Splinterfrost: '寒冰碎片',
     Springflood: '法力之潮',
     'Stalwart Shield': '盾牌專精',
@@ -5042,7 +5105,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: '摧殘',
     'Wraith Strike': '幽魂打擊',
     'Wrathful Psalm': '神聖狂怒',
-    Wrathwing: '復仇之翼',
+    Zealwing: '熱誠之翼',
   },
   ko_KR: {
     'Adrenaline Junkie': '아드레날린 광신자',
@@ -5148,7 +5211,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: '분산 사격',
     Springwell: '샘물',
     'Startle Shot': '기습 사격',
-    'Storm Bolt': '폭풍 망치',
+    Thunderhurl: '우레 투척',
     'Storm Chorus': '전쟁 북',
     'Survival of the Fittest': '적자생존',
     'Swift Verdicts': '신속한 심판',
@@ -5159,7 +5222,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': '뒤틀린 신앙',
     Typhoon: '태풍',
     'Vengeful Exorcism': '복수의 퇴마',
-    'Victory Rush': '연전연승',
+    "Victor's Surge": '승자의 쇄도',
     Voidfeast: '공허의 포식',
     Warbringer: '전쟁인도자',
     'Weapon Fury': '무기 격노',
@@ -5423,7 +5486,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': '정기 집중',
     'Primal Heart': '야생의 심장',
     'Primal Mastery': '정기 숙련',
-    'Punishing Blows': '성전사의 일격',
     'Pyre Tender': '화염술사',
     Pyromancy: '화염',
     Quickblood: '번개 반사 신경',
@@ -5493,7 +5555,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: '정신력 흡수',
     'Spiked Harness': '칼날 방어구',
     'Spiritforged Arms': '정신 무기',
-    Spiritmend: '회복',
+    Spiritcall: '영혼의 부름',
     Splinterfrost: '얼음 파편',
     Springflood: '마나 해일',
     'Stalwart Shield': '방패 전문화',
@@ -5555,7 +5617,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: '파괴력',
     'Wraith Strike': '망령의 일격',
     'Wrathful Psalm': '신성한 분노',
-    Wrathwing: '응징의 날개',
+    Zealwing: '열정의 날개',
   },
   ja_JP: {
     'Adrenaline Junkie': '熱血中毒',
@@ -5661,7 +5723,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: '分裂射撃',
     Springwell: '湧き水',
     'Startle Shot': '驚愕射撃',
-    'Storm Bolt': '嵐の一投',
+    Thunderhurl: '雷の一投',
     'Storm Chorus': '戦の太鼓',
     'Survival of the Fittest': '適者生存',
     'Swift Verdicts': '迅速な裁き',
@@ -5672,7 +5734,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': '歪んだ信仰',
     Typhoon: 'タイフーン',
     'Vengeful Exorcism': '復讐の祓魔',
-    'Victory Rush': '勝利の追撃',
+    "Victor's Surge": '勝者の奔流',
     Voidfeast: '虚無の饗宴',
     Warbringer: '戦運び',
     'Weapon Fury': '武器の憤怒',
@@ -5936,7 +5998,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': '元素集中',
     'Primal Heart': '野生の心',
     'Primal Mastery': '元素熟達',
-    'Punishing Blows': 'クルセイダー・ストライク',
     'Pyre Tender': 'パイロマンサー',
     Pyromancy: '火炎',
     Quickblood: '電光石火の反射神経',
@@ -6006,7 +6067,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: '精神汲み取り',
     'Spiked Harness': '刃の防具',
     'Spiritforged Arms': '精霊の武器',
-    Spiritmend: '回復',
+    Spiritcall: '精霊呼び',
     Splinterfrost: '氷の破片',
     Springflood: 'マナの潮流',
     'Stalwart Shield': '盾専門化',
@@ -6068,7 +6129,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: '破滅的猛攻',
     'Wraith Strike': '亡霊の一撃',
     'Wrathful Psalm': '神聖憤怒',
-    Wrathwing: '復讐の翼',
+    Zealwing: '熱誠の翼',
   },
   pt_BR: {
     Sentence: 'Sentence',
@@ -6175,7 +6236,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Disparo Dividido',
     Springwell: 'Fonte Viva',
     'Startle Shot': 'Tiro de Sobressalto',
-    'Storm Bolt': 'Míssil da Tempestade',
+    Thunderhurl: 'Míssil da Tempestade',
     'Storm Chorus': 'Tambores de Guerra',
     'Survival of the Fittest': 'Sobrevivência do mais apto',
     'Swift Verdicts': 'Vereditos velozes',
@@ -6186,7 +6247,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Fé distorcida',
     Typhoon: 'Tufão',
     'Vengeful Exorcism': 'Exorcismo vingativo',
-    'Victory Rush': 'Ímpeto da Vitória',
+    "Victor's Surge": 'Ímpeto da Vitória',
     Voidfeast: 'Banquete do Vazio',
     Warbringer: 'Arauto da guerra',
     'Weapon Fury': 'Fúria das armas',
@@ -6450,7 +6511,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Foco Elemental',
     'Primal Heart': 'Coração Selvagem',
     'Primal Mastery': 'Maestria Elemental',
-    'Punishing Blows': 'Golpes do Cruzado',
     'Pyre Tender': 'Piromante',
     Pyromancy: 'Fogo',
     Quickblood: 'Reflexos Relâmpago',
@@ -6520,7 +6580,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Toque Espiritual',
     'Spiked Harness': 'Armadura Lâmina',
     'Spiritforged Arms': 'Armas Espirituais',
-    Spiritmend: 'Restauração',
+    Spiritcall: 'Restauração',
     Splinterfrost: 'Fragmentos de Gelo',
     Springflood: 'Maré de Mana',
     'Stalwart Shield': 'Especialização em Escudo',
@@ -6582,7 +6642,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Devastação',
     'Wraith Strike': 'Golpe Espectral',
     'Wrathful Psalm': 'Fúria Divina',
-    Wrathwing: 'Asa Vingadora',
+    Zealwing: 'Asa Vingadora',
   },
   ru_RU: {
     'Adrenaline Junkie': 'Адреналиновый фанатик',
@@ -6688,7 +6748,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Раздвоенный выстрел',
     Springwell: 'Источник',
     'Startle Shot': 'Ошеломляющий выстрел',
-    'Storm Bolt': 'Громовой разряд',
+    Thunderhurl: 'Громовой бросок',
     'Storm Chorus': 'Боевые барабаны',
     'Survival of the Fittest': 'Выживание сильнейшего',
     'Swift Verdicts': 'Быстрые приговоры',
@@ -6699,7 +6759,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Twisted Faith': 'Искаженная вера',
     Typhoon: 'Тайфун',
     'Vengeful Exorcism': 'Мстительное изгнание',
-    'Victory Rush': 'Порыв победы',
+    "Victor's Surge": 'Порыв победителя',
     Voidfeast: 'Пир Бездны',
     Warbringer: 'Вестник войны',
     'Weapon Fury': 'Ярость оружия',
@@ -6963,7 +7023,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Сосредоточение стихий',
     'Primal Heart': 'Сердце дикой природы',
     'Primal Mastery': 'Покорение стихий',
-    'Punishing Blows': 'Удары крестоносца',
     'Pyre Tender': 'Пиромант',
     Pyromancy: 'Огонь',
     Quickblood: 'Молниеносные рефлексы',
@@ -7033,7 +7092,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Высасывание духа',
     'Spiked Harness': 'Клинковая броня',
     'Spiritforged Arms': 'Духовное оружие',
-    Spiritmend: 'Исцеление',
+    Spiritcall: 'Зов духов',
     Splinterfrost: 'Осколки льда',
     Springflood: 'Прилив маны',
     'Stalwart Shield': 'Специализация по щитам',
@@ -7095,7 +7154,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Опустошение',
     'Wraith Strike': 'Призрачный удар',
     'Wrathful Psalm': 'Божественное неистовство',
-    Wrathwing: 'Крыло возмездия',
+    Zealwing: 'Крылья рвения',
   },
   cs_CZ: {
     ...TALENT_NEW_TITLE_OVERRIDES.cs_CZ,
@@ -7375,7 +7434,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Prvotní jasnost',
     'Primal Heart': 'Pradávné srdce',
     'Primal Mastery': 'Prvotní mistrovství',
-    'Punishing Blows': 'Trestající rány',
     'Pyre Tender': 'Strážce žáru',
     Pyromancy: 'Ohnivá magie',
     Quickblood: 'Rychlá krev',
@@ -7401,13 +7459,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Tříštivý výstřel',
     Springwell: 'Pramenná studna',
     'Startle Shot': 'Lekavý výstřel',
-    'Storm Bolt': 'Bouřná střela',
+    Thunderhurl: 'Bouřná střela',
     'Storm Chorus': 'Válečné bubny',
     'Terror Canticle': 'Výkřik hrůzy',
     Thoughtburn: 'Spálení mysli',
     'Tolling Hammer': 'Zvonící kladivo',
     Typhoon: 'Tajfun',
-    'Victory Rush': 'Vítězný nápor',
+    "Victor's Surge": 'Vítězný nápor',
     Voidfeast: 'Hostina prázdnoty',
     Warded: 'Pod ochranou',
     'Shifting Ward': 'Proměnlivá ochrana',
@@ -7466,7 +7524,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Žeň duší',
     'Spiked Harness': 'Ostnatý postroj',
     'Spiritforged Arms': 'Duchem kované zbraně',
-    Spiritmend: 'Zhojení duchem',
+    Spiritcall: 'Zhojení duchem',
     Splinterfrost: 'Ledové střepy',
     Springflood: 'Jarní příval',
     'Stalwart Shield': 'Pevný štít',
@@ -7528,7 +7586,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Muka',
     'Wraith Strike': 'Přízračný úder',
     'Wrathful Psalm': 'Hněvivý žalm',
-    Wrathwing: 'Křídlo odplaty',
+    Zealwing: 'Křídlo odplaty',
   },
   nl_NL: {
     ...TALENT_NEW_TITLE_OVERRIDES.nl_NL,
@@ -7808,7 +7866,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Elementaire Focus',
     'Primal Heart': 'Hart van de Wildernis',
     'Primal Mastery': 'Elementair Meesterschap',
-    'Punishing Blows': 'Kruisvaardersslagen',
     'Pyre Tender': 'Vuurmagiër',
     Pyromancy: 'Vuur',
     Quickblood: 'Bliksemreflexen',
@@ -7834,13 +7891,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Splijtschot',
     Springwell: 'Bronwel',
     'Startle Shot': 'Schrikschot',
-    'Storm Bolt': 'Stormbout',
+    Thunderhurl: 'Stormbout',
     'Storm Chorus': 'Oorlogstrommen',
     'Terror Canticle': 'Psychische schreeuw',
     Thoughtburn: 'Gedachtenbrand',
     'Tolling Hammer': 'Klinkende hamer',
     Typhoon: 'Tyfoon',
-    'Victory Rush': 'Overwinningsroes',
+    "Victor's Surge": 'Overwinningsroes',
     Voidfeast: 'Leegtefeest',
     Warded: 'Beschut',
     'Shifting Ward': 'Verschuivende barrière',
@@ -7899,7 +7956,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Geestentap',
     'Spiked Harness': 'Klingenpantser',
     'Spiritforged Arms': 'Geestwapens',
-    Spiritmend: 'Herstel',
+    Spiritcall: 'Herstel',
     Splinterfrost: 'IJsscherven',
     Springflood: 'Manavloed',
     'Stalwart Shield': 'Schildspecialisatie',
@@ -7961,7 +8018,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Verwoesting',
     'Wraith Strike': 'Spookslag',
     'Wrathful Psalm': 'Goddelijke Furie',
-    Wrathwing: 'Wraakvleugel',
+    Zealwing: 'Wraakvleugel',
   },
   pl_PL: {
     ...TALENT_NEW_TITLE_OVERRIDES.pl_PL,
@@ -8241,7 +8298,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Skupienie żywiołów',
     'Primal Heart': 'Serce dziczy',
     'Primal Mastery': 'Władanie żywiołami',
-    'Punishing Blows': 'Uderzenia krzyżowca',
     'Pyre Tender': 'Piromanta',
     Pyromancy: 'Ogień',
     Quickblood: 'Błyskawiczne odruchy',
@@ -8267,13 +8323,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Rozszczepiony Strzał',
     Springwell: 'Źródlisko',
     'Startle Shot': 'Strzał Przestrachu',
-    'Storm Bolt': 'Burzowy pocisk',
+    Thunderhurl: 'Burzowy pocisk',
     'Storm Chorus': 'Bębny Wojny',
     'Terror Canticle': 'Psychiczny Krzyk',
     Thoughtburn: 'Myślopalenie',
     'Tolling Hammer': 'Bijący Młot',
     Typhoon: 'Tajfun',
-    'Victory Rush': 'Zryw zwycięstwa',
+    "Victor's Surge": 'Zryw zwycięstwa',
     Voidfeast: 'Uczta Pustki',
     Warded: 'Osłonięty',
     'Shifting Ward': 'Zmienna osłona',
@@ -8332,7 +8388,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Pobór ducha',
     'Spiked Harness': 'Naostrzony pancerz',
     'Spiritforged Arms': 'Oręż ducha',
-    Spiritmend: 'Odnowienie',
+    Spiritcall: 'Odnowienie',
     Splinterfrost: 'Lodowe odłamki',
     Springflood: 'Przypływ many',
     'Stalwart Shield': 'Specjalizacja w tarczy',
@@ -8394,7 +8450,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Spustoszenie',
     'Wraith Strike': 'Widmowe Uderzenie',
     'Wrathful Psalm': 'Boska furia',
-    Wrathwing: 'Skrzydło Zemsty',
+    Zealwing: 'Skrzydło Zemsty',
   },
   id_ID: {
     ...TALENT_NEW_TITLE_OVERRIDES.id_ID,
@@ -8674,7 +8730,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Fokus Elemental',
     'Primal Heart': 'Hati Alam Liar',
     'Primal Mastery': 'Penguasaan Elemental',
-    'Punishing Blows': 'Serangan Ksatria Suci',
     'Pyre Tender': 'Ahli Api',
     Pyromancy: 'Api',
     Quickblood: 'Refleks Kilat',
@@ -8700,13 +8755,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Tembakan Pecah',
     Springwell: 'Mata Air',
     'Startle Shot': 'Tembakan Kejut',
-    'Storm Bolt': 'Baut Badai',
+    Thunderhurl: 'Baut Badai',
     'Storm Chorus': 'Genderang Perang',
     'Terror Canticle': 'Jerit Psikis',
     Thoughtburn: 'Bakar Pikir',
     'Tolling Hammer': 'Palu Berdentang',
     Typhoon: 'Topan',
-    'Victory Rush': 'Terjangan Kemenangan',
+    "Victor's Surge": 'Terjangan Kemenangan',
     Voidfeast: 'Santapan Kehampaan',
     Warded: 'Terlindungi',
     'Shifting Ward': 'Pelindung Bergeser',
@@ -8765,7 +8820,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Sadap Roh',
     'Spiked Harness': 'Zirah Berbilah',
     'Spiritforged Arms': 'Senjata Roh',
-    Spiritmend: 'Pemulihan',
+    Spiritcall: 'Pemulihan',
     Splinterfrost: 'Pecahan Es',
     Springflood: 'Pasang Mana',
     'Stalwart Shield': 'Spesialisasi Perisai',
@@ -8827,7 +8882,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Pemusnahan',
     'Wraith Strike': 'Serangan Arwah',
     'Wrathful Psalm': 'Murka Ilahi',
-    Wrathwing: 'Sayap Pembalas',
+    Zealwing: 'Sayap Pembalas',
   },
   tr_TR: {
     ...TALENT_NEW_TITLE_OVERRIDES.tr_TR,
@@ -9106,7 +9161,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Elementsel Odak',
     'Primal Heart': 'Vahşi Doğanın Kalbi',
     'Primal Mastery': 'Elementsel Hakimiyet',
-    'Punishing Blows': 'Haçlı Darbeleri',
     'Pyre Tender': 'Ateş Büyücüsü',
     Pyromancy: 'Ateş',
     Quickblood: 'Şimşek Refleksleri',
@@ -9132,13 +9186,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Bölük Atış',
     Springwell: 'Kaynak Kuyusu',
     'Startle Shot': 'İrkilten Atış',
-    'Storm Bolt': 'Fırtına Oku',
+    Thunderhurl: 'Fırtına Oku',
     'Storm Chorus': 'Savaş Davulları',
     'Terror Canticle': 'Psişik Çığlık',
     Thoughtburn: 'Düşünce Yanığı',
     'Tolling Hammer': 'Çınlayan Çekiç',
     Typhoon: 'Tayfun',
-    'Victory Rush': 'Zafer Atılımı',
+    "Victor's Surge": 'Zafer Atılımı',
     Voidfeast: 'Hiçlik Ziyafeti',
     Warded: 'Korunaklı',
     'Shifting Ward': 'Değişen Muhafaza',
@@ -9197,7 +9251,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Ruh Aktarımı',
     'Spiked Harness': 'Bıçaklı Zırh',
     'Spiritforged Arms': 'Ruh Silahları',
-    Spiritmend: 'Onarım',
+    Spiritcall: 'Onarım',
     Splinterfrost: 'Buz Kıymıkları',
     Springflood: 'Mana Gelgiti',
     'Stalwart Shield': 'Kalkan Uzmanlığı',
@@ -9259,7 +9313,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Tahribat',
     'Wraith Strike': 'Hayalet Vuruş',
     'Wrathful Psalm': 'Kutsal Hiddet',
-    Wrathwing: 'İntikam Kanadı',
+    Zealwing: 'İntikam Kanadı',
   },
   sv_SE: {
     ...TALENT_NEW_TITLE_OVERRIDES.sv_SE,
@@ -9539,7 +9593,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Elementärt fokus',
     'Primal Heart': 'Vildmarkens hjärta',
     'Primal Mastery': 'Elementär bemästring',
-    'Punishing Blows': 'Korsfararhugg',
     'Pyre Tender': 'Pyromantiker',
     Pyromancy: 'Eld',
     Quickblood: 'Blixtsnabba reflexer',
@@ -9565,13 +9618,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Splitterskott',
     Springwell: 'Källbrunn',
     'Startle Shot': 'Skrämselskott',
-    'Storm Bolt': 'Stormbult',
+    Thunderhurl: 'Stormbult',
     'Storm Chorus': 'Krigstrummor',
     'Terror Canticle': 'Psykiskt skrik',
     Thoughtburn: 'Tankebrand',
     'Tolling Hammer': 'Klingande hammare',
     Typhoon: 'Tyfon',
-    'Victory Rush': 'Segerrus',
+    "Victor's Surge": 'Segerrus',
     Voidfeast: 'Tomhetsmåltid',
     Warded: 'Skyddad',
     'Shifting Ward': 'Skiftande skydd',
@@ -9630,7 +9683,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Andetappning',
     'Spiked Harness': 'Bladrustning',
     'Spiritforged Arms': 'Andevapen',
-    Spiritmend: 'Återställning',
+    Spiritcall: 'Återställning',
     Splinterfrost: 'Isskärvor',
     Springflood: 'Manavåg',
     'Stalwart Shield': 'Sköldspecialisering',
@@ -9692,7 +9745,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Förödelse',
     'Wraith Strike': 'Vålnadsslag',
     'Wrathful Psalm': 'Gudomligt raseri',
-    Wrathwing: 'Hämndvinge',
+    Zealwing: 'Hämndvinge',
   },
   vi_VN: {
     ...TALENT_NEW_TITLE_OVERRIDES.vi_VN,
@@ -9971,7 +10024,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Trọng Tâm Nguyên Tố',
     'Primal Heart': 'Trái Tim Hoang Dã',
     'Primal Mastery': 'Tinh Thông Nguyên Tố',
-    'Punishing Blows': 'Đòn Thập Tự',
     'Pyre Tender': 'Hỏa Pháp Sư',
     Pyromancy: 'Hỏa',
     Quickblood: 'Phản Xạ Chớp Nhoáng',
@@ -9997,13 +10049,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Bắn Tách',
     Springwell: 'Giếng Suối',
     'Startle Shot': 'Phát Bắn Giật Mình',
-    'Storm Bolt': 'Cú Ném Bão Tố',
+    Thunderhurl: 'Cú Ném Bão Tố',
     'Storm Chorus': 'Trống Chiến',
     'Terror Canticle': 'Tiếng Thét Tâm Linh',
     Thoughtburn: 'Thiêu Ý Nghĩ',
     'Tolling Hammer': 'Búa Ngân Chuông',
     Typhoon: 'Cuồng Phong',
-    'Victory Rush': 'Đà Chiến Thắng',
+    "Victor's Surge": 'Đà Chiến Thắng',
     Voidfeast: 'Yến Tiệc Hư Không',
     Warded: 'Được Che Chắn',
     'Shifting Ward': 'Hộ Vệ Chuyển Dịch',
@@ -10062,7 +10114,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Trích Linh Hồn',
     'Spiked Harness': 'Giáp Lưỡi Dao',
     'Spiritforged Arms': 'Vũ Khí Linh Hồn',
-    Spiritmend: 'Phục Hồi',
+    Spiritcall: 'Phục Hồi',
     Splinterfrost: 'Mảnh Băng',
     Springflood: 'Thủy Triều Mana',
     'Stalwart Shield': 'Chuyên Môn Khiên',
@@ -10124,7 +10176,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Tàn Phá',
     'Wraith Strike': 'Đòn Ma Ảnh',
     'Wrathful Psalm': 'Phẫn Nộ Thần Thánh',
-    Wrathwing: 'Cánh Báo Thù',
+    Zealwing: 'Cánh Báo Thù',
   },
   da_DK: {
     ...TALENT_NEW_TITLE_OVERRIDES.da_DK,
@@ -10404,7 +10456,6 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     'Primal Clarity': 'Elementært Fokus',
     'Primal Heart': 'Vildmarkens Hjerte',
     'Primal Mastery': 'Elementær Mestring',
-    'Punishing Blows': 'Korsfarerslag',
     'Pyre Tender': 'Ildmaner',
     Pyromancy: 'Ild',
     Quickblood: 'Lynreflekser',
@@ -10429,13 +10480,13 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Splitshot: 'Splitskud',
     Springwell: 'Kildebrønd',
     'Startle Shot': 'Forskrækkelsesskud',
-    'Storm Bolt': 'Stormbolt',
+    Thunderhurl: 'Stormbolt',
     'Storm Chorus': 'Krigstrommer',
     'Terror Canticle': 'Psykisk skrig',
     Thoughtburn: 'Tankebrand',
     'Tolling Hammer': 'Klanghammer',
     Typhoon: 'Tyfon',
-    'Victory Rush': 'Sejrsrus',
+    "Victor's Surge": 'Sejrsrus',
     Voidfeast: 'Tomhedsfest',
     Warded: 'Skærmet',
     'Shifting Ward': 'Skiftende værn',
@@ -10495,7 +10546,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Soulglean: 'Åndetapning',
     'Spiked Harness': 'Klinget Rustning',
     'Spiritforged Arms': 'Åndevåben',
-    Spiritmend: 'Genoprettelse',
+    Spiritcall: 'Genoprettelse',
     Splinterfrost: 'Issplinter',
     Springflood: 'Mana-Tidevand',
     'Stalwart Shield': 'Skjoldspecialisering',
@@ -10557,7 +10608,7 @@ const titleOverrides: Partial<Record<SupportedLanguage, Record<string, string>>>
     Wrack: 'Forødelse',
     'Wraith Strike': 'Genfærdsslag',
     'Wrathful Psalm': 'Guddommeligt Raseri',
-    Wrathwing: 'Hævnerfløj',
+    Zealwing: 'Hævnerfløj',
   },
 };
 
@@ -10770,6 +10821,13 @@ function abilityDescription(id: string): string {
 function authoredChoiceDescription(choice: TalentRowOption): string {
   const grantId = choice.effect.grant?.ability;
   if (!grantId) return choice.description;
+  // spell_lock (Abyssal Gag) is the one cross-class grant target that is ALSO already
+  // in its class's base kit (every Warlock learns it at 10 regardless of this pick):
+  // synthesizing from the granted ability's own description below drops the one fact
+  // that explains the pick (two levels early) and reads as a no-op to anyone who
+  // already sees Abyssal Gag on their action bar. The authored source carries that
+  // framing plus the real numbers, so use it verbatim instead.
+  if (grantId === 'spell_lock') return choice.description;
   const lang = getLanguage();
   const riderDescriptions = (choice.effect.ability ?? [])
     .filter((mod) => mod.ability === grantId)
@@ -10811,9 +10869,9 @@ function procTriggerDescription(
     case 'hotExpired':
       return `${abilityName(trigger.ability)}: 0 s`;
     case 'bigHitTaken':
-      return `>= ${formatPercent(trigger.hpFrac, lang)} ${text.statLabels.maxHpPct} (${seconds(trigger.icd, lang)} ${text.statLabels.cooldown})`;
+      return `${text.atLeastWord} ${formatPercent(trigger.hpFrac, lang)} ${text.statLabels.maxHpPct} (${seconds(trigger.icd, lang)} ${text.statLabels.cooldown})`;
     case 'meleeSwingWhile':
-      return `${text.statLabels.meleeDmgPct} @ ${t('hudChrome.auraEffect.imbue')}`;
+      return `${text.statLabels.meleeDmgPct} ${text.whileWord} ${t('hudChrome.auraEffect.imbue')}`;
     case 'thornsReflect':
       return `${abilityName(trigger.ability)}: ${t('guide.abilityHook.thorns')}`;
   }
@@ -10867,7 +10925,7 @@ function procResponseDescription(
         response.healPctMaxHp !== undefined
           ? `${formatPercent(response.healPctMaxHp, lang)} ${text.statLabels.maxHpPct}`
           : formatNumber(response.heal ?? 0, lang);
-      return `+${echoValue} ${t('hud.meters.healing')} @ <= ${formatPercent(response.belowFrac, lang)} ${text.statLabels.maxHpPct} (${seconds(response.window, lang)})`;
+      return `+${echoValue} ${t('hud.meters.healing')} ${text.upToWord} ${formatPercent(response.belowFrac, lang)} ${text.statLabels.maxHpPct} (${seconds(response.window, lang)})`;
     }
   }
 }
@@ -10877,7 +10935,7 @@ function procDescription(proc: ProcDef, lang: SupportedLanguage, text: TalentLoc
   const responses = proc.responses
     .map((response) => procResponseDescription(response, lang, text))
     .join('; ');
-  return `${trigger} -> ${responses}.`;
+  return `${trigger} ${text.thenWord} ${responses}.`;
 }
 
 type DescribedAddedEffect = Extract<
@@ -10942,13 +11000,13 @@ function addedEffectDescription(
       return `${name}: ${formatNumber(effect.total, lang)} ${text.statLabels.damage} / ${seconds(effect.duration, lang)} (${seconds(effect.interval, lang)}${leech}).`;
     }
     case 'extendDot':
-      return `${name} -> ${abilityName(effect.dot)}: +${seconds(effect.seconds, lang)} (<= +${seconds(effect.maxBonus, lang)}).`;
+      return `${name} ${text.thenWord} ${abilityName(effect.dot)}: +${seconds(effect.seconds, lang)} (${text.upToWord} +${seconds(effect.maxBonus, lang)}).`;
     case 'interrupt':
       return `${name}: ${t('hudChrome.auraEffect.lockout')} (${seconds(effect.lockout, lang)}).`;
     case 'silence':
       return `${name}: ${t('hudChrome.auraEffect.silence')} (${seconds(effect.duration, lang)}).`;
     case 'consumeDot':
-      return `${name} -> ${abilityName(effect.dot)}: ${formatPercent(1, lang)} ${text.statLabels.damage} / 0 s.`;
+      return `${name} ${text.thenWord} ${abilityName(effect.dot)}: ${formatPercent(1, lang)} ${text.statLabels.damage} / 0 s.`;
     case 'selfBuff': {
       // Ghostfoot Ward's shield_wall is a damage CUT, so it renders negative and
       // names the stat (rogue v0.29). Every other rider is a straight buff, and
@@ -10966,7 +11024,7 @@ function addedEffectDescription(
     case 'debuffTargetSource':
       return `${name}: +${formatPercent(effect.value, lang)} ${text.statLabels.damage} (${seconds(effect.duration, lang)}).`;
     case 'breakRoots':
-      return `${name}: ${t('hudChrome.auraEffect.root')} -> 0.`;
+      return `${name}: ${t('hudChrome.auraEffect.root')} ${text.thenWord} 0.`;
   }
 }
 
@@ -11049,22 +11107,22 @@ function effectDescription(
   if (global.warlockLeadenHex) {
     const maxStacks = tuning.maxStacks ?? 3;
     parts.push(
-      `${abilityName('curse_of_exhaustion')}: ${t('hudChrome.auraEffect.slow', { pct: formatNumber(global.warlockLeadenHex * 100, lang) })} x${formatNumber(maxStacks, lang)} (${seconds(tuning.slowDuration ?? 5, lang)}); x${formatNumber(maxStacks, lang)} -> ${t('hudChrome.auraEffect.root')} (${seconds(tuning.rootDuration ?? 1.5, lang)}; ${seconds(tuning.rootLockDuration ?? 15, lang)} ${text.statLabels.cooldown}).`,
+      `${abilityName('curse_of_exhaustion')}: ${t('hudChrome.auraEffect.slow', { pct: formatNumber(global.warlockLeadenHex * 100, lang) })} x${formatNumber(maxStacks, lang)} (${seconds(tuning.slowDuration ?? 5, lang)}); x${formatNumber(maxStacks, lang)} ${text.thenWord} ${t('hudChrome.auraEffect.root')} (${seconds(tuning.rootDuration ?? 1.5, lang)}; ${seconds(tuning.rootLockDuration ?? 15, lang)} ${text.statLabels.cooldown}).`,
     );
   }
   if (global.warlockShadowCredit) {
     parts.push(
-      `>= ${formatPercent(global.warlockShadowCredit, lang)} ${t('classDetails.labels.resource')} -> ${abilityList(['needle_of_fate', 'soul_harvest', 'shadow_bolt'])}: -${formatPercent(1, lang)} ${text.statLabels.cost} x1; >= ${formatPercent(tuning.upperThresholdPct ?? 0.8, lang)} -> x${formatNumber(tuning.maxCharges ?? 2, lang)}.`,
+      `${text.atLeastWord} ${formatPercent(global.warlockShadowCredit, lang)} ${t('classDetails.labels.resource')} ${text.thenWord} ${abilityList(['needle_of_fate', 'soul_harvest', 'shadow_bolt'])}: -${formatPercent(1, lang)} ${text.statLabels.cost} x1; ${text.atLeastWord} ${formatPercent(tuning.upperThresholdPct ?? 0.8, lang)} ${text.thenWord} x${formatNumber(tuning.maxCharges ?? 2, lang)}.`,
     );
   }
   if (global.warlockAshenFocus) {
     parts.push(
-      `${t('hud.keybinds.categories.movement')} = 0 (${seconds(tuning.stationaryDuration ?? 1, lang)}) -> ${abilityList(['needle_of_fate', 'soul_harvest', 'shadow_bolt'])}: -${formatPercent(global.warlockAshenFocus, lang)} ${text.statLabels.castTime}.`,
+      `${t('hud.keybinds.categories.movement')}: ${formatPercent(0, lang)} (${seconds(tuning.stationaryDuration ?? 1, lang)}) ${text.thenWord} ${abilityList(['needle_of_fate', 'soul_harvest', 'shadow_bolt'])}: -${formatPercent(global.warlockAshenFocus, lang)} ${text.statLabels.castTime}.`,
     );
   }
   if (global.warlockUnbrokenRitual) {
     parts.push(
-      `${text.statLabels.castTime}: ${seconds(1, lang)} -> -${seconds(global.warlockUnbrokenRitual, lang)} ${text.statLabels.cooldown}.`,
+      `${text.statLabels.castTime}: ${seconds(1, lang)} ${text.thenWord} -${seconds(global.warlockUnbrokenRitual, lang)} ${text.statLabels.cooldown}.`,
     );
   }
   if (global.warlockForbiddenReflection) {
@@ -11083,16 +11141,18 @@ function effectDescription(
   }
   if (global.critVsRooted) {
     parts.push(
-      `${text.statLabels.crit}: +${formatPercent(global.critVsRooted, lang)} @ ${t('hudChrome.auraEffect.root')}.`,
+      `${text.statLabels.crit}: +${formatPercent(global.critVsRooted, lang)} ${text.vsWord} ${t('hudChrome.auraEffect.root')}.`,
     );
   }
   if (global.cheatDeathIcd) {
     parts.push(
-      `0 HP -> 1 HP (${seconds(global.cheatDeathIcd, lang)} ${text.statLabels.cooldown}).`,
+      `0 HP ${text.thenWord} 1 HP (${seconds(global.cheatDeathIcd, lang)} ${text.statLabels.cooldown}).`,
     );
   }
   if (global.fearBreakPct) {
-    parts.push(`${formatPercent(global.fearBreakPct, lang)} ${text.statLabels.maxHpPct} -> 0 s.`);
+    parts.push(
+      `${formatPercent(global.fearBreakPct, lang)} ${text.statLabels.maxHpPct} ${text.thenWord} 0 s.`,
+    );
   }
   if (global.onKillSpeedPct) {
     parts.push(
@@ -11101,7 +11161,7 @@ function effectDescription(
   }
   if (global.bloodbathPct) {
     parts.push(
-      `${text.increase(text.statLabels.damage, formatPercent(global.bloodbathPct, lang), '')} <= ${formatPercent(global.bloodbathMaxPct ?? global.bloodbathPct, lang)} (${seconds(global.bloodbathDuration ?? 0, lang)}).`,
+      `${text.increase(text.statLabels.damage, formatPercent(global.bloodbathPct, lang), '')} ${text.upToWord} ${formatPercent(global.bloodbathMaxPct ?? global.bloodbathPct, lang)} (${seconds(global.bloodbathDuration ?? 0, lang)}).`,
     );
   }
   if (global.cdrPerRage) {
@@ -11163,18 +11223,18 @@ function effectDescription(
     if (mod.buffPct) parts.push(text.increase(name, formatPercent(mod.buffPct, lang), perRank));
     if (mod.dmgPctVsDotted) {
       parts.push(
-        `${text.increase(`${name} ${text.statLabels.damage}`, formatPercent(mod.dmgPctVsDotted, lang), perRank)} @ ${text.statLabels.dotDmgPct}.`,
+        `${text.increase(`${name} ${text.statLabels.damage}`, formatPercent(mod.dmgPctVsDotted, lang), perRank)} ${text.vsWord} ${text.statLabels.dotDmgPct}.`,
       );
     }
     if (mod.castWhileMoving) {
       parts.push(
-        `${name}: ${text.statLabels.castTime} @ ${t('hud.keybinds.categories.movement')}.`,
+        `${name}: ${text.statLabels.castTime} ${text.whileWord} ${t('hud.keybinds.categories.movement')}.`,
       );
     }
     if (mod.damagePushbackImmune) {
       parts.push(
         text.reduce(
-          `${name} ${text.statLabels.castTime} @ ${text.statLabels.damage}`,
+          `${name} ${text.statLabels.castTime} ${text.vsWord} ${text.statLabels.damage}`,
           formatPercent(1, lang),
           perRank,
         ),

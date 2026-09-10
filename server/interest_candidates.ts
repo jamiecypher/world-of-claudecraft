@@ -138,3 +138,8 @@ export function buildSharedInterestCandidates(
     cellQueryCount,
   };
 }
+
+// The battleground interest predicates (inSameBgSlot, bgWideInterestApplies)
+// live in server/interest_policy.ts, the module server/game.ts imports; the
+// release-side copies that briefly sat here were deleted at the v0.41.0 sync
+// merge so the predicate has exactly one home and cannot drift.

@@ -15,10 +15,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(true);
   });
@@ -36,10 +37,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(true);
   });
@@ -53,10 +55,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
   });
@@ -70,15 +73,16 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
   });
 
-  it('stays non-empty for a vendor, market, heroic or WARFARE vendor, delve board, or Vale Cup NPC', () => {
+  it('stays non-empty for a vendor, market, heroic or WARFARE vendor, delve board, card master, or training NPC', () => {
     expect(
       gossipMenuIsEmpty({
         questCount: 0,
@@ -87,10 +91,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     expect(
@@ -101,10 +106,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: true,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     expect(
@@ -115,10 +121,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: true,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     // The WARFARE quartermaster alone. Its own dimension, because the shop row
@@ -132,10 +139,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: true,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     expect(
@@ -146,10 +154,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: true,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     expect(
@@ -160,24 +169,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: true,
-        hasCardMaster: false,
-        hasTraining: false,
-      }),
-    ).toBe(false);
-    expect(
-      gossipMenuIsEmpty({
-        questCount: 0,
-        discussionCount: 0,
-        hasVendor: false,
-        hasMarket: false,
-        hasHeroicVendor: false,
-        hasWarfareVendor: false,
-        hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: true,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     // A station master's Train option alone keeps the menu open.
@@ -189,10 +185,30 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: true,
+        hasFarmer: false,
+      }),
+    ).toBe(false);
+    // A farmer's husk-trade row alone keeps the menu open (the farming
+    // go-live): the two compost-only farmers have stock too, but a farmer
+    // with no quest and no vendor rows is a legal content shape and must not
+    // close on open.
+    expect(
+      gossipMenuIsEmpty({
+        questCount: 0,
+        discussionCount: 0,
+        hasVendor: false,
+        hasMarket: false,
+        hasHeroicVendor: false,
+        hasWarfareVendor: false,
+        hasCrucibleVendor: false,
+        hasDelveBoard: false,
+        hasCardMaster: false,
+        hasTraining: false,
+        hasFarmer: true,
       }),
     ).toBe(false);
   });
@@ -211,10 +227,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: true,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
     // The goods row alone (an unflagged NPC with stock) still keeps it open.
@@ -226,10 +243,11 @@ describe('gossipMenuIsEmpty', () => {
         hasMarket: false,
         hasHeroicVendor: false,
         hasWarfareVendor: false,
+        hasCrucibleVendor: false,
         hasDelveBoard: false,
-        hasVcup: false,
         hasCardMaster: false,
         hasTraining: false,
+        hasFarmer: false,
       }),
     ).toBe(false);
   });

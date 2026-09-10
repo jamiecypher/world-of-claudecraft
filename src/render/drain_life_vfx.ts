@@ -87,6 +87,10 @@ const DRAIN_FRAGMENT_SHADER = `
     float stream = 0.68 + 0.32 * sin(vLong * 34.0 + uTime * 10.0 * uMotion + uPhase);
     float flicker = 0.82 + 0.18 * sin(vLong * 17.0 - uTime * 5.0 * uMotion + uPhase);
     float alpha = edge * endFade * stream * flicker * uOpacity;
+    // The channel tapers to nothing at both ends and both edges: early-out
+    // below the additive floor rather than blend a transparent fragment the
+    // bloom re-reads (vfx.ts / ability_vfx/overlay_sprites.ts idiom).
+    if (alpha < 0.004) discard;
     gl_FragColor = vec4(uColor * (1.0 + stream * 0.7), alpha);
   }
 `;
@@ -136,6 +140,7 @@ export class DrainLifeVfx {
   private time = 0;
   private quality = 1;
   private reducedMotion = false;
+  private disposed = false;
 
   constructor(
     scene: THREE.Scene,
@@ -227,6 +232,24 @@ export class DrainLifeVfx {
 
   clear(): void {
     for (const slot of this.slots) this.release(slot, false);
+  }
+
+  /** Release the fixed channel pool at the renderer lifecycle boundary. The
+   * cylinder is shared by every slot, so it is disposed once after all slot
+   * materials and roots have been detached. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.clear();
+    const materials = new Set<THREE.Material>();
+    for (const slot of this.slots) {
+      slot.group.removeFromParent();
+      materials.add(slot.core.material);
+      materials.add(slot.flow.material);
+      materials.add(slot.veil.material);
+    }
+    this.geometry.dispose();
+    for (const material of materials) material.dispose();
   }
 
   update(dt: number, reducedMotion = false): void {

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   encounterPrewarmDisabled,
   encounterPrewarmForInterior,
@@ -24,6 +24,24 @@ const readSource = (path: string): string =>
 const NYTHRAXIS_ALDRIC = 'brother_aldric_raid';
 
 describe('interior encounter prewarm spec', () => {
+  it('warms every Varkhul and Ignivar encounter material before entering the Inner Crucible', () => {
+    const spec = INTERIOR_ENCOUNTER_PREWARM.ignivar_depths;
+    expect(spec).toEqual({
+      soulRendPlayerClasses: false,
+      soulRendVfxWeaponSkins: false,
+      soulRendLivePlayerVisuals: false,
+      varkhulVisuals: true,
+      ignivarVisuals: true,
+    });
+    expect(encounterPrewarmForInterior('ignivar_depths')).toEqual(spec);
+    expect(
+      planInteriorEncounterPrewarm(spec, {
+        playerClasses: ALL_CLASSES,
+        weaponSkinIds: ['ice_fang_sword'],
+      }),
+    ).toEqual({ playerClasses: [], weaponSkinIds: [] });
+  });
+
   it('warms Soul Rend overlays at arena entry, not boot, and warms no encounter NPC', () => {
     const spec = INTERIOR_ENCOUNTER_PREWARM.nythraxis;
     expect(spec).toBeDefined();
@@ -31,6 +49,7 @@ describe('interior encounter prewarm spec', () => {
     // never compiled npc_aldric), his 70% spawn linked ZERO programs because
     // the player bodies on screen already carry them.
     expect(Object.keys(spec).sort()).toEqual([
+      'nythraxisGraveVisuals',
       'soulRendLivePlayerVisuals',
       'soulRendPlayerClasses',
       'soulRendVfxWeaponSkins',
@@ -53,17 +72,21 @@ describe('interior encounter prewarm spec', () => {
     expect(kickAt).toBeGreaterThan(-1);
     expect(kitAt).toBeGreaterThan(kickAt);
 
-    const mobListStart = renderer.indexOf('const PREWARM_MOB_TEMPLATE_IDS = [');
+    // The zone prewarm constants moved to src/render/zone_prewarm_groups.ts
+    // at the Phase 16 extraction; the encounter-exclusion claim follows them.
+    const prewarmGroups = readSource('../src/render/zone_prewarm_groups.ts');
+    const mobListStart = prewarmGroups.indexOf('const PREWARM_MOB_TEMPLATE_IDS = [');
     expect(mobListStart).toBeGreaterThan(-1);
-    const mobListEnd = renderer.indexOf('] as const;', mobListStart);
+    const mobListEnd = prewarmGroups.indexOf('] as const;', mobListStart);
     expect(mobListEnd).toBeGreaterThan(mobListStart);
-    const mobList = renderer.slice(mobListStart, mobListEnd);
+    const mobList = prewarmGroups.slice(mobListStart, mobListEnd);
     // Positive control: a renamed marker would leave an empty slice that
     // satisfies every not.toContain below without reading a thing.
     expect(mobList).toContain('forest_wolf');
     expect(mobList).not.toContain(NYTHRAXIS_ALDRIC);
     expect(mobList).not.toContain('nythraxis');
     expect(renderer).not.toContain("'entities.nythraxis");
+    expect(prewarmGroups).not.toContain("'entities.nythraxis");
   });
 
   it('lists every catalog skin whose model has a weapon VFX spec', () => {
@@ -310,7 +333,7 @@ describe('live Soul Rend player-visual prewarm', () => {
     // the renderer only REPORTS every change, including leaving one.
     expect(renderer).not.toContain('activeInterior: string | null = null');
     expect(renderer).toContain(
-      'encounterPrewarm.setEncounterPrewarmInterior(this, interior ?? null)',
+      'encounterPrewarm.setEncounterPrewarmInterior(this, fogScene.interior ?? null)',
     );
     const createStart = renderer.indexOf('private createView(');
     const createEnd = renderer.indexOf('\n  // Shared core for every compile gate', createStart);

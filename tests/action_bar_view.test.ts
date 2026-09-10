@@ -6,9 +6,18 @@
 // parity drives both world shapes to identical output.
 
 import { describe, expect, it, vi } from 'vitest';
+import { RAID_BOSS_PLAYER_MELEE_RANGE } from '../src/sim/combat/player_attack_reach';
 import { abilitiesKnownAt } from '../src/sim/content/classes';
 import { computeTalentModifiers } from '../src/sim/content/talents';
-import { type AbilityDef, type AuraKind, type ItemDef, MELEE_RANGE } from '../src/sim/types';
+import { ABILITIES } from '../src/sim/data';
+import { VARKHUL_BOSS_ID } from '../src/sim/ignivar_raid_ids';
+import {
+  type AbilityDef,
+  type AuraKind,
+  IGNIVAR_BOSS_ID,
+  type ItemDef,
+  MELEE_RANGE,
+} from '../src/sim/types';
 import {
   ABILITY_ICON_PREFIX,
   type ActionBarAbility,
@@ -50,6 +59,7 @@ interface SlotOpts {
   // (an assigned slot whose ability/item does not resolve); defaults to "bound iff
   // an ability or item resolves".
   hasAction?: boolean;
+  ownsAimSlot?: (activeAimSlot: number) => boolean;
 }
 
 function slot(slotIndex: number, opts: SlotOpts = {}): ActionBarSlotDescriptor {
@@ -60,6 +70,7 @@ function slot(slotIndex: number, opts: SlotOpts = {}): ActionBarSlotDescriptor {
     ability: () => opts.ability ?? null,
     item: () => opts.item ?? null,
     keybindLabel: () => opts.keybind ?? `K${slotIndex}`,
+    ownsAimSlot: opts.ownsAimSlot,
   };
 }
 
@@ -94,6 +105,7 @@ interface WorldOpts {
   playerPos?: { x: number; y: number; z: number };
   targetPos?: { x: number; y: number; z: number } | null;
   targetDead?: boolean;
+  targetTemplateId?: string;
   targetMaxHp?: number;
   targetAuras?: ActionBarAuraInput[];
   entities?: Iterable<{
@@ -108,12 +120,16 @@ interface WorldOpts {
   stealthed?: boolean;
   fateThreads?: number;
   auras?: ActionBarAuraInput[];
+  /** Druid form bars: the live pool kind, plus the mana parked behind it. */
+  resourceType?: 'mana' | 'rage' | 'energy' | 'focus';
+  savedMana?: number;
   paladinDevotion?: {
     value: number;
     ascensionCharges: number;
     ascensionRemaining: number;
   };
   paladinSpec?: string | null;
+  activeAimSlot?: number | null;
 }
 
 function world(opts: WorldOpts = {}): ActionBarWorldInput {
@@ -127,6 +143,8 @@ function world(opts: WorldOpts = {}): ActionBarWorldInput {
       cooldowns: opts.cooldowns ?? new Map(),
       gcdRemaining: opts.gcdRemaining ?? 0,
       potionCdRemaining: opts.potionCdRemaining ?? 0,
+      resourceType: opts.resourceType ?? 'mana',
+      savedMana: opts.savedMana ?? 0,
       queuedOnSwing: opts.queuedOnSwing ?? null,
       pos: opts.playerPos ?? { x: 0, y: 0, z: 0 },
       abilityCharges: opts.abilityCharges,
@@ -139,6 +157,8 @@ function world(opts: WorldOpts = {}): ActionBarWorldInput {
         ? null
         : {
             dead: opts.targetDead ?? false,
+            kind: 'mob',
+            templateId: opts.targetTemplateId ?? 'training_dummy',
             pos: targetPos,
             maxHp: opts.targetMaxHp,
             auras: opts.targetAuras ?? [],
@@ -147,8 +167,71 @@ function world(opts: WorldOpts = {}): ActionBarWorldInput {
     stealthed: opts.stealthed ?? false,
     fateThreads: opts.fateThreads ?? 0,
     entities: opts.entities ?? [],
+    activeAimSlot: opts.activeAimSlot ?? null,
   };
 }
+
+describe('actionBarView: active ground aim ownership', () => {
+  it('supports exact source-slot ownership', () => {
+    const view = createActionBarView(
+      descriptor(
+        slot(4, { ability: ability('fireball') }),
+        slot(27, {
+          ability: ability('blizzard'),
+          ownsAimSlot: (activeAimSlot) => activeAimSlot === 27,
+        }),
+      ),
+      fakeDeps(),
+    );
+
+    expect(view.tick(world({ activeAimSlot: 27 })).slots.map((state) => state.aiming)).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it('marks exactly the descriptor that owns the active source slot', () => {
+    const view = createActionBarView(
+      descriptor(
+        slot(4, { ability: ability('fireball') }),
+        slot(9, {
+          ability: ability('meteor'),
+          ownsAimSlot: (activeAimSlot) => activeAimSlot === 27,
+        }),
+        slot(27, { ability: ability('blizzard') }),
+      ),
+      fakeDeps(),
+    );
+
+    expect(view.tick(world({ activeAimSlot: 27 })).slots.map((state) => state.aiming)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
+  it('clears every slot when an active ground aim ends', () => {
+    const view = createActionBarView(
+      descriptor(
+        slot(2, { ability: ability('fireball') }),
+        slot(3, {
+          ability: ability('meteor'),
+          ownsAimSlot: (activeAimSlot) => activeAimSlot === 3,
+        }),
+      ),
+      fakeDeps(),
+    );
+
+    expect(view.tick(world({ activeAimSlot: 3 })).slots.map((state) => state.aiming)).toEqual([
+      false,
+      true,
+    ]);
+    expect(view.tick(world({ activeAimSlot: null })).slots.map((state) => state.aiming)).toEqual([
+      false,
+      false,
+    ]);
+  });
+});
 
 describe('actionBarView: the four slot kinds classify correctly', () => {
   it('dims a Devotion spender until the secondary resource cost is met', () => {
@@ -292,6 +375,67 @@ describe('actionBarView: the four slot kinds classify correctly', () => {
     expect(off.abilityId).toBe('fireball');
     showAttack = true;
     expect(view.tick(world()).slots[0].kind).toBe('attack');
+  });
+
+  it('a freed-slot ability the active build does not currently grant stays visible, dimmed and unusable, instead of painting empty', () => {
+    // The freed Attack slot (barSlot 0, "Show Attack Button" off) is deliberately
+    // not scoped to any one talent build (ActionBarController.loadAttackAction), so
+    // its assignment can outlive a build switch. Before this fix, hud.ts's
+    // abilityForSlot() only resolved against the live known-ability list, so the
+    // slot fell into the ability===null/item===null branch and rendered fully
+    // 'empty' the instant the granting build went inactive: from the player's
+    // perspective the ability looked deleted even though it survives in storage.
+    const view = createActionBarView(
+      descriptor(slot(0, { attack: false, ability: { ...ability('stormstrike'), known: false } })),
+      fakeDeps(),
+    );
+    const s = view.tick(world()).slots[0];
+    expect(s.kind).toBe('ability');
+    expect(s.iconKey).toBe(`${ABILITY_ICON_PREFIX}stormstrike`);
+    expect(s.abilityId).toBe('stormstrike');
+    expect(s.usable).toBe(false);
+    expect(s.cooldownPercent).toBe(0);
+    expect(s.procGlow).toBe(false);
+    expect(s.ariaDescription).toBe('abilityUi.tooltip.unavailable');
+  });
+
+  it('transitions cleanly between a live ability and its freed-slot known:false stub across ticks (no stale field, no new slot object)', () => {
+    // The reused per-slot state object (not the returned array) is what a build
+    // switch mutates in place every frame; a forgotten field reset in either
+    // direction would leak a stale cooldown/proc/usable value across the switch.
+    let live = true;
+    const s0: ActionBarSlotDescriptor = {
+      slotIndex: 0,
+      isAttack: () => false,
+      hasAction: () => true,
+      ability: () =>
+        live
+          ? ability('stormstrike', { cooldown: 10 })
+          : { ...ability('stormstrike', { cooldown: 10 }), known: false },
+      item: () => null,
+      keybindLabel: () => 'K0',
+    };
+    const view = createActionBarView(descriptor(s0), fakeDeps());
+
+    const cooldowns = new Map([['stormstrike', 8]]);
+    const knownSlot = view.tick(world({ cooldowns })).slots[0];
+    expect(knownSlot.usable).toBe(true);
+    expect(knownSlot.cooldownPercent).toBeGreaterThan(0);
+    expect(knownSlot.cdText).not.toBe('');
+
+    live = false;
+    const stubSlot = view.tick(world({ cooldowns })).slots[0];
+    expect(stubSlot).toBe(knownSlot); // same reused object, per-slot state is mutated in place
+    expect(stubSlot.usable).toBe(false);
+    expect(stubSlot.cooldownPercent).toBe(0);
+    expect(stubSlot.cdText).toBe('');
+    expect(stubSlot.ariaDescription).toBe('abilityUi.tooltip.unavailable');
+
+    live = true;
+    const backToKnown = view.tick(world({ cooldowns })).slots[0];
+    expect(backToKnown.usable).toBe(true);
+    expect(backToKnown.cooldownPercent).toBeGreaterThan(0);
+    expect(backToKnown.ariaDescription).toBe('');
   });
 
   it('an item slot wins over a stale ability binding (item-first precedence)', () => {
@@ -731,6 +875,32 @@ describe('actionBarView: ability cooldown / usable / range / queued math', () =>
       .outOfRange;
     expect(far).toBe(true);
     expect(near).toBe(false);
+  });
+
+  it('keeps melee actions in range across the enlarged raid-boss footprint', () => {
+    const view = createActionBarView(
+      descriptor(
+        slot(0, { attack: true }),
+        slot(1, { ability: ability('mortal_strike', { requiresTarget: true, range: 0 }) }),
+      ),
+      fakeDeps(),
+    );
+    expect(RAID_BOSS_PLAYER_MELEE_RANGE).toBe(8);
+    const targetPos = { x: 8, y: 0, z: 0 };
+
+    const ignivar = view.tick(world({ targetPos, targetTemplateId: IGNIVAR_BOSS_ID }));
+    expect(ignivar.slots.map((slotState) => slotState.outOfRange)).toEqual([false, false]);
+
+    const varkhul = view.tick(world({ targetPos, targetTemplateId: VARKHUL_BOSS_ID }));
+    expect(varkhul.slots.map((slotState) => slotState.outOfRange)).toEqual([false, false]);
+
+    const ordinaryMob = view.tick(world({ targetPos, targetTemplateId: 'training_dummy' }));
+    expect(ordinaryMob.slots.map((slotState) => slotState.outOfRange)).toEqual([true, true]);
+
+    const justOutside = view.tick({
+      ...world({ targetPos: { x: 8.01, y: 0, z: 0 }, targetTemplateId: IGNIVAR_BOSS_ID }),
+    });
+    expect(justOutside.slots.map((slotState) => slotState.outOfRange)).toEqual([true, true]);
   });
 
   it('a dead target yields no distance, so a ranged ability never reads out of range', () => {
@@ -1591,5 +1761,56 @@ describe('actionBarView: instance-parameterized + parity', () => {
     const simState = structuredClone(createActionBarView(desc, fakeDeps()).tick(simWorld));
     const clientState = structuredClone(createActionBarView(desc, fakeDeps()).tick(clientWorld));
     expect(clientState).toEqual(simState);
+  });
+});
+
+// A druid pressing a heal or a nuke from a shapeshift leaves the form and casts
+// it, billed against the PARKED mana pool rather than the rage or energy bar the
+// button sits over (src/sim/combat/form_auto_unshift.ts). The bar has to weigh
+// the same pool the cast gate weighs, or a slot paints dead while the press
+// behind it works.
+describe('actionBarView: an auto-unshifting cast is affordable against parked mana', () => {
+  const bear: ActionBarAuraInput[] = [{ kind: 'form_bear' as AuraKind }];
+  const wildmend = (): ActionBarAbility => ({ def: ABILITIES.healing_touch, cost: 110 });
+
+  function usableInBear(opts: { resource: number; savedMana: number }): boolean {
+    return createActionBarView(descriptor(slot(0, { ability: wildmend() })), fakeDeps()).tick(
+      world({ auras: bear, resourceType: 'rage', ...opts }),
+    ).slots[0].usable;
+  }
+
+  it('reads the parked pool, not the rage bar, for a spell that unshifts', () => {
+    // Empty rage bar, full parked pool: the cast goes through, so the slot lives.
+    expect(usableInBear({ resource: 0, savedMana: 500 })).toBe(true);
+    // Full rage bar, empty parked pool: rage cannot pay for a mana spell.
+    expect(usableInBear({ resource: 100, savedMana: 5 })).toBe(false);
+  });
+
+  it('leaves a form ability reading the live form bar', () => {
+    // Maul is bear-locked: it never unshifts, so it spends rage as it always did
+    // and the parked pool must not rescue it.
+    const maulSlot = () =>
+      createActionBarView(
+        descriptor(slot(0, { ability: { def: ABILITIES.maul, cost: 15 } })),
+        fakeDeps(),
+      );
+    expect(
+      maulSlot().tick(world({ auras: bear, resourceType: 'rage', resource: 30, savedMana: 0 }))
+        .slots[0].usable,
+    ).toBe(true);
+    expect(
+      maulSlot().tick(world({ auras: bear, resourceType: 'rage', resource: 5, savedMana: 500 }))
+        .slots[0].usable,
+    ).toBe(false);
+  });
+
+  it('ignores the parked pool entirely once out of form', () => {
+    // The unshifted caster is the common path: a stale savedMana on the mirror
+    // must never pay for a spell the live mana bar cannot afford.
+    expect(
+      createActionBarView(descriptor(slot(0, { ability: wildmend() })), fakeDeps()).tick(
+        world({ auras: [], resourceType: 'mana', resource: 5, savedMana: 500 }),
+      ).slots[0].usable,
+    ).toBe(false);
   });
 });

@@ -116,7 +116,9 @@ export const AMBERFALL_MOBS: Record<string, MobTemplate> = {
     loot: [{ itemId: 'gilded_sap_clot', chance: 0.6, questId: 'q_af_amber_from_the_herd' }],
     scale: 1.15,
     color: 0xd8a848,
-    componentTags: ['hide', 'meat'],
+    // A stag carries antlers, the horn family (horn maps to curved_tusk per
+    // 11m-ORPHAN). Phase 11m added the tag as a band-3 open-world horn source.
+    componentTags: ['hide', 'horn', 'meat'],
   },
   gloam_fox: {
     id: 'gloam_fox',
@@ -135,14 +137,23 @@ export const AMBERFALL_MOBS: Record<string, MobTemplate> = {
     loot: [{ copper: 90, chance: 1 }],
     scale: 1,
     color: 0xd87838,
-    componentTags: ['hide', 'fang'],
+    // A fox digs and fights with its claws, the old_greyjaw (hide, fang, claw)
+    // shape. Phase 11m added the tag as a band-3 open-world claw source.
+    componentTags: ['hide', 'fang', 'claw'],
   },
   orchard_treant: {
     id: 'orchard_treant',
     name: 'Orchard Treant',
     minLevel: 19,
     maxLevel: 20,
-    family: 'ogre',
+    // Animated wood, not a brute. It was tagged into the ogre family while that
+    // family's fallback body was a generic giant; the family now resolves to the
+    // authored ogre, and family also picks the unit-frame crest, the bestiary
+    // label, which mobs it rallies, and whether its camp tends a night brazier
+    // (FIRE_BUILDING_FAMILIES: ogres build fires, walking trees do not), so a
+    // treant reading "Ogre" was wrong on all five. Elemental, not beast: beast
+    // is tameable (TAMEABLE_FAMILIES).
+    family: 'elemental',
     hpBase: 110,
     hpPerLevel: 28,
     dmgBase: 14,
@@ -161,7 +172,7 @@ export const AMBERFALL_MOBS: Record<string, MobTemplate> = {
   },
   harvest_sprite: {
     id: 'harvest_sprite',
-    name: 'Harvest Sprite',
+    name: 'Gleaning Sprite',
     minLevel: 18,
     maxLevel: 19,
     family: 'burrower',
@@ -343,7 +354,12 @@ export const AMBERFALL_QUESTS: Record<string, QuestDef> = {
     completionText:
       'Four buckets back on their hooks and the rows gone quiet. You have a heavier hand with sprites than I do, $N, and today I am glad of it.',
     objectives: [
-      { type: 'kill', targetMobId: 'harvest_sprite', count: 8, label: 'Harvest Sprite driven off' },
+      {
+        type: 'kill',
+        targetMobId: 'harvest_sprite',
+        count: 8,
+        label: 'Gleaning Sprite driven off',
+      },
       {
         type: 'interact',
         targetObjectItemId: 'amberfall_sap_bucket',

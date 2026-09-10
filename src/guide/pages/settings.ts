@@ -322,6 +322,10 @@ const INTERFACE_TABS: InterfaceTabBlock[] = [
       { setting: 'hud.options.reduceMotion', body: 'guide.settingsPage.rowReduceMotion' },
       { setting: 'hud.options.invertLookY', body: 'guide.settingsPage.ifInvertLookY' },
       { setting: 'hudChrome.options.showItemLevel', body: 'guide.settingsPage.ifShowItemLevel' },
+      {
+        setting: 'hudChrome.options.showReliquaryTracker',
+        body: 'guide.settingsPage.ifShowReliquaryTracker',
+      },
       { setting: 'hudChrome.options.showPlaytime', body: 'guide.settingsPage.ifShowPlaytime' },
       {
         setting: 'hudChrome.options.showOwnNameplate',
@@ -358,8 +362,24 @@ const INTERFACE_TABS: InterfaceTabBlock[] = [
       { setting: 'hudChrome.partyFrames.sort', body: 'guide.settingsPage.ifPartySort' },
       { setting: 'hudChrome.partyFrames.showAuras', body: 'guide.settingsPage.ifPartyShowAuras' },
       {
+        setting: 'hudChrome.options.playerHealthText',
+        body: 'guide.settingsPage.ifPlayerHealthText',
+      },
+      {
+        setting: 'hudChrome.options.targetHealthText',
+        body: 'guide.settingsPage.ifTargetHealthText',
+      },
+      {
         setting: 'hudChrome.options.aurasOnPlayerFrame',
         body: 'guide.settingsPage.ifAurasOnPlayerFrame',
+      },
+      {
+        setting: 'hudChrome.options.auraBarBelowFrame',
+        body: 'guide.settingsPage.ifAuraBarBelowFrame',
+      },
+      {
+        setting: 'hudChrome.options.alwaysShowAllBuffs',
+        body: 'guide.settingsPage.ifAlwaysShowAllBuffs',
       },
       {
         setting: 'hudChrome.options.showTargetOfTarget',
@@ -376,6 +396,7 @@ const INTERFACE_TABS: InterfaceTabBlock[] = [
       { setting: 'hud.options.chatOpacity', body: 'guide.settingsPage.ifChatOpacity' },
       { setting: 'hud.options.compactChat', body: 'guide.settingsPage.ifCompactChat' },
       { setting: 'hudChrome.chatTimestamps.show', body: 'guide.settingsPage.ifChatTimestamps' },
+      { setting: 'hud.options.filterProfanity', body: 'guide.settingsPage.ifFilterProfanity' },
     ],
   },
   {

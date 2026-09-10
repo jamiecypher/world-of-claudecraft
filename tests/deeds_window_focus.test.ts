@@ -16,7 +16,12 @@ import { DeedsWindow, type DeedsWindowDeps, refocusSelector } from '../src/ui/de
 
 // jsdom ships no 2D canvas, so the procedural crest compositor cannot run
 // here; the painter only ever uses the returned string as an <img src>.
-vi.mock('../src/ui/icons', () => ({
+vi.mock('../src/ui/icons', async (importOriginal) => ({
+  // Additive, never bare: a bare factory lists exactly the exports the file
+  // uses today, so the icons module gaining a consumer of another export
+  // silently invalidates this mock from a file the change never touches
+  // (the reliquary_window_behavior lesson).
+  ...(await importOriginal<typeof import('../src/ui/icons')>()),
   iconDataUrl: () => 'data:,',
 }));
 
@@ -146,6 +151,22 @@ describe('DeedsWindow: focus survives rebuilds', () => {
     const fresh = el.querySelector<HTMLElement>('[data-title="prog_veteran"]');
     expect(fresh?.getAttribute('aria-pressed')).toBe('true');
     expect(document.activeElement).toBe(fresh);
+  });
+
+  it('moves focus NOWHERE on a rebuild while pointer focus is parked on the root (never to Close)', () => {
+    // The pointer-only focus drop (src/ui/pointer_blur.ts) parks a mouse click's
+    // focus on the window root; the root is not a control to restore, so the
+    // rebuild must leave it alone rather than fall through to Close.
+    const state = baseState();
+    const { w, el } = makeWindow(state);
+    const closeBefore = el.querySelector('[data-close]');
+    expect(closeBefore).not.toBeNull();
+    el.focus();
+    expect(document.activeElement).toBe(el);
+    state.deedsEarned.set('prog_first_steps', '2026-07-12');
+    w.refreshIfChanged();
+    expect(el.querySelector('[data-close]')).not.toBe(closeBefore); // really rebuilt
+    expect(document.activeElement).toBe(el);
   });
 
   it('falls back to Close when the focused watch card leaves the current filter', () => {

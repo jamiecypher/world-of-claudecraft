@@ -27,10 +27,22 @@ interface VfxProbe {
   rotAttr: Float32Array;
   activeSlots: Int32Array;
   activeCount: number;
+  ignivarJudgmentFireAccumulator: number;
+  ignivarJudgmentFireSerial: number;
   head: number;
   drawBuffer: THREE.InterleavedBuffer;
   spriteRadiusSq: Float32Array;
   onContextRestored(): void;
+  syncIgnivarJudgmentGroundFire(
+    sourceId: number,
+    active: boolean,
+    centerX: number,
+    groundY: number,
+    centerZ: number,
+    safeX: number,
+    safeZ: number,
+    dt: number,
+  ): void;
   spawn(
     x: number,
     y: number,
@@ -67,10 +79,191 @@ function installCanvasStub(): void {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe('pooled VFX cloud', () => {
+  it('emits bounded twin-nozzle rocket particles and resets its nozzle alternation', () => {
+    installCanvasStub();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const vfx = new Vfx(new THREE.Scene(), () => null);
+    const probe = vfx as unknown as VfxProbe;
+    const left = new THREE.Vector3(-1, 2, 3);
+    const right = new THREE.Vector3(1, 2, 3);
+    const rear = new THREE.Vector3(0, 0, -1);
+
+    vfx.mountRocketExhaust(left, right, rear, 0.1, 1, 0, false);
+    expect(probe.activeCount).toBe(2);
+    expect([...probe.pos.subarray(0, 6)]).toEqual([
+      -1,
+      2,
+      expect.closeTo(2.92, 5),
+      1,
+      2,
+      expect.closeTo(2.92, 5),
+    ]);
+    expect(probe.vel[2]).toBeLessThan(-5);
+    expect(probe.vel[5]).toBeLessThan(-5);
+
+    vfx.mountRocketExhaust(left, right, rear, 1, 0, 1, true);
+    expect(probe.activeCount).toBe(2);
+    vfx.clear();
+    vfx.mountRocketExhaust(left, right, rear, 0.05, 1, 0, false);
+    expect(probe.activeCount).toBe(1);
+    expect(probe.pos[0]).toBe(-1);
+  });
+
+  it('emits one bounded ignition bloom with tiered sparks and smoke', () => {
+    installCanvasStub();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const low = new Vfx(new THREE.Scene(), () => null) as unknown as VfxProbe;
+    const left = new THREE.Vector3(-1, 2, 3);
+    const right = new THREE.Vector3(1, 2, 3);
+    const rear = new THREE.Vector3(0, 0, -1);
+
+    (low as unknown as Vfx).mountRocketIgnition(left, right, rear, false);
+    expect(low.activeCount).toBe(6);
+    expect(low.vel[2]).toBeLessThan(0);
+    expect(low.vel[5]).toBeLessThan(0);
+
+    const full = new Vfx(new THREE.Scene(), () => null) as unknown as VfxProbe;
+    (full as unknown as Vfx).mountRocketIgnition(left, right, rear, true);
+    expect(full.activeCount).toBe(11);
+  });
+
+  it('emits restrained tiered takeoff and landing rocket pulses', () => {
+    installCanvasStub();
+    vi.spyOn(Math, 'random').mockReturnValue(0.5);
+    const vfx = new Vfx(new THREE.Scene(), () => null);
+    const probe = vfx as unknown as VfxProbe;
+    const left = new THREE.Vector3(-1, 2, 3);
+    const right = new THREE.Vector3(1, 2, 3);
+    const rear = new THREE.Vector3(0, 0, -1);
+
+    vfx.mountRocketAirbornePulse(left, right, rear, 'takeoff', false);
+    expect(probe.activeCount).toBe(5);
+    vfx.clear();
+    vfx.mountRocketAirbornePulse(left, right, rear, 'landing', true);
+    expect(probe.activeCount).toBe(5);
+  });
+
+  it('disposes the generic cloud and drain channel pool exactly once', () => {
+    installCanvasStub();
+    const scene = new THREE.Scene();
+    const vfx = new Vfx(scene, () => new THREE.Vector3(0, 1, 0));
+    vfx.burst(new THREE.Vector3(0, 0, 0), 'fire', 4);
+    vfx.drainBeam(1, 2, 5);
+
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    scene.traverse((object) => {
+      const drawable = object as THREE.Mesh | THREE.Line | THREE.Points;
+      if (drawable.geometry) geometries.add(drawable.geometry);
+      const material = drawable.material;
+      if (material) {
+        for (const entry of Array.isArray(material) ? material : [material]) materials.add(entry);
+      }
+    });
+    const geometryDisposals = [...geometries].map((geometry) => vi.spyOn(geometry, 'dispose'));
+    const materialDisposals = [...materials].map((material) => vi.spyOn(material, 'dispose'));
+
+    vfx.dispose();
+
+    expect(scene.children).toHaveLength(0);
+    for (const dispose of geometryDisposals) expect(dispose).toHaveBeenCalledOnce();
+    for (const dispose of materialDisposals) expect(dispose).toHaveBeenCalledOnce();
+
+    vfx.dispose();
+    vfx.update(1);
+    expect(scene.children).toHaveLength(0);
+    for (const dispose of geometryDisposals) expect(dispose).toHaveBeenCalledOnce();
+    for (const dispose of materialDisposals) expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it('removes a projectile before a throwing impact callback can replay it', () => {
+    installCanvasStub();
+    const impact = vi.fn(() => {
+      throw new Error('projectile callback');
+    });
+    const vfx = new Vfx(new THREE.Scene(), () => new THREE.Vector3());
+
+    vfx.soulTravel(0, 0, 0, 7, impact);
+    expect(() => vfx.update(1)).toThrow('projectile callback');
+    expect(impact).toHaveBeenCalledOnce();
+
+    expect(() => vfx.update(0.1)).not.toThrow();
+    expect(impact).toHaveBeenCalledOnce();
+  });
+
+  it('renders deterministic pooled flame, fire, spark and smoke sprites for Judgment', () => {
+    installCanvasStub();
+    const build = () => {
+      const vfx = new Vfx(new THREE.Scene(), () => null);
+      const probe = vfx as unknown as VfxProbe;
+      vfx.setQuality(1);
+      probe.syncIgnivarJudgmentGroundFire(77, true, 100, 3, -50, 113.25, -58.5, 0);
+      const samples = [...probe.activeSlots.subarray(0, probe.activeCount)].map((slot) => ({
+        x: probe.pos[slot * 3],
+        y: probe.pos[slot * 3 + 1],
+        z: probe.pos[slot * 3 + 2],
+        sprite: probe.spriteAttr[slot],
+        size: probe.size[slot],
+      }));
+      return { probe, samples };
+    };
+
+    const first = build();
+    const second = build();
+    expect(first.samples).toEqual(second.samples);
+    expect(first.samples.length).toBeGreaterThan(200);
+    expect(new Set(first.samples.map((sample) => sample.sprite))).toEqual(
+      new Set([0, 2, 9, 10, 11]),
+    );
+    expect(
+      first.samples
+        .filter((sample) => sample.sprite === 9 || sample.sprite === 10)
+        .every((sample) => sample.size >= 0.9),
+    ).toBe(true);
+    for (const sample of first.samples) {
+      expect(Math.hypot(sample.x - 100, sample.z + 50)).toBeLessThan(34);
+      expect(Math.hypot(sample.x - 113.25, sample.z + 58.5)).toBeGreaterThanOrEqual(6.85);
+      expect(sample.y).toBeGreaterThanOrEqual(3);
+    }
+
+    const steadyCount = first.probe.activeCount;
+    const steadySerial = first.probe.ignivarJudgmentFireSerial;
+    first.probe.syncIgnivarJudgmentGroundFire(77, true, 100, 3, -50, 113.25, -58.5, 0);
+    expect(first.probe.activeCount).toBe(steadyCount);
+    expect(first.probe.ignivarJudgmentFireSerial).toBe(steadySerial);
+    first.probe.syncIgnivarJudgmentGroundFire(77, true, 100, 3, -50, 113.25, -58.5, 1 / 460);
+    expect(first.probe.ignivarJudgmentFireSerial).toBe(steadySerial);
+    expect(first.probe.ignivarJudgmentFireAccumulator).toBeCloseTo(0.5, 8);
+    first.probe.syncIgnivarJudgmentGroundFire(77, true, 100, 3, -50, 113.25, -58.5, 1 / 460);
+    expect(first.probe.ignivarJudgmentFireSerial).toBe(steadySerial + 1);
+    expect(first.probe.ignivarJudgmentFireAccumulator).toBeCloseTo(0, 8);
+
+    const before = first.probe.activeCount;
+    first.probe.syncIgnivarJudgmentGroundFire(77, false, 100, 3, -50, 113.25, -58.5, 1 / 60);
+    first.probe.syncIgnivarJudgmentGroundFire(77, true, 100, 3, -50, 113.25, -58.5, 1 / 60);
+    expect(first.probe.activeCount).toBeGreaterThan(before);
+  });
+
+  it('keeps low-tier Judgment flames actionable while omitting smoke', () => {
+    installCanvasStub();
+    const vfx = new Vfx(new THREE.Scene(), () => null);
+    const probe = vfx as unknown as VfxProbe;
+    vfx.setQuality(0);
+    probe.syncIgnivarJudgmentGroundFire(91, true, 0, 0, 0, 12, -8, 0);
+
+    const sprites = new Set(
+      [...probe.activeSlots.subarray(0, probe.activeCount)].map((slot) => probe.spriteAttr[slot]),
+    );
+    expect(probe.ignivarJudgmentFireSerial).toBe(91 * 4099 + 136);
+    expect(sprites).toEqual(new Set([0, 2, 9, 10]));
+    expect(sprites.has(11)).toBe(false);
+  });
+
   it('submits and uploads only the live ascending prefix with conservative culling', () => {
     installCanvasStub();
     const scene = new THREE.Scene();

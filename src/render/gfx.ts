@@ -9,12 +9,28 @@ import { safeStartupGraphicsPreset } from '../game/startup_graphics_safety';
 import { EFFECTS_QUALITY_LOW_CUTOFF } from '../game/ui_effects_profile';
 import { attachBiomeHaze } from './biome_haze_field';
 import { FAR_ANIM_RANGE_SCALE_MAX } from './crowd_lod';
+// Side-effect import only: installs the final-color NaN guard (see the
+// point-light pruning comment in initGfxTier below for why this is a bare
+// import here, not a direct invocation). This import is also what
+// gives characters/preview.ts, characters/portrait.ts and armory_preview.ts
+// the guard, transitively: they reach it via gfx.ts, never call it directly.
+import './final_color_nan_guard';
+import { CANOPY_TAPS_AO_ONLY, CANOPY_TAPS_FULL, CANOPY_TAPS_OFF } from './canopy_detail_tier_core';
 import { gfxAaPolicy } from './gfx_aa_policy_core';
 import { applyGfxOverridesFromSearch } from './gfx_override_core';
+import { GRASS_CARDS_FULL, GRASS_CARDS_LEAN, GRASS_CARDS_MID } from './grass_tuft_cards_core';
 import {
   installPbrPointLightShaderPruning,
   patchPbrRimGlowFragmentShader,
+  RIM_GLOW_DEFAULT_COLOR,
 } from './pbr_fragment_shader';
+import {
+  patchRoofDarknessFragmentShader,
+  patchRoofDarknessVertexShader,
+  ROOF_DARK_END_Y,
+  ROOF_DARK_START_Y,
+} from './roof_darkness_core';
+import { markSharedMaterial } from './shared_resource';
 import { isSoftwareRendererName } from './software_renderer';
 
 // Quality tiers: every tier-dependent knob keys off this module instead of
@@ -71,6 +87,8 @@ export const GFX_BUCKET_IDS = [
   'weapons',
   'worldStreaming',
   'ui',
+  'detail',
+  'post',
 ] as const;
 
 export type GfxBucketId = (typeof GFX_BUCKET_IDS)[number];
@@ -174,6 +192,21 @@ export interface GfxSettings {
   readonly surfaceDetail: boolean;
   /** worn-layer parallax refinement taps per fragment (0 = no parallax walk) */
   readonly surfaceDetailTaps: number;
+  /**
+   * Anisotropic-filtering taps for COLOUR maps (the terrain splat albedo array,
+   * every GLB albedo, water, the worn-stone family, face detail). Each tap is
+   * another texel fetch on every ground-adjacent fragment at a grazing angle,
+   * so the whole ground at 8x is memory bandwidth the integrated GPUs that
+   * carry the low tiers do not have, while a discrete desktop GPU absorbs it.
+   * A sampler parameter only: never actionable information (fairness rule).
+   */
+  readonly anisotropy: number;
+  /**
+   * Anisotropic taps for NORMAL and data maps: half the colour budget, floored
+   * at 1. Normals feed lighting rather than the read of a surface, so they buy
+   * less per tap than the colour map beside them.
+   */
+  readonly normalAnisotropy: number;
   /** worn-layer share of the full 2.2sd parallax offset clamp (0..1) */
   readonly surfaceDetailClampK: number;
   /** blade-grass carpet radius in world units; 0 disables the carpet */
@@ -182,12 +215,29 @@ export interface GfxSettings {
   readonly cliffScree: boolean;
   /** canopy clump-detail layer (canopy_detail.ts) */
   readonly canopyDetail: boolean;
+  /**
+   * Triplanar taps a surviving leaf fragment pays inside the canopy layer's
+   * fade band: 0 off, 3 the AO half alone (ultra), 6 AO plus the NormalGL
+   * shading-normal bend (insane). Leaves are alpha-tested AND double-sided,
+   * so nothing writes early-Z under them and every overlapping canopy
+   * fragment pays this in full. canopy_detail_tier_core.ts owns the split and
+   * the fade end that comes with each arm. Always 0 exactly when
+   * `canopyDetail` is false.
+   */
+  readonly canopyDetailTaps: number;
   /** terrain relief ladder: 0 none, 1 cavity shade, 2 +parallax walk, 3 +micro sun-shadow */
   readonly terrainRelief: number;
   /** N8AO at full resolution + Medium quality (vs half-res Low) */
   readonly aoFullRes: boolean;
   /** SMAA tail pass on the grade/composer output */
   readonly smaa: boolean;
+  /**
+   * FXAA fused into the output grade pass, the edge AA the region-safe
+   * grade-only chain can carry: a tail pass is full-frame and would cost that
+   * chain its dynamic resolution. Mutually exclusive with `smaa`, and
+   * meaningless without `gradePass`.
+   */
+  readonly fxaa: boolean;
   /** UnrealBloom pass on the composer */
   readonly bloom: boolean;
   /** terrain meshes cast into the sun shadow map */
@@ -207,6 +257,16 @@ export interface GfxSettings {
   readonly denseDressing: boolean;
   readonly grassRadius: number;
   readonly grassStep: number;
+  /**
+   * Alpha-tested double-sided quads per grass tuft (grass_tuft_cards_core.ts,
+   * which owns the shed order and the placement of each card). The near-field
+   * grass carpet is the densest discard-heavy fill layer in the world and this
+   * count multiplies every tuft it draws, so it is a tier knob rather than the
+   * lean/lush binary it used to be: lean tiers 2, medium and high 3 (the two
+   * uprights plus the 45-degree breaker), ultra and insane 4 (plus the
+   * sky-facing cap card).
+   */
+  readonly grassCardsPerTuft: number;
   /** Stable-prefix floor for grass cards already inside their far alpha-fade band. */
   readonly farGrassDensityFloor: number;
   readonly terrainSplat: boolean;
@@ -488,6 +548,24 @@ export const GFX_BUCKET_BANDS: Record<GfxTier, GfxBucketBands> = {
       cost: 'cpu',
       governable: false,
     },
+    detail: {
+      min: 1.0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0,
+      cost: 'gpu',
+      governable: false,
+    },
+    // Post shed (post_shed_core.ts): this tier builds no sheddable post pass
+    // (no SMAA, bloom or AO), so the level has no rung to walk.
+    post: {
+      min: 1.0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0,
+      cost: 'gpu',
+      governable: false,
+    },
   },
   medium: {
     resolution: {
@@ -584,6 +662,24 @@ export const GFX_BUCKET_BANDS: Record<GfxTier, GfxBucketBands> = {
       max: 1.0,
       roi: 0.86,
       cost: 'cpu',
+      governable: false,
+    },
+    detail: {
+      min: 1.0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0,
+      cost: 'gpu',
+      governable: false,
+    },
+    // Post shed (post_shed_core.ts): this tier builds no sheddable post pass
+    // (no SMAA, bloom or AO), so the level has no rung to walk.
+    post: {
+      min: 1.0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0,
+      cost: 'gpu',
       governable: false,
     },
   },
@@ -684,6 +780,33 @@ export const GFX_BUCKET_BANDS: Record<GfxTier, GfxBucketBands> = {
       cost: 'cpu',
       governable: false,
     },
+    // Terrain-detail shed (terrain_detail_shed_core.ts): the high TABLE
+    // profile sits at the floor (relief 1, 0 taps), so its band is not
+    // governable. An Advanced session resolves to this tier too, and its
+    // raised dials are admitted by the governor from its own request
+    // (RenderBudgetGovernorOptions.terrainDetail), never by this band.
+    detail: {
+      min: 1.0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0,
+      cost: 'gpu',
+      governable: false,
+    },
+    // Post shed (post_shed_core.ts): the composer chain's four rungs (SMAA to
+    // the fused FXAA grade, bloom tail mips, bloom off, AO passthrough). The
+    // band floor is the tier's; the governor ladders only over the rungs the
+    // session's OWN built chain carries (RenderBudgetGovernor.setPostShedChain,
+    // fed from PostPipeline.shedChain), so an Advanced mix with bloom or AO
+    // dialed off never walks a rung that can change nothing.
+    post: {
+      min: 0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0.9,
+      cost: 'gpu',
+      governable: true,
+    },
   },
   ultra: {
     resolution: {
@@ -781,6 +904,28 @@ export const GFX_BUCKET_BANDS: Record<GfxTier, GfxBucketBands> = {
       roi: 0.86,
       cost: 'cpu',
       governable: false,
+    },
+    detail: {
+      min: 0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0.92,
+      cost: 'gpu',
+      governable: true,
+    },
+    // Post shed (post_shed_core.ts): the composer chain's four rungs (SMAA to
+    // the fused FXAA grade, bloom tail mips, bloom off, AO passthrough). The
+    // band floor is the tier's; the governor ladders only over the rungs the
+    // session's OWN built chain carries (RenderBudgetGovernor.setPostShedChain,
+    // fed from PostPipeline.shedChain), so an Advanced mix with bloom or AO
+    // dialed off never walks a rung that can change nothing.
+    post: {
+      min: 0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0.9,
+      cost: 'gpu',
+      governable: true,
     },
   },
   // Insane: everything-on. Same bands as ultra (all baselines already sit at
@@ -884,6 +1029,28 @@ export const GFX_BUCKET_BANDS: Record<GfxTier, GfxBucketBands> = {
       cost: 'cpu',
       governable: false,
     },
+    detail: {
+      min: 0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0.92,
+      cost: 'gpu',
+      governable: true,
+    },
+    // Post shed (post_shed_core.ts): the composer chain's four rungs (SMAA to
+    // the fused FXAA grade, bloom tail mips, bloom off, AO passthrough). The
+    // band floor is the tier's; the governor ladders only over the rungs the
+    // session's OWN built chain carries (RenderBudgetGovernor.setPostShedChain,
+    // fed from PostPipeline.shedChain), so an Advanced mix with bloom or AO
+    // dialed off never walks a rung that can change nothing.
+    post: {
+      min: 0,
+      baseline: 1.0,
+      max: 1.0,
+      roi: 0.9,
+      cost: 'gpu',
+      governable: true,
+    },
   },
 };
 
@@ -901,6 +1068,8 @@ function bucketBaselines(bands: GfxBucketBands): GfxBucketLevels {
     weapons: bands.weapons.baseline,
     worldStreaming: bands.worldStreaming.baseline,
     ui: bands.ui.baseline,
+    detail: bands.detail.baseline,
+    post: bands.post.baseline,
   };
 }
 
@@ -1000,6 +1169,17 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
   // Hoisted out of the literal so denseDressing below can extend the cohort.
   const lowPlus =
     iosMemoryProfile || (tier === 'low' && (gpuClass === 'weak' || gpuClass === 'software'));
+  // Hoisted out of the literal so the grass-card ladder below can key off the
+  // same cohort the lean model set and the lean LOD table use.
+  const leanFoliage = tier === 'low' || (tier === 'medium' && weakIntegratedGpu);
+  // Anisotropy ladder for colour maps; normals take half of it. Derived from
+  // the TIER (plus the memory profiles, which constrainedMemory already folds
+  // iosMemoryProfile into) and nothing else on purpose: the GLB loader stamps
+  // a parsed texture's anisotropy before the world renderer ever uploads it,
+  // and a value that also read the live adapter string would differ between
+  // the import-time profile and the post-initGfxTier one for the same tier.
+  const colourAnisotropy =
+    constrainedMemory || tier === 'low' ? 1 : tier === 'medium' ? 2 : tier === 'high' ? 4 : 8;
   let settings: GfxSettings = {
     graphicsConfigVersion: GFX_CONFIG_VERSION,
     tier,
@@ -1018,17 +1198,26 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
     // Shadows are cosmetic and duplicate the visible scene draw. Both constrained browsers and
     // the stricter iOS WebKit residency profile remove that duplicate pass.
     dynamicShadows: tier !== 'low' && !constrainedMemory,
+    // 2560 is the working map size for every tier that is not paying for a
+    // showcase: at the 210 yd ortho box it is 0.082 yd per texel against
+    // 4096's 0.051, and the sun's own PCF radius (2.25 texels) filters over
+    // more than that difference, so High reads the same for 2.56x fewer texels
+    // (2560^2 / 4096^2) on a pass that is already about a third of the frame's
+    // draw calls. 4096 is gated on `gfxTierAtLeast(tier, 'ultra')` rather than
+    // spelled as the fall-through arm, so a NEW top tier added below ultra
+    // defaults to the cheap side instead of silently inheriting the showcase
+    // allocation.
     shadowMap: iosMemoryProfile
       ? 1024
       : tier === 'low'
         ? 2048
-        : tier === 'medium'
-          ? constrainedMemory
+        : constrainedMemory
+          ? tier === 'medium'
             ? 1536
-            : 2560
-          : constrainedMemory
-            ? 2048
-            : 4096,
+            : 2048
+          : gfxTierAtLeast(tier, 'ultra')
+            ? 4096
+            : 2560,
     standardMaterials: !iosMemoryProfile && gfxTierAtLeast(tier, 'medium'),
     // Round-10 detail-knob defaults (see the interface comment): High takes the
     // existing Advanced-Medium profile to bound its steady cost (basic worn
@@ -1037,6 +1226,8 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
     surfaceDetail: !iosMemoryProfile && gfxTierAtLeast(tier, 'high'),
     surfaceDetailTaps: tier === 'insane' ? 4 : gfxTierAtLeast(tier, 'ultra') ? 3 : 0,
     surfaceDetailClampK: tier === 'insane' ? 1 : tier === 'ultra' ? 0.85 : 0,
+    anisotropy: colourAnisotropy,
+    normalAnisotropy: Math.max(1, colourAnisotropy / 2),
     bladeCarpetRadius: iosMemoryProfile
       ? 0
       : gfxTierAtLeast(tier, 'ultra')
@@ -1046,6 +1237,15 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
           : 0,
     cliffScree: !iosMemoryProfile && gfxTierAtLeast(tier, 'ultra'),
     canopyDetail: !iosMemoryProfile && gfxTierAtLeast(tier, 'ultra'),
+    // Insane is the declared showcase tier and only ever a manual opt-in, so
+    // it keeps the full six; ultra takes the AO half over a tightened band.
+    canopyDetailTaps: iosMemoryProfile
+      ? CANOPY_TAPS_OFF
+      : gfxTierAtLeast(tier, 'insane')
+        ? CANOPY_TAPS_FULL
+        : gfxTierAtLeast(tier, 'ultra')
+          ? CANOPY_TAPS_AO_ONLY
+          : CANOPY_TAPS_OFF,
     terrainRelief: iosMemoryProfile
       ? 0
       : gfxTierAtLeast(tier, 'ultra')
@@ -1055,13 +1255,14 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
           : 0,
     aoFullRes: gfxTierAtLeast(tier, 'ultra'),
     smaa: aaPolicy.postAa === 'smaa',
+    fxaa: aaPolicy.postAa === 'fxaa-grade',
     bloom: !iosMemoryProfile && gfxTierAtLeast(tier, 'high'),
     terrainCastShadows: tier !== 'low' && !constrainedMemory,
     lowPlus,
     // Tree and rock placement must match across clients because those decorations
     // occlude world sightlines. Keep the constrained profile on the full placement
     // set and reduce only non-occluding grass below.
-    leanFoliage: tier === 'low' || (tier === 'medium' && weakIntegratedGpu),
+    leanFoliage,
     // The dressing compensation cohort (interface comment carries the why):
     // lowPlus plus the leanFoliage medium session, which the lowPlus re-key
     // had silently stripped of its denser-dressing compensation.
@@ -1088,6 +1289,14 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
               ? 2.35
               : 2.0
             : 1.8,
+    // The card ladder (see the interface comment). Lean keeps the legacy pair;
+    // the cap card, which the carpet tiers already collapse near the player,
+    // is what ultra and insane buy over medium and high.
+    grassCardsPerTuft: leanFoliage
+      ? GRASS_CARDS_LEAN
+      : gfxTierAtLeast(tier, 'ultra')
+        ? GRASS_CARDS_FULL
+        : GRASS_CARDS_MID,
     farGrassDensityFloor: iosMemoryProfile
       ? 0.5
       : constrainedMemory
@@ -1182,6 +1391,8 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
         bladeCarpetRadius: 0,
         cliffScree: false,
         canopyDetail: false,
+        canopyDetailTaps: CANOPY_TAPS_OFF,
+        grassCardsPerTuft: GRASS_CARDS_LEAN,
       };
     else if (foliageLevel === 1)
       settings = {
@@ -1190,6 +1401,8 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
         bladeCarpetRadius: 24,
         cliffScree: false,
         canopyDetail: false,
+        canopyDetailTaps: CANOPY_TAPS_OFF,
+        grassCardsPerTuft: leanFoliage ? GRASS_CARDS_LEAN : GRASS_CARDS_MID,
       };
     else if (foliageLevel === 2)
       settings = {
@@ -1197,6 +1410,8 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
         bladeCarpetRadius: 34,
         cliffScree: true,
         canopyDetail: true,
+        canopyDetailTaps: CANOPY_TAPS_AO_ONLY,
+        grassCardsPerTuft: leanFoliage ? GRASS_CARDS_LEAN : GRASS_CARDS_FULL,
       };
     else
       settings = {
@@ -1205,6 +1420,8 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
         bladeCarpetRadius: 40,
         cliffScree: true,
         canopyDetail: true,
+        canopyDetailTaps: CANOPY_TAPS_FULL,
+        grassCardsPerTuft: leanFoliage ? GRASS_CARDS_LEAN : GRASS_CARDS_FULL,
       };
     // Surface Detail (the town-cost dial): Off sheds the whole worn layer;
     // Basic keeps the detail normals + AO grime without the parallax walk;
@@ -1224,7 +1441,8 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
       settings = { ...settings, surfaceDetailTaps: 3, surfaceDetailClampK: 0.85 };
     else settings = { ...settings, surfaceDetailTaps: 4, surfaceDetailClampK: 1 };
     // Effects & Lighting: Low is the region-safe grade-only mini composer (the
-    // medium tier's post profile, without full-frame SMAA); Medium adds N8AO; High the full
+    // medium tier's post profile, with the grade-fused FXAA in place of
+    // full-frame SMAA); Medium adds N8AO; High the full
     // high-tier stack (AO + bloom + SMAA). The level-0 test keeps the shared
     // EFFECTS_QUALITY_LOW_CUTOFF constant so the HUD effect tier and the 3D
     // renderer still downgrade at the same threshold.
@@ -1239,26 +1457,40 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
         aoFullRes: false,
         bloom: false,
         smaa: false,
+        // Dropping to the grade-only chain drops the SMAA tail with it, so the
+        // fused arm is what keeps this mix anti-aliased at all. Granted on any
+        // device whose policy grants post AA, not just the medium tier's own
+        // 'fxaa-grade': a memory-tight profile whose policy is 'none' still
+        // gets nothing. The AA dial below then applies.
+        fxaa: aaPolicy.postAa !== 'none',
         maxPointLights: Math.min(settings.maxPointLights, 3),
       };
     else if (effectsValue < 0.75)
       settings = { ...settings, ao: true, aoFullRes: false, bloom: false, smaa: false };
     // Shadow Quality: pure map-size steps (1024 / 2560 / 4096); terrain-cast
     // shadows join at High, matching the tier ladder where every
-    // dynamic-shadow tier casts terrain. The ladder caps at High's 4096 map:
-    // the retired Insane rung's single 8192x8192 target was a ~256 MB-class
-    // GPU allocation redrawn every frame for marginal visible gain, so a
-    // historical stored Insane value falls through to the High base here
-    // (and the settings store clamps it to High on its next write).
+    // dynamic-shadow tier casts terrain. The ladder caps at 4096: the retired
+    // Insane rung's single 8192x8192 target was a ~256 MB-class GPU
+    // allocation redrawn every frame for marginal visible gain, so a
+    // historical stored Insane value lands on the top rung here (and the
+    // settings store clamps it to High on its next write).
+    //
+    // The top rung WRITES 4096 rather than falling through to the tier base:
+    // the High base is 2560 now, and a stored dial value has to keep the map
+    // size the player chose. It stays inside the device policy, so a
+    // constrained or iOS-memory profile keeps its own smaller base (that arm
+    // is what the retired explicit 8192 write used to override).
     const shadowLevel = levelOf(hints.shadowQuality ?? 1);
     if (shadowLevel === 0) settings = { ...settings, shadowMap: 1024, terrainCastShadows: false };
     else if (shadowLevel === 1)
       settings = { ...settings, shadowMap: 2560, terrainCastShadows: false };
+    else if (!constrainedMemory && !iosMemoryProfile) settings = { ...settings, shadowMap: 4096 };
     // Per-effect switches (round 12), layered AFTER Effects & Lighting and
     // authoritative over its per-effect writes: Effects & Lighting stays the
     // post-CHAIN master (its Low arm sheds the composer, and with no composer
-    // there is no pass to run these on, so the whole block is skipped there),
-    // while these dials own the individual passes. A pre-round-12 mix stores
+    // there is no pass for AO or bloom to run on, so this block is skipped
+    // there and the else arm below takes over for the one dial that still has
+    // something to control), while these dials own the individual passes. A pre-round-12 mix stores
     // no values for them, so each dial's absent default DERIVES from the
     // stored effectsQuality and reproduces the old bundle byte for byte. The
     // AA dial can only DISABLE what the device policy grants (a memory-tight
@@ -1277,6 +1509,15 @@ function settingsFor(tier: GfxTier, hints?: Partial<GfxRuntimeHints>): GfxSettin
         bloom: bloomDial >= 0.5,
         smaa: aaPolicy.postAa === 'smaa' && aaDial >= 0.5,
       };
+    } else {
+      // The grade-fused FXAA is the only edge AA a grade-only mix can carry, so
+      // it answers to the same AA dial, which the block above cannot reach: that
+      // one is gated on a composer this mix has none of. Disable-only there,
+      // disable-only here. Its default is ON rather than deriving from
+      // effectsQuality, because this arm is new: there is no stored pre-round-12
+      // mix of it to reproduce byte for byte, and a grade-only mix that silently
+      // opted out of AA would be the surprising reading.
+      settings = { ...settings, fxaa: settings.fxaa && (hints.antiAliasing ?? 1) >= 0.5 };
     }
     // View Distance / Water Quality: whole-tier remaps for the two subsystems
     // that plan against a tier (the far-field policy still applies its own
@@ -1369,14 +1610,20 @@ function storedNumericSetting(key: string): number | undefined {
 let gpuRendererProbed = false;
 let probedGpuRenderer: string | undefined;
 
+let probedGpuParallelCompile: boolean | undefined;
+
 function probeGpuRenderer(): string | undefined {
   if (gpuRendererProbed) return probedGpuRenderer;
   gpuRendererProbed = true;
-  probedGpuRenderer = readGpuRendererString();
+  const probe = readGpuRendererString();
+  probedGpuRenderer = probe?.renderer;
+  probedGpuParallelCompile = probe?.parallelCompile;
   return probedGpuRenderer;
 }
 
-function readGpuRendererString(): string | undefined {
+function readGpuRendererString():
+  | { renderer: string; parallelCompile: boolean | undefined }
+  | undefined {
   if (typeof document === 'undefined') return undefined;
   let gl: WebGLRenderingContext | WebGL2RenderingContext | null = null;
   try {
@@ -1384,13 +1631,29 @@ function readGpuRendererString(): string | undefined {
     gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
     if (!gl) return undefined;
     const dbg = gl.getExtension('WEBGL_debug_renderer_info');
-    return String(
+    const renderer = String(
       dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER),
     );
+    return { renderer, parallelCompile: listsParallelShaderCompile(gl) };
   } catch {
     return undefined;
   } finally {
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+}
+
+/** The extension-list read on its own: a context that cannot list its
+ *  extensions leaves the answer UNKNOWN (the shell keeps its trial rung on
+ *  undefined) and never costs the renderer string read beside it. */
+function listsParallelShaderCompile(
+  gl: WebGLRenderingContext | WebGL2RenderingContext,
+): boolean | undefined {
+  if (typeof gl.getSupportedExtensions !== 'function') return undefined;
+  try {
+    const listed = gl.getSupportedExtensions();
+    return listed ? listed.includes('KHR_parallel_shader_compile') : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -1404,6 +1667,16 @@ function readGpuRendererString(): string | undefined {
  */
 export function activeGpuRendererName(): string | undefined {
   return probeGpuRenderer();
+}
+
+/** Whether the same boot probe's context listed KHR_parallel_shader_compile:
+ *  the desktop shell's Vulkan trial reads it beside the renderer string (ANGLE's
+ *  Vulkan backend exposes the extension only under an opt-in feature the shell
+ *  switches on, and judges from this whether the switch took). Undefined when
+ *  no context could be probed. */
+export function activeGpuParallelCompile(): boolean | undefined {
+  probeGpuRenderer();
+  return probedGpuParallelCompile;
 }
 
 /** Tier explicitly requested via URL, or null when it should be auto-detected. */
@@ -1455,7 +1728,7 @@ function runtimeHints(): GfxRuntimeHints {
   };
 }
 
-function mobilePlatformFromNavigator(
+export function mobilePlatformFromNavigator(
   nav: Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'> | null,
 ): 'ios' | 'android' | 'other' {
   if (!nav) return 'other';
@@ -1861,15 +2134,26 @@ export function initGfxTier(webgl: THREE.WebGLRenderer): GfxTier {
   // Install before any scene material compiles. The fixed point-light budget
   // keeps program counts stable with zero-intensity slots; the shader guard
   // makes those stable slots cheap without changing their permutation.
+  //
+  // The final-color NaN guard (final_color_nan_guard.ts) is NOT installed
+  // here: unlike this pruning, it needs to run before renderers this repo
+  // builds outside initGfxTier too (characters/preview.ts,
+  // characters/portrait.ts, armory_preview.ts), so it installs itself at
+  // module scope instead, as an import side effect. It is not moved here
+  // because a per-site call was tried first and provably missed two of
+  // those three; see final_color_nan_guard.ts for the reasoning. The two
+  // guards use different seams on purpose, not by oversight.
   installPbrPointLightShaderPruning();
   const gpuRenderer = rendererName(webgl);
   const softwareRendering = isSoftwareRendererName(gpuRenderer);
   const hints = { ...runtimeHints(), gpuRenderer };
-  return activateGfxProfile(profileFromHints(hints, softwareRendering, 0)).settings.tier;
+  const activated = activateGfxProfile(profileFromHints(hints, softwareRendering, 0));
+  return activated.settings.tier;
 }
 
 export const gfxInternalsForTest = {
   settingsFor,
+  sharedUniforms: () => sharedUniforms,
   runtimeHints,
   stableFingerprintValue,
   mobilePlatformFromNavigator,
@@ -1894,15 +2178,38 @@ export const gfxInternalsForTest = {
 // One clock uniform shared by every onBeforeCompile shader (wind, water,
 // grade grain). The renderer ticks it once per frame in sync(). uRimBoost
 // scales the character rim glow (raised inside dungeons so silhouettes
-// separate from the murk).
+// separate from the murk); uRimColor is its tint, cool by default and
+// re-graded by the interior light rig (warm ember in the Ignivar forge).
 export const sharedUniforms = {
   uTime: { value: 0 },
   uRimBoost: { value: 1 },
+  uRimColor: { value: new THREE.Color(RIM_GLOW_DEFAULT_COLOR) },
+  /** Hemisphere-irradiance multiplier for the Lambert terrain under the
+   *  standard-materials rig (outdoor_light_rig_core.ts terrainFillBoostTarget):
+   *  the renderer eases it each frame, 1 whenever an interior rig owns the
+   *  lights or on the Lambert tier. */
+  uTerrainFillBoost: { value: 1 },
+  /** The raid rooms' world-height black ramp (roof_darkness_core.ts):
+   *  strength 0 everywhere except the ignivar states, which the interior
+   *  light rig raises to 1 on settle. */
+  uRoofDarkStrength: { value: 0 },
+  uRoofDarkStart: { value: ROOF_DARK_START_Y },
+  uRoofDarkEnd: { value: ROOF_DARK_END_Y },
   /** (player x, player z, dense blade-carpet radius): the paint-free ring the
    *  terrain splat reads so painted blades never show under the real carpet.
    *  Radius 0 (a tier with no carpet) leaves the paint everywhere. Written by
    *  the renderer each frame beside uTime. */
   uCarpetRing: { value: new THREE.Vector3(0, 0, 0) },
+  /** Live terrain-detail shed (terrain_detail_shed_core.ts): the governed
+   *  0..1 level mapped onto the tier's own terrainRelief / surfaceDetailTaps
+   *  / surfaceDetailClampK request, written by the renderer through
+   *  applyTerrainDetailShed on every budget-state application. Defaults are
+   *  the ladder maxima (relief 3, 4 taps, the tier's full clamp share) so an
+   *  un-updated reference (a secondary GL context, a test) never shows less
+   *  detail than the material compiled for. */
+  uReliefSteps: { value: 3 },
+  uWornDetailTaps: { value: 4 },
+  uWornDetailClampK: { value: 1 },
 };
 
 // The one sun. Everything that needs the sun's position/direction (key light,
@@ -1937,6 +2244,11 @@ export interface SurfaceMatOpts {
   normalMap?: THREE.Texture;
   /** PBR roughness map (high/ultra only; ignored on the Lambert tier) */
   roughnessMap?: THREE.Texture;
+  /** PBR metalness map (high/ultra only; ignored on the Lambert tier). An
+   *  OPTION rather than a post-hoc write on the returned material: slot
+   *  presence is a program-cache-key input, so writing it onto a shared cache
+   *  entry relinks every material already drawing with it. */
+  metalnessMap?: THREE.Texture;
   /** baked AO map — needs uv2 on the geometry (high/ultra only) */
   aoMap?: THREE.Texture;
   roughness?: number;
@@ -1967,6 +2279,7 @@ export function addRimGlow(mat: THREE.Material): void {
     const patched = patchPbrRimGlowFragmentShader(sh.fragmentShader);
     if (patched === sh.fragmentShader) return;
     sh.uniforms.uRimBoost = sharedUniforms.uRimBoost;
+    sh.uniforms.uRimColor = sharedUniforms.uRimColor;
     sh.fragmentShader = patched;
   };
   mat.customProgramCacheKey = () =>
@@ -1979,6 +2292,30 @@ export function addRimGlow(mat: THREE.Material): void {
  *  material_clone_hooks.ts re-attaches. */
 export function hasRimGlow(mat: THREE.Material): boolean {
   return rimGlowMaterials.has(mat);
+}
+
+// The raid rooms' roof darkness (roof_darkness_core.ts): a post-fog world
+// height black ramp. Hooked onto the ignivar tile packs and the env prop
+// templates; inert (strength 0) in every other scene state.
+const roofDarknessMaterials = new WeakSet<THREE.Material>();
+
+export function addRoofDarkness(mat: THREE.Material): void {
+  if (roofDarknessMaterials.has(mat)) return;
+  roofDarknessMaterials.add(mat);
+  const previousCompile = mat.onBeforeCompile;
+  const previousCompileSource = previousCompile.toString();
+  const previousProgramKey = mat.customProgramCacheKey.bind(mat);
+  mat.onBeforeCompile = (sh, renderer) => {
+    previousCompile.call(mat, sh, renderer);
+    const fragment = patchRoofDarknessFragmentShader(sh.fragmentShader);
+    if (fragment === sh.fragmentShader) return;
+    sh.vertexShader = patchRoofDarknessVertexShader(sh.vertexShader);
+    sh.uniforms.uRoofDarkStrength = sharedUniforms.uRoofDarkStrength;
+    sh.uniforms.uRoofDarkStart = sharedUniforms.uRoofDarkStart;
+    sh.uniforms.uRoofDarkEnd = sharedUniforms.uRoofDarkEnd;
+    sh.fragmentShader = fragment;
+  };
+  mat.customProgramCacheKey = () => `roof-dark|${previousCompileSource}|${previousProgramKey()}`;
 }
 
 // Material factory: dedupes by (color|maps|flags) so hundreds of small box
@@ -1997,6 +2334,7 @@ export function surfaceMat(opts: SurfaceMatOpts): THREE.Material {
     map: opts.map?.uuid,
     normalMap: opts.normalMap?.uuid,
     roughnessMap: opts.roughnessMap?.uuid,
+    metalnessMap: opts.metalnessMap?.uuid,
     aoMap: opts.aoMap?.uuid,
     std: GFX.standardMaterials,
   });
@@ -2009,6 +2347,7 @@ export function surfaceMat(opts: SurfaceMatOpts): THREE.Material {
         vertexColors: opts.vertexColors ?? false,
         normalMap: opts.normalMap ?? null,
         roughnessMap: opts.roughnessMap ?? null,
+        metalnessMap: opts.metalnessMap ?? null,
         aoMap: opts.aoMap ?? null,
         roughness: opts.roughness ?? 0.85,
         metalness: opts.metalness ?? 0,
@@ -2031,6 +2370,13 @@ export function surfaceMat(opts: SurfaceMatOpts): THREE.Material {
   // on tiers without a field): props and buildings at range must haze with
   // the ground under them or the effect reads as nothing.
   attachBiomeHaze(mat);
+  // Every material handed back from this cache is SHARED by construction: one
+  // instance is reused by every caller with the same key, process-wide. Marking
+  // it here is what keeps a per-root terminal owner (the interior resource
+  // registry, a view teardown) from claiming and disposing a material the rest
+  // of the world is still drawing with, and it is marked at the source rather
+  // than per consumer so a new caller cannot forget.
+  markSharedMaterial(mat);
   matCache.set(key, mat);
   return mat;
 }

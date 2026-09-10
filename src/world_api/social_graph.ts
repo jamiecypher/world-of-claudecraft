@@ -45,6 +45,32 @@ export interface GuildEventInfo {
   createdBy: string;
 }
 
+// Guild pledge board (docs/prd/guild-pledge-board.md): the recruiting settings
+// the Guild Master and officers control. Mirrors server/social.ts.
+export interface GuildPledgeSettings {
+  enabled: boolean;
+  minLevel: number;
+  note: string;
+}
+
+// One open pledge on the officer dashboard: who is asking, and since when.
+export interface GuildPledgeInfo {
+  id: number;
+  name: string;
+  cls: string;
+  level: number;
+  realm: string;
+  sinceMs: number;
+}
+
+// The viewer's OWN standing pledge (unguilded characters only): the guild it
+// names, when it was made, and that guild's colour tier for display.
+export interface MyPledgeInfo {
+  guildName: string;
+  sinceMs: number;
+  tier: number;
+}
+
 export interface GuildInfo {
   id: number;
   name: string;
@@ -56,6 +82,19 @@ export interface GuildInfo {
   motdSetBy: string;
   members: GuildMemberInfo[];
   events: GuildEventInfo[];
+  // Pledge board: the recruiting settings every member sees, the open pledges
+  // (server sends them only to officer-plus; empty for plain members), and the
+  // guild's lifetime-XP colour tier (guildTierForLifetimeXp).
+  pledgeSettings: GuildPledgeSettings;
+  pledges: GuildPledgeInfo[];
+  tier: number;
+  // Roster expansion (docs/prd/guild-roster-expansion.md): the seats the guild
+  // may fill (base seats plus bought pages) and the copper price of the next
+  // page, null once the ladder is complete. Both server-derived; optional on
+  // the mirror because a frame from an older server carries neither, and the
+  // view core (social_view.ts guildView) falls back to the base roster.
+  memberCap?: number;
+  nextRosterPrice?: number | null;
 }
 
 export interface SocialInfo {
@@ -66,6 +105,9 @@ export interface SocialInfo {
   // Neither is the ADMIN "mute", which is a staff silence applied to a player.
   ignores: { id: number; name: string }[];
   guild: GuildInfo | null;
+  // The viewer's own standing pledge; null when none (and always null while
+  // guilded: joining any guild clears the pledge server-side).
+  myPledge: MyPledgeInfo | null;
 }
 
 export interface CharacterSearchResult {
@@ -103,6 +145,13 @@ export interface IWorldSocialGraph {
   ignoreRemove(name: string): void;
   guildCreate(name: string): void;
   guildInvite(name: string): void;
+  // Guild pledge board (docs/prd/guild-pledge-board.md): the public
+  // aspiration, its withdrawal, the officer decision, and the recruiting
+  // settings. Online-only like every guild op; the offline Sim no-ops.
+  guildPledge(name: string): void;
+  guildPledgeWithdraw(): void;
+  guildPledgeDecide(name: string, accept: boolean): void;
+  setGuildPledgeSettings(enabled: boolean, minLevel: number, note: string): void;
   guildAccept(): void;
   guildDecline(): void;
   guildLeave(): void;
@@ -118,6 +167,11 @@ export interface IWorldSocialGraph {
   // guild billboard: set (or clear, with '') the message pinned atop the Guild
   // tab. Officers + the Guild Master only; the server enforces the rank gate.
   guildSetMotd(text: string): void;
+  // Roster expansion: buy the next 20-seat page from the viewer's OWN purse.
+  // Guild Master only; the server prices the page from the guild row and
+  // refuses everyone else (socialInfo.guild.nextRosterPrice is the UX price,
+  // never the charged one). Inert offline.
+  guildBuyRosterPage(): void;
   // realm-scoped username typeahead for friend/ignore/guild search
   searchCharacters(query: string): Promise<CharacterSearchResult[]>;
   // public profile for any character on the realm, by name. Lets the player menu

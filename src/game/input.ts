@@ -19,6 +19,7 @@ import {
 } from './pointer_lock';
 import { normalizePointerLookDelta } from './pointer_look_delta';
 import { clickPickFromMouseGesture, DEFAULT_CLICK_PICK_MAX_MS } from './pointer_pick';
+import { isStaleChromeButton } from './stale_chrome_focus';
 
 function detectPointerLockNeedsSyncGesture(): boolean {
   try {
@@ -90,7 +91,6 @@ export interface InputCallbacks {
       | 'targetAuras'
       | 'social'
       | 'arena'
-      | 'valecup'
       | 'bgFlag'
       | 'dungeonFinder'
       | 'leaderboard'
@@ -99,6 +99,10 @@ export interface InputCallbacks {
       | 'deeds'
       | 'professions'
       | 'reliquary'
+      | 'harvestJournal'
+      | 'perfecting'
+      | 'lootExplorer'
+      | 'cosmetics'
       | 'crafting'
       | 'sheathe'
       | 'mount',
@@ -111,6 +115,11 @@ export interface InputCallbacks {
    *  and held movement keys. Escape is handled before this gate and still reaches
    *  onUiKey; key releases are ungated. */
   canUseGameKeys?: () => boolean;
+  /** When true, a canvas press starts NO camera drag, mouselook, or click-pick:
+   *  the HUD is in its "Unlock interface" arrange mode, where a missed frame
+   *  grab must not spin the camera or retarget instead. Wheel zoom and keyboard
+   *  movement stay live; only the mouse-on-canvas gestures are claimed. */
+  isCameraLocked?: () => boolean;
   onInputIntent?(kind: 'move' | 'look' | 'zoom'): void;
 }
 
@@ -384,6 +393,9 @@ export class Input {
     window.addEventListener('auxclick', (e) => this.onAuxClick(e));
     window.addEventListener('mouseup', (e) => this.onMouseUp(e));
     window.addEventListener('mousemove', (e) => this.onMouseMove(e));
+    // See releaseMouseActivatedFocus: sheds a HUD button's lingering focus
+    // after a real mouse click so it cannot hijack the next Space/Enter.
+    window.addEventListener('click', (e) => this.releaseMouseActivatedFocus(e));
     canvas.addEventListener(
       'wheel',
       (e) => {
@@ -979,7 +991,25 @@ export class Input {
       this.cb.onUiKey('escape');
       return;
     }
-    if (this.cb.canUseGameKeys && !this.cb.canUseGameKeys()) return;
+    if (this.cb.canUseGameKeys && !this.cb.canUseGameKeys()) {
+      // This early return skips the Space preventDefault below, so with a
+      // blocking surface up the browser would natively activate whatever HUD
+      // chrome button still holds focus on the keyup (the "Space reopens the
+      // last-used menu" bug). Suppress that ONLY for a button outside every
+      // dialog root: buttons inside the blocking surface (prompt dialogs, the
+      // options window, the player card) keep their native Space activation.
+      // Suppress only, never blur: at keydown time the guard cannot tell stale
+      // pointer focus from the place a keyboard user just Tabbed to (Chromium
+      // flips :focus-visible on the very keypress), and every further Space
+      // lands in this same guard, so the focus position is left for the player
+      // (Enter on a stale button stays a residual either way; the pointer drop
+      // on every wired surface is what removes the stale focus).
+      if (e.code === 'Space') {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && isStaleChromeButton(active)) e.preventDefault();
+      }
+      return;
+    }
     if (e.code === 'Tab') e.preventDefault();
     if (e.code === 'Space') e.preventDefault?.();
     // The full modifier chord for this press (null if it is itself a bare
@@ -1025,16 +1055,18 @@ export class Input {
       // Edge reserve Ctrl+1..8 outright), but this reclaims the ones that are
       // (Firefox) and is a no-op where there is nothing to cancel.
       if (e.ctrlKey || e.altKey || e.metaKey) e.preventDefault?.();
-      // 'chat' focuses the composer textarea as a side effect of this very
-      // keydown. Left un-prevented, the browser still delivers the follow-up
-      // keypress (and its default newline insertion) to whichever element is
-      // focused AT THAT POINT, i.e. the composer we just focused, so Enter
-      // both opens chat and types a newline into it before the placeholder is
-      // ever seen. Cancel the default so the composer opens empty, but only
-      // when the key was not itself focused on a button: a button's own Enter
-      // activation is a real default action too, and it should still fire
-      // alongside chat opening, same as before this fix.
-      if (edge === 'chat' && tag !== 'button') e.preventDefault?.();
+      // 'chat' and 'lootExplorer' both autofocus a text input as a side effect
+      // of this very keydown (the composer textarea; the loot explorer's
+      // search box). Left un-prevented, the browser still delivers the
+      // follow-up keypress (and its default character/newline insertion) to
+      // whichever element is focused AT THAT POINT, i.e. the field we just
+      // focused, so the bound key both opens the window and types itself into
+      // it before the placeholder is ever seen. Cancel the default so the
+      // field opens empty, but only when the key was not itself focused on a
+      // button: a button's own Enter activation is a real default action too,
+      // and it should still fire alongside the window opening, same as before
+      // this fix.
+      if ((edge === 'chat' || edge === 'lootExplorer') && tag !== 'button') e.preventDefault?.();
       if (edge.startsWith('slot')) {
         // Slot keys use DOWN/UP so a slot can hold to charge; the HUD decides
         // whether a slot charges (shoot) or fires immediately (tap = down+up).
@@ -1165,9 +1197,6 @@ export class Input {
       case 'mount':
         this.cb.onUiKey('mount');
         return;
-      case 'valecup':
-        this.cb.onUiKey('valecup');
-        return;
       case 'bgFlag':
         this.cb.onUiKey('bgFlag');
         return;
@@ -1189,6 +1218,18 @@ export class Input {
       case 'reliquary':
         this.cb.onUiKey('reliquary');
         return;
+      case 'harvestJournal':
+        this.cb.onUiKey('harvestJournal');
+        return;
+      case 'perfecting':
+        this.cb.onUiKey('perfecting');
+        return;
+      case 'lootExplorer':
+        this.cb.onUiKey('lootExplorer');
+        return;
+      case 'cosmetics':
+        this.cb.onUiKey('cosmetics');
+        return;
       case 'chat':
         this.cb.onUiKey('chat');
         return;
@@ -1204,6 +1245,10 @@ export class Input {
     // already in flight, and so its release cannot synthesize a world click;
     // its binding dispatch is the window-level onBindableMouseDown below.
     if (!isReservedMouseButton(e.button)) return;
+    // The HUD's arrange mode owns the mouse: no camera drag, mouselook, or
+    // click-pick may start under it (a grab that misses a frame would otherwise
+    // spin the camera or retarget). Presses already in flight are unaffected.
+    if (this.cb.isCameraLocked?.()) return;
     if (e.button === 0) this.leftDown = true;
     if (e.button === 2) this.rightDown = true;
     if (e.button === 0 || e.button === 2) e.preventDefault?.();
@@ -1322,7 +1367,74 @@ export class Input {
     e.preventDefault?.();
   }
 
+  // A native <button> (action-bar slot, bag row, sidebar icon...) OR a
+  // custom [role="button"] control (chat quest/deed links, the quest tracker
+  // header, the right-click marker menu) keeps browser focus after a mouse
+  // click. Left focused, it hijacks the very next Space or Enter meant for
+  // jump/chat: the browser replays (a real <button>) or the element's own
+  // keydown arm re-runs (a role="button") that still-focused control's
+  // activation, re-using whatever it does (dismounting, re-consuming a
+  // potion, reopening a quest link...) instead of, or alongside, the
+  // intended game action. Shed focus right after a MOUSE-driven activation
+  // so the next keypress reaches gameplay untouched.
+  //
+  // A keyboard Enter/Space activation also fires 'click', but with detail 0
+  // (no click count) versus >=1 for a real mouse click, so a button reached
+  // and activated via Tab+Enter is left focused, exactly as keyboard users
+  // expect. 'click' never fires after a completed drag, so bag
+  // drag-to-equip/drag-to-hotbar stay untouched. A non-primary release
+  // (right/middle-click) has no keyboard equivalent in this game, so
+  // onMouseUp always treats it as mouse-driven.
+  private releaseMouseActivatedFocus(e: { type: string; detail?: number }): void {
+    if (e.type === 'click' && e.detail === 0) return;
+    const active = document.activeElement as {
+      tagName?: string;
+      getAttribute?: (name: string) => string | null;
+      closest?: (selector: string) => unknown;
+      focus?: (options?: { preventScroll?: boolean }) => void;
+      hasAttribute?: (name: string) => boolean;
+      blur?: () => void;
+    } | null;
+    if (active && this.isMouseActivatableFocusTarget(active)) this.dropMouseActivatedFocus(active);
+  }
+
+  private dropMouseActivatedFocus(active: {
+    closest?: (selector: string) => unknown;
+    focus?: (options?: { preventScroll?: boolean }) => void;
+    hasAttribute?: (name: string) => boolean;
+    blur?: () => void;
+  }): void {
+    const root = active.closest?.('[role="dialog"]') as
+      | {
+          focus?: (options?: { preventScroll?: boolean }) => void;
+          hasAttribute?: (name: string) => boolean;
+        }
+      | null
+      | undefined;
+    if (root && root !== active && root.hasAttribute?.('tabindex') && root.focus) {
+      root.focus({ preventScroll: true });
+      return;
+    }
+    active.blur?.();
+  }
+
+  // Same discriminator dialog_key_activation.ts already uses for the
+  // confirm-dialog family (`button, [role="button"]`): a custom interactive
+  // control mimics native button semantics without the tag, so it hijacks
+  // Space/Enter exactly like a real <button> once mouse-focused.
+  private isMouseActivatableFocusTarget(active: {
+    tagName?: string;
+    getAttribute?: (name: string) => string | null;
+  }): boolean {
+    if ((active.tagName ?? '').toLowerCase() === 'button') return true;
+    return active.getAttribute?.('role') === 'button';
+  }
+
   private onMouseUp(e: MouseEvent): void {
+    // A right/middle/thumb release can be the resolution of a HUD button
+    // click (e.g. equip-via-right-click); those buttons have no 'click'
+    // equivalent for the guard above to catch, so shed focus here instead.
+    if (e.button !== 0) this.releaseMouseActivatedFocus(e);
     // Release the binding half first: it is the only part an extra button has,
     // and it must run whether the release arrives as pointerup or mouseup.
     const boundCode = bindableMouseCodeForButton(e.button);

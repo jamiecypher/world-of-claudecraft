@@ -122,12 +122,6 @@ describe('registry', () => {
       kind: 'edge',
       defaults: ['Shift+KeyJ'],
     });
-    // The Vale Cup window is a rebindable Interface toggle (default T; J and
-    // G are taken by targetFriendlyNext and the arena on this branch).
-    const valecup = BIND_ACTIONS.find((a) => a.id === 'valecup');
-    expect(valecup?.category).toBe('Interface');
-    expect(valecup?.kind).toBe('edge');
-    expect(valecup?.defaults).toEqual(['KeyY']);
     // The Book of Deeds is a rebindable Interface toggle on the shifted layer of
     // KeyZ, like Damage Meters does on H and the Shift+digit secondary bar.
     const deeds = BIND_ACTIONS.find((a) => a.id === 'deeds');
@@ -141,6 +135,45 @@ describe('registry', () => {
     expect(sheathe?.category).toBe('Interface');
     expect(sheathe?.kind).toBe('edge');
     expect(sheathe?.defaults).toEqual(['KeyZ']);
+    // The Harvest Journal is a rebindable Interface toggle on the shifted layer
+    // of KeyK (Shift+H and Shift+J, its own initials, are Damage Meters and
+    // Target Buffs/Debuffs); bare KeyK stays the Leaderboard, so the two share
+    // the physical key across layers and never collide.
+    const journal = BIND_ACTIONS.find((a) => a.id === 'harvestJournal');
+    expect(journal?.category).toBe('Interface');
+    expect(journal?.kind).toBe('edge');
+    expect(journal?.defaults).toEqual(['Shift+KeyK']);
+    // Perfecting is a rebindable Interface toggle on the shifted layer of KeyT
+    // (Crafting's letter; its own initial is the Spellbook bare and Professions
+    // shifted), so the crafting family's endgame window sits over Crafting and
+    // the two share the physical key across layers without colliding.
+    const perfecting = BIND_ACTIONS.find((a) => a.id === 'perfecting');
+    expect(perfecting?.category).toBe('Interface');
+    expect(perfecting?.kind).toBe('edge');
+    expect(perfecting?.defaults).toEqual(['Shift+KeyT']);
+    // Loot Explorer is a rebindable Interface toggle on the shifted layer of
+    // KeyO (bare KeyO is free), matching the collection/catalog convention
+    // every other shifted-letter window uses.
+    const lootExplorer = BIND_ACTIONS.find((a) => a.id === 'lootExplorer');
+    expect(lootExplorer?.category).toBe('Interface');
+    expect(lootExplorer?.kind).toBe('edge');
+    expect(lootExplorer?.defaults).toEqual(['Shift+KeyO']);
+  });
+
+  it('gives every shipped default code to exactly one action per layer', () => {
+    // The static half of the conflict guarantee the load-time uniqueness sweep
+    // enforces at runtime: two actions shipping the SAME default code would
+    // silently evict one of them for every fresh profile. Attack Move shares
+    // KeyA with Turn Left by design (the one sanctioned pair), so it is the
+    // only allowed collision.
+    const owners = new Map<string, string[]>();
+    for (const action of BIND_ACTIONS) {
+      for (const code of action.defaults) {
+        owners.set(code, [...(owners.get(code) ?? []), action.id]);
+      }
+    }
+    const collisions = [...owners.entries()].filter(([, ids]) => ids.length > 1);
+    expect(collisions).toEqual([['KeyA', ['turnLeft', 'attackMove']]]);
   });
 });
 
@@ -172,7 +205,7 @@ describe('Keybinds defaults', () => {
     expect(kb.actionForCode('KeyJ')).toBe('targetFriendlyNext');
     expect(kb.actionForCode('KeyU')).toBe('discord');
     expect(kb.actionForCode('KeyT')).toBe('crafting');
-    expect(kb.actionForCode('KeyY')).toBe('valecup');
+    expect(kb.actionForCode('KeyY')).toBe(null);
     // Bare Z sheathes; the Book of Deeds ships on the shifted layer of the same key.
     expect(kb.actionForCode('KeyZ')).toBe('sheathe');
     expect(kb.actionForCode('Shift+KeyZ')).toBe('deeds');
@@ -346,6 +379,8 @@ describe('Attack Move (shared key)', () => {
     expect(actionAllowsShared('turnLeft')).toBe(false);
     expect(kb.codeAt('attackMove', 0)).toBe('KeyA');
     expect(kb.codeAt('turnLeft', 0)).toBe('KeyA');
+    // Classic-era layout: A/D turn, Q/E strafe.
+    expect(kb.codeAt('strafeLeft', 0)).toBe('KeyQ');
     // actionForCode prefers Turn Left (earlier in the registry); Attack Move is
     // dispatched ahead of it by Input only while its mode is on.
     expect(kb.actionForCode('KeyA')).toBe('turnLeft');
@@ -368,6 +403,95 @@ describe('Attack Move (shared key)', () => {
     expect(kb.bind('bags', 0, 'KeyA')).toBe(true);
     expect(kb.codeAt('attackMove', 0)).toBe('KeyA');
     expect(kb.codeAt('turnLeft', 0)).toBe(null); // non-shared loses it as usual
+  });
+});
+
+describe('snapshot / importBindings (hotkey setup export + import)', () => {
+  it('snapshot is the saved shape and a copy, not the live map', () => {
+    const kb = new Keybinds();
+    kb.bind('slot0', 0, 'KeyR');
+    kb.clear('jump', 0);
+    const snap = kb.snapshot();
+    expect(snap.slot0).toEqual(['KeyR', null]);
+    expect(snap.jump).toEqual([null, null]);
+    expect(snap.forward).toEqual(['KeyW', 'ArrowUp']);
+    expect(Object.keys(snap).length).toBe(BIND_ACTIONS.length);
+    const saved = JSON.parse(localStorage.getItem('woc_keybinds') ?? '{}') as Record<
+      string,
+      unknown
+    >;
+    expect(saved.__repaired).toBe(true);
+    delete saved.__repaired;
+    expect(snap).toEqual(saved);
+    snap.slot0[0] = 'KeyZ';
+    expect(kb.codeAt('slot0', 0)).toBe('KeyR');
+  });
+
+  it('importBindings replaces the profile, persists it, and keeps defaults for missing actions', () => {
+    const kb = new Keybinds();
+    kb.bind('jump', 0, 'KeyY');
+    kb.importBindings({ slot0: ['KeyR', null], autorun: [null, null] });
+    expect(kb.actionForCode('KeyR')).toBe('slot0');
+    expect(kb.codeAt('autorun', 0)).toBe(null); // explicitly unbound by the setup
+    expect(kb.actionForCode('Space')).toBe('jump'); // the local rebind did not survive
+    expect(kb.actionForCode('KeyY')).toBe(null);
+    expect(kb.actionForCode('KeyW')).toBe('forward'); // missing action keeps its default
+    const reloaded = new Keybinds();
+    expect(reloaded.snapshot()).toEqual(kb.snapshot());
+  });
+
+  it('importBindings runs the stored-profile validation: unknown, reserved, duplicate', () => {
+    const kb = new Keybinds();
+    kb.importBindings({
+      notAnAction: ['KeyR', null],
+      slot0: ['Escape', 'Mouse1'],
+      slot1: ['KeyR', null],
+      slot2: ['KeyR', null],
+      jump: 'KeyJ',
+    });
+    expect(kb.snapshot().notAnAction).toBeUndefined();
+    expect(kb.codeAt('slot0', 0)).toBe(null);
+    expect(kb.codeAt('slot0', 1)).toBe(null);
+    expect(kb.actionForCode('KeyR')).toBe('slot1'); // first writer keeps the code
+    expect(kb.codeAt('slot2', 0)).toBe(null);
+    expect(kb.actionForCode('Space')).toBe('jump'); // malformed row: default kept
+    // A default that the setup's explicit binding claimed is evicted.
+    kb.importBindings({ slot5: ['KeyW', null] });
+    expect(kb.actionForCode('KeyW')).toBe('slot5');
+    expect(kb.codeAt('forward', 0)).toBe(null);
+    // A held action stores the bare key, as bind() does, so a hand-edited
+    // modifier combo on one is dropped and still evicts the bare key elsewhere.
+    kb.importBindings({ forward: ['Shift+KeyQ', null] });
+    expect(kb.codeAt('forward', 0)).toBe('KeyQ');
+    expect(kb.codeAt('strafeLeft', 0)).toBe(null);
+    // A string that is not a combo (no keydown could ever produce it) is skipped,
+    // so a crafted code cannot park garbage in a slot or reach a DOM lookup.
+    kb.importBindings({ slot3: ['Digit1"]', 'shift+KeyA'], slot4: ['Ctrl+Shift+KeyA', null] });
+    expect(kb.codeAt('slot3', 0)).toBe(null);
+    expect(kb.codeAt('slot3', 1)).toBe(null);
+    expect(kb.codeAt('slot4', 0)).toBe('Ctrl+Shift+KeyA');
+    // Combos are re-spelled the way makeCombo spells them, and a shape no
+    // keydown produces (a repeated head, a modifier under a head) is skipped,
+    // so the board and the rows never show a live-looking binding that can
+    // never fire. A bare modifier stays legal: Swim Down is Left Ctrl.
+    kb.importBindings({
+      slot5: ['Shift+Ctrl+KeyA', 'Shift+Shift+KeyB'],
+      slot6: ['ShiftLeft', 'Alt+ControlRight'],
+    });
+    expect(kb.codeAt('slot5', 0)).toBe('Ctrl+Shift+KeyA');
+    expect(kb.codeAt('slot5', 1)).toBe(null);
+    expect(kb.codeAt('slot6', 0)).toBe('ShiftLeft');
+    expect(kb.codeAt('slot6', 1)).toBe(null);
+  });
+
+  it('a snapshot re-imported elsewhere reproduces the setup exactly', () => {
+    const a = new Keybinds('char:1');
+    a.bind('slot3', 0, 'KeyF');
+    a.bind('jump', 1, 'KeyY');
+    a.clear('autorun', 0);
+    const b = new Keybinds('char:2');
+    b.importBindings(a.snapshot());
+    expect(b.snapshot()).toEqual(a.snapshot());
   });
 });
 
@@ -627,6 +751,78 @@ describe('per-character scope', () => {
     expect(fresh.actionForCode('Digit1')).toBe('slot1');
   });
 
+  it('does not revert a legitimate slot10/slot11 rebind to Q/E across relogin', () => {
+    // Reported bug: binding the "-" (slot10) and "=" (slot11) action-bar slots to
+    // Q and E reproduces the byte-identical shape the reverted Q/E strafe overhaul
+    // left behind (KeyQ/KeyE on those two slots, strafe left/right evicted to null
+    // by the ordinary uniqueness sweep in bind()), so the one-time repair signature
+    // match kept firing on every relogin and silently reverting the player's own
+    // rebind back to Minus/Equal.
+    const first = new Keybinds('char:alice');
+    first.bind('slot10', 0, 'KeyQ');
+    first.bind('slot11', 0, 'KeyE');
+    expect(first.codeAt('slot10', 0)).toBe('KeyQ');
+    expect(first.codeAt('slot11', 0)).toBe('KeyE');
+
+    const relogin = new Keybinds('char:alice');
+    expect(relogin.codeAt('slot10', 0)).toBe('KeyQ');
+    expect(relogin.codeAt('slot11', 0)).toBe('KeyE');
+
+    // Survives a second relogin too, not just the first.
+    const secondRelogin = new Keybinds('char:alice');
+    expect(secondRelogin.codeAt('slot10', 0)).toBe('KeyQ');
+    expect(secondRelogin.codeAt('slot11', 0)).toBe('KeyE');
+
+    // The persisted blob carries the repair marker and nothing else beyond the
+    // action ids, so it can never be mistaken for one of BIND_ACTIONS.
+    const stored = JSON.parse(localStorage.getItem('woc_keybinds:char:alice')!);
+    expect(stored.__repaired).toBe(true);
+    const actionIds = new Set(BIND_ACTIONS.map((a) => a.id));
+    expect(Object.keys(stored).filter((k) => !actionIds.has(k))).toEqual(['__repaired']);
+  });
+
+  it('leaves a Signature-A-shaped blob alone once it is already marked repaired', () => {
+    // A profile that is marked repaired but still holds the exact corrupted
+    // shape (e.g. because the player deliberately recreated it after the fix
+    // shipped) must not be reverted again: the marker, not the shape, decides.
+    localStorage.setItem(
+      'woc_keybinds:char:alice',
+      JSON.stringify({
+        strafeLeft: [null, null],
+        strafeRight: [null, null],
+        slot10: ['KeyQ', 'Minus'],
+        slot11: ['KeyE', 'Equal'],
+        __repaired: true,
+      }),
+    );
+    const fresh = new Keybinds('char:alice');
+    expect(fresh.codeAt('slot10', 0)).toBe('KeyQ');
+    expect(fresh.codeAt('slot11', 0)).toBe('KeyE');
+    expect(fresh.codeAt('strafeLeft', 0)).toBe(null);
+    expect(fresh.codeAt('strafeRight', 0)).toBe(null);
+  });
+
+  it('still repairs when the marker is present but not exactly true', () => {
+    // Only a strict `true` counts as already-repaired; any other stored value
+    // (a hand-edited blob, a future format change) must not suppress a real
+    // repair the shape still calls for.
+    localStorage.setItem(
+      'woc_keybinds:char:alice',
+      JSON.stringify({
+        strafeLeft: [null, null],
+        strafeRight: [null, null],
+        slot10: ['KeyQ', 'Minus'],
+        slot11: ['KeyE', 'Equal'],
+        __repaired: 1,
+      }),
+    );
+    const fresh = new Keybinds('char:alice');
+    expect(fresh.codeAt('strafeLeft', 0)).toBe('KeyQ');
+    expect(fresh.codeAt('strafeRight', 0)).toBe('KeyE');
+    expect(fresh.codeAt('slot10', 0)).toBe('Minus');
+    expect(fresh.codeAt('slot11', 0)).toBe('Equal');
+  });
+
   it('still imports a genuine legacy customization that does not collide with a current default', () => {
     // A real remap (interact moved off F onto an otherwise-unused function
     // key) must still come through on first seed.
@@ -856,22 +1052,23 @@ describe('mouse buttons as bindable keys', () => {
   });
 });
 
-// Every bindable action's Key Bindings row must localize. actionDisplayName
-// (src/ui/options_window.ts) resolves a row's label through BIND_ACTION_LABEL_KEYS
-// and falls back to the RAW ENGLISH BindAction.label when the id is absent, so a
-// missing entry ships hard-coded English in all 22 locales and silently orphans the
+// Every bindable action's Key Bindings row must localize. bindActionDisplayName
+// (src/ui/keybind_action_names_core.ts, shared by the options window rows and the
+// on-bar rebind prompts) resolves a label through BIND_ACTION_LABEL_KEYS and falls
+// back to the RAW ENGLISH BindAction.label when the id is absent, so a missing
+// entry ships hard-coded English in all 22 locales and silently orphans the
 // catalog key someone added for it. Nothing else catches that: the i18n gates check
 // that keys EXIST, not that a key is reachable, and every keybind test before this
-// one asserted on codes rather than labels. Scanned from source because the map is
-// module-private in a DOM window module this Node suite cannot import.
+// one asserted on codes rather than labels. Scanned from source so a rename of the
+// map is caught too (tests/keybind_action_names.test.ts checks the export itself).
 describe('every bind action has a localized label key', () => {
-  const optionsWindowSrc = readFileSync(
-    new URL('../src/ui/options_window.ts', import.meta.url),
+  const actionNamesSrc = readFileSync(
+    new URL('../src/ui/keybind_action_names_core.ts', import.meta.url),
     'utf8',
   );
-  const mapBody = optionsWindowSrc.slice(
-    optionsWindowSrc.indexOf('const BIND_ACTION_LABEL_KEYS'),
-    optionsWindowSrc.indexOf('};', optionsWindowSrc.indexOf('const BIND_ACTION_LABEL_KEYS')),
+  const mapBody = actionNamesSrc.slice(
+    actionNamesSrc.indexOf('const BIND_ACTION_LABEL_KEYS'),
+    actionNamesSrc.indexOf('};', actionNamesSrc.indexOf('const BIND_ACTION_LABEL_KEYS')),
   );
 
   it('reads a non-empty map (the scan would pass vacuously on a rename)', () => {
@@ -879,11 +1076,69 @@ describe('every bind action has a localized label key', () => {
     expect(mapBody.split('\n').filter((l) => /^\s+\w+:\s+'/.test(l)).length).toBeGreaterThan(30);
   });
 
-  // Action-bar slots resolve through their own numeric branch in actionDisplayName,
+  // Action-bar slots resolve through their own numeric branch in bindActionDisplayName,
   // never the map, so they are the one exempt family.
   const mapped = BIND_ACTIONS.filter((a) => !a.id.startsWith('slot'));
 
   it.each(mapped.map((a) => [a.id] as const))('%s is in BIND_ACTION_LABEL_KEYS', (id) => {
     expect(new RegExp(`^\\s+${id}:\\s+'`, 'm').test(mapBody)).toBe(true);
+  });
+});
+
+// findBindConflict is the rebind UI's LOOK-AHEAD: it reports exactly what
+// bind() would silently unbind, so the options window can ask before stealing a
+// key. It must mirror bind()'s rules and mutate nothing.
+describe('Keybinds.findBindConflict', () => {
+  it('reports nothing for a key no other action holds', () => {
+    const kb = new Keybinds();
+    expect(kb.findBindConflict('interact', 0, 'F9')).toBeNull();
+  });
+
+  it('names the action a rebind would steal the key from, and its slot', () => {
+    const kb = new Keybinds();
+    expect(kb.bind('interact', 0, 'KeyP')).toBe(true);
+    const conflict = kb.findBindConflict('map', 0, 'KeyP');
+    expect(conflict).toEqual({ id: 'interact', index: 0, code: 'KeyP' });
+    // and it is exactly what bind() then evicts
+    expect(kb.bind('map', 0, 'KeyP')).toBe(true);
+    expect(kb.codeAt('interact', 0)).toBeNull();
+  });
+
+  it('mutates nothing: asking twice gives the same answer and the binding survives', () => {
+    const kb = new Keybinds();
+    kb.bind('interact', 0, 'KeyP');
+    expect(kb.findBindConflict('map', 0, 'KeyP')).toEqual(kb.findBindConflict('map', 0, 'KeyP'));
+    expect(kb.codeAt('interact', 0)).toBe('KeyP');
+  });
+
+  it('is not its own conflict when a slot is rebound to the key it already holds', () => {
+    const kb = new Keybinds();
+    kb.bind('interact', 0, 'KeyP');
+    expect(kb.findBindConflict('interact', 0, 'KeyP')).toBeNull();
+  });
+
+  it('reports a reserved code as no conflict (bind refuses it before evicting)', () => {
+    const kb = new Keybinds();
+    kb.bind('interact', 0, 'KeyP');
+    expect(kb.findBindConflict('map', 0, 'Escape')).toBeNull();
+    expect(kb.bind('map', 0, 'Escape')).toBe(false);
+    expect(kb.codeAt('interact', 0)).toBe('KeyP');
+  });
+
+  it('compares the stored form for held actions, so a modifier chord is not a false miss', () => {
+    const kb = new Keybinds();
+    // Held actions store the modifier-stripped code, which is what bind()
+    // compares, so capturing Shift+KeyJ over a bare KeyJ IS a conflict.
+    expect(kb.bind('forward', 0, 'KeyJ')).toBe(true);
+    const conflict = kb.findBindConflict('back', 0, 'Shift+KeyJ');
+    expect(conflict?.id).toBe('forward');
+    expect(conflict?.code).toBe('KeyJ');
+  });
+
+  it('reports an unknown action or an out-of-range slot as no conflict', () => {
+    const kb = new Keybinds();
+    kb.bind('interact', 0, 'KeyP');
+    expect(kb.findBindConflict('nosuchaction', 0, 'KeyP')).toBeNull();
+    expect(kb.findBindConflict('map', 9, 'KeyP')).toBeNull();
   });
 });

@@ -248,6 +248,159 @@ For off-box safety, sync the directory to S3 occasionally:
   rollback across a cap change needs a restore-from-backup plan for professions
   counters. Details: "Rollback erases newer fields" in
   `docs/design/professions-tuning-packet.md`.
+- **Farming plot deploy order and rollback (mixed fleet)**: `farmPlots` rides
+  `characters.state`, which is written whole, so a server binary that predates the
+  farming growth-engine release autosaves the blob WITHOUT `farmPlots` and erases
+  every planted crop that process touches. Deploy order: the 11b absorb collapsed
+  the growth-engine and seed-faucet releases into ONE (Farmer Jessica vendors
+  seeds and `q_farm_intro` grants one from first boot), so the window is LIVE
+  from the first mixed-fleet minute of that release: roll it out to EVERY realm
+  process in one deploy pass, never staged across days. Rollback: rolling back
+  past the growth-engine release after plants exist destroys all plot state on
+  the next 30 s autosave sweep, AND erases each character's accumulated Farming
+  skill number (the pre-farming binary's four-trade serializer drops the
+  `farming` key from both `gatheringProficiency` and the legacy dual-written
+  `professions` record); the only recovery is restore-from-backup. The hidden
+  per-plot pre-rolls (`survivalRoll`, `yieldSeed`) live in the same blob; the load
+  side clamps them into their value domains and re-derives absent slots
+  deterministically, so RESTORED bytes always resolve to the same outcome and
+  cannot be replayed for rerolls. A writer with direct blob access can still
+  reroll by editing `plantedAtMs`; that is total compromise already and is
+  bounded by the allowlists and clamps, not by the derivation.
+- **Masterwrought daily-gate rollback (a repeatable faucet, not just lost state)**:
+  three more `characters.state` keys ride the same whole-blob write, and rolling
+  back past the masterwrought material phases erases all three on the first
+  autosave. Unlike the two caveats above, whose damage is lost player value, this
+  one REOPENS GRANTS and keeps reopening them: `wyrmfallDaily.sources` is the
+  per-day per-source Wyrmfall Core gate, `craftDaily.crafted` is the once-per-day
+  craft gate, and `emberWeekAnchor` is the Maker's Ember week anchor whose empty
+  value IS the first-grant arm (`tryGrantMakersEmber` in
+  `src/sim/professions/masterwrought_materials.ts` grants an Ember outright when
+  the anchor is `''`, which is also what `createPlayer` defaults it to). So an
+  erased anchor mints a free Maker's Ember on the next qualifying completion, and
+  an erased daily record reopens that day's core and craft gates, once per
+  affected character per rollback pass rather than once overall. Deploy the
+  masterwrought material release to EVERY realm process in one pass for the same
+  reason the farming bullet gives, and treat a rollback across it as an economy
+  event: it needs a restore-from-backup plan, not just a release note.
+- **Perfecting rollback (a pre-Perfecting binary DESTROYS Perfected bonuses through
+  normal play)**: the per-copy `perfecting`/`perfected` markers themselves survive an
+  older binary (its instance load bound is drop-only, not a whitelist), but that
+  binary's `isEnchantedInstance` reads a Perfected copy's bare `rolled.stats` record
+  as a LEGACY ENCHANT (apex defs never bake a masterwork record, so no Perfected
+  copy can carry the `rolled.masterwork` flag that would exempt it from that old
+  read). One ordinary confirmed replace-enchant on such a copy then
+  takes the legacy wipe arm and replaces `rolled.stats` wholesale with the new
+  enchant's bonus: the R5 Perfected bonus is gone, permanently, because the copy
+  still carries `perfected: true` and refuses re-earning it. The same misread also
+  re-opens the pre-fix Lucent Infusion holding-scan hole while Perfected copies now
+  exist. So a rollback across the Perfecting release is NOT merely lossy: leave it
+  running only with apply-enchant replace disabled, or accept that every Perfected
+  unenchanted copy a player confirms a replace onto loses its bonus until
+  restore-from-backup. Deploy the Perfecting release fleet-wide in one pass like the
+  two bullets above.
+- **Content-id additions are a one-way door (the itemsDiscovered/deeds class)**: any
+  release that adds a content id (an item, a deed, a visited-mark namespace) is
+  rollback-destructive and mixed-fleet-unsafe for persisted state that USES the new
+  id, even when the release's code changes look trivially revertible. The mechanism
+  is the load-side id gate: `restoreDeedStats` (src/sim/deeds.ts) drops any
+  `itemsDiscovered` id its own ITEMS table lacks, and the old binary's next autosave
+  writes the reduced set back, permanently; deed counters behave the same way (the
+  `legendariesForged` erasure in the orange-promotion bullet below is this class). A
+  mixed fleet does it without any rollback: a character landing on an old process
+  loses the new-id state on its next autosave. So treat every content-id addition as
+  a fleet-wide-in-one-pass boundary, and a rollback across one as needing
+  restore-from-backup for the state that referenced the new ids.
+- **Orange-promotion rolling window (cosmetic)**: the promotion release RETIRES the
+  sim's "That item is already Perfected." line (its client matcher row was removed
+  with it), so during a realm-by-realm roll an OLD server still emits that line to
+  a NEW client, which renders it untranslated English. Cosmetic only and confined
+  to the mixed window; fleet-wide-in-one-pass (the Perfecting bullet above) also
+  makes it a non-event. The rollback-then-roll-forward direction is likewise
+  self-healing: a pre-phase binary applies the def-only unique-equipped rule, so
+  under it a player can wear two promoted twins of one item id, and the first
+  login after the roll-forward benches one back to the bags via
+  `benchDuplicateUniqueEquipped` (src/sim/items.ts) with its Unequipped notice,
+  payload intact and nothing lost; fleet-wide-in-one-pass avoids that window
+  entirely too. The promotion's own persisted fields are SAFE across an older
+  binary, unlike the Perfecting bonus above: the stamped `name`, its
+  `rolled.quality` of legendary, and the `perfected` marker all survive a
+  pre-promotion binary's load, save, and even a confirmed replace-enchant (the
+  instance load bound is drop-only and the enchant paths clone the payload
+  through). What an older binary DOES erase is the `legendariesForged` deed
+  counter: it reads only the counter keys it knows and its next autosave writes
+  the rest away, so a roll-back-then-forward restarts every promoter's count at 0
+  (the deed itself keeps its earn row; the character reads 50 Renown lighter on
+  the old binary and recovers it on roll-forward). Under `API_DISPATCH=legacy`
+  the clear-item-name remediation endpoint is unavailable (registry-only, no
+  legacy arm; it 404s rather than serving unauthorized), so a rollback that
+  coincides with a name report waits for the roll-forward.
+- **Mail partition backfill rollback**: the Ravenpost mail persistence migration
+  (`server/mail_partition_backfill.ts`, #3561) partitions a realm's legacy
+  `mail:<realm>` blob into one row per recipient (`mail:<realm>:r:<key>`) inside
+  `ensureSchema`, and retains the legacy row as a rollback artifact, mirroring the
+  market backfill. Its rollback is WEAKER than market's: market's legacy row was
+  already dormant by the time market added realm scoping, so reverting a binary
+  never lost live writes, but mail's `mail:<realm>` row was the LIVE,
+  actively-written key right up to the instant the migration ran. Reverting to a
+  pre-#3561 binary after ANY post-migration mail activity (a send, a take, a
+  delete, a rename) is a ONE-WAY trapdoor: the old binary reads and writes only
+  the frozen legacy blob, so every mutation since the migration becomes invisible
+  to it, and a later roll-forward never re-adopts that window's mail either (the
+  migration marker makes the backfill a permanent no-op). Recovery after any such
+  activity means a database restore, not a binary revert. A rolling deploy that
+  runs an old and a new binary against the SAME realm concurrently has the same
+  blind spot in miniature, so stop the old process before starting the new one
+  per realm rather than overlapping them. Never delete the migration's marker row
+  on a realm with live mail traffic to force a re-run: a re-run blind-upserts
+  only the recipients present in the legacy blob (unchanged since the original
+  migration) while leaving every partition row written since then in place, and
+  `loadMail` does not de-duplicate by letter id, so the next load can contain the
+  same letter, and its escrow, twice.
+- **Bank Storage rollback caveats**: same governing rule as the professions bullet
+  above, and here it is ITEM-DESTRUCTIVE rather than capacity-lossy, so treat a
+  rollback past this release as destructive and plan a restore from backup.
+  `characters.state` is written whole and a binary from before this release emits
+  no `vault` key and no `socketBags`, so its first autosave of a character
+  DELETES that character's entire Materials Vault stock, the vault upgrade ladder
+  it paid for, and up to four socketed BAG ITEMS, which exist only as their
+  `socketBags` id, along with the non-refundable socket unlock copper. A mixed
+  binary fleet does the same thing without any rollback: during a rolling restart
+  across this boundary, any character that lands on an old process loses that
+  state on its next autosave, so cut over cleanly rather than rolling. Claudium
+  granted slots are NOT in this class: they land in `purchasedSlots`, which an old
+  binary understands and preserves. Only `appliedStorageKeys` is stripped; the
+  immutable `storage_purchase_applied_receipts` row is the durable replay guard
+  outside the character blob. This release also installs six database triggers
+  that a binary rollback does NOT remove:
+  `storage_purchase_guard_character_delete` and
+  `storage_purchase_guard_account_delete` (on characters/accounts),
+  `storage_purchase_guard_consumed_key`, `storage_purchase_archive_applied`,
+  `bank_ledger_growth_budget_insert` and `bank_ledger_growth_budget_delete` (on
+  bank_ledger), `material_source_journal_growth_budget_insert` and
+  `material_source_journal_growth_budget_delete` (on material_source_journal), and
+  `bank_ledger_growth_budget_commit` (the DEFERRABLE constraint trigger on
+  bank_ledger_growth_pending). On a rolled-back binary a
+  character holding a pending storage purchase becomes UNDELETABLE: the 55006
+  delete guard still fires, the old deleteCharacter has no handler for it, and no
+  old-binary path can resolve the pending row. The remedy is a hand
+  `DELETE FROM storage_purchases` for that character's pending row. One more
+  wrinkle on the schema side, split by where the rollback lands. Rolling back
+  to any SHIPPED release is harmless here: no shipped binary carries the
+  receipts fragment at all (`bank_ledger_batch_receipts` is new in this
+  release), so the old binary never touches the key-shape constraint and
+  simply leaves it behind as-is; a NOT VALID survivor still enforces new
+  writes, and the next new-binary boot resumes its post-listen VALIDATE
+  (bounded, inside the concurrent-index session advisory lock, where a
+  concurrently booting realm waits holding nothing). Only a build cut from
+  THIS branch before the fix re-applies the pre-fix receipts fragment, whose
+  converge re-adds the constraint VALIDATED: that re-fires the full scan of
+  the keep-forever table inside the boot transaction, under the boot advisory
+  lock, and a shape-violating row aborts that boot outright. Any FUTURE
+  release that LENGTHENS the bank
+  expansion or vault upgrade table joins the professions cap-raise class: the old
+  binary clamps the raised value on load and persists the loss, so that release
+  owes its own caveat here.
 - **Client/server deploy order for content releases**: deploy the SERVER first, then
   let clients update. Web and desktop bundles refresh on their next load. The iOS
   binary rides App Store review and cannot pick up a same-day bundle (LiveUpdates
@@ -274,12 +427,30 @@ For off-box safety, sync the directory to S3 occasionally:
     enters any dungeon, delve, or arena after the deploy is teleported to
     coordinates its renderer draws as a black, collider-less void, with the
     exit object invisible, until relog (login is protected: a saved
-    inside-instance position ejects to the door). The release left the
-    fail-closed layout gate at ONLINE_WORLD_LAYOUT_VERSION 3 through both
-    changes, so stale bundles are still admitted at reconnect; bumping it
-    is the one-line mechanical answer if the maintainer resolves the
-    surfaced forced-refresh question toward refusing stale sessions.
-  - NEW client on OLD server (the bounded direction): every gather node the
+    inside-instance position ejects to the door). CORRECTED 2026-09-01
+    (qr-19-stale-client-deploy-window), and SCOPED, which the first
+    correction was not: the two sentences that stood here said the
+    fail-closed layout gate was still at ONLINE_WORLD_LAYOUT_VERSION 3 and
+    that stale bundles were therefore still admitted at reconnect, with a
+    bump as the pending answer. Both are false on this branch: the gate
+    reads 26 and the world socket refuses a mismatched first frame
+    outright. READ THE SCOPE, because it changes the player-comms plan
+    rather than only the prose. WHEN A DEPLOY MOVES THE EPOCH, none of the
+    symptoms above is reachable at all: every stale tab is hard
+    disconnected with an incompatible-version error and must reload, so
+    plan for that instead of for cosmetic glitches. ON AN ORDINARY
+    SAME-EPOCH CONTENT DEPLOY, which is what this section's heading is
+    about, old clients DO stay in world and every skew above is live
+    exactly as described.
+  - NEW client on OLD server (the bounded direction). SAME SCOPING as the
+    bullet above, added 2026-09-01 (qr-19-stale-client-deploy-window) because
+    the correction there left this one reading as though it were unaffected:
+    the epoch gate closes this direction SYMMETRICALLY. A server still on the
+    older layout refuses a new client's `auth-world-26` first frame the same
+    way, so when a deploy moves the epoch none of the skew below is reachable,
+    including the rate-limit tokens the mount and unstuck paths would spend.
+    On a same-epoch content deploy it is all live as written: every gather node
+    the
     release relocated is unusable, because the client shows it where the old
     server does not have it. Among the zones the deployed server HAS, the
     worst cases are Eastbrook tier-1 herbalism and Mirefen's tier-2 band,
@@ -313,68 +484,140 @@ For off-box safety, sync the directory to S3 occasionally:
     masterwork and deed card kinds (and the expansion's vale_cup kind), so
     restart the bot with the server or those cards post as empty embeds
     Discord rejects until it picks up the new build.)
-  Release-specific caveat for the professions tuning deploy: the guards above
-  describe bundles built from this release onward. The bundle DEPLOYED TODAY
-  predates them, and its trade window throws while rendering an offer that
-  stages ANY item id the bundle predates (the packet's fine-grade materials
-  and rods, and equally the expansion's whole tradeable catalog: rift
-  essence and gems, the new-zone gear, none of it soulbound), freezing that
-  trade panel for the stale session until the page reloads. The sibling
-  loot-window throw is unreachable through the PACKET's ids as long as
-  they remain gathering, recipe, vendor, and delve-shop
-  content only, out of every mob and chest loot table, so keep them out
-  until clients have rolled; it is NOT unreachable for the merged release as
-  a whole, because the v0.32.0 expansion put four mount reins into the
-  heroic loot of five encounters the deployed bundle already knows (the
-  Morthen, Vael, Ysolei, and Korzul heroic finales plus the Nythraxis raid),
-  so a solo or free-for-all heroic clear that drops one freezes a stale
-  session's corpse loot window the same way, and the v0.34.0 sync widened
-  the same arm: the release's Heroic Wildheart Basin loot pass (Zulgar) put
-  six more epic ids into heroic boss loot that a stale bundle
-  does not know. The reins odds are the mount drop rates (0.5 and 0.1
-  percent) while the Wildheart ids drop at ordinary heroic rates, the party
-  need/greed path is already guarded at the base, and the frozen id set
-  (reins exceptions plus the Wildheart additions) is pinned by the
-  deploy-window test's snapshot. The v0.36.0 class-overhauls integration
-  admits one more id on the same recorded arm (owner decision 2026-08-08):
-  heroic_duskwhisper, the generated heroic variant of the rogue re-band's
-  Duskwhisper dagger on the Fanglord Beastmaster's heroic table, at an
-  ordinary heroic drop rate; a stale bundle renders it through the
-  unknown-item fallback exactly like the Wildheart six. Rift-run loot is a second release-content arm on
-  the same window (the run builders push the rift catalog onto boss corpse
-  lists at runtime, outside every content-table sweep); it requires the
-  stale tab to get inside a rift at all, and whether the old bundle's
-  generic object interaction reaches a rift portal has not been verified
-  either way. Both arms are inputs to the surfaced
-  forced-refresh-at-deploy question. Two more
-  deployed-bundle arms need no loot table at all, because the
-  fine grades are minted by HARVESTING with an outclassing tool: a stale tab
-  that gathers one sees it land in an INVISIBLE bag cell (and bank cell after
-  a deposit) that still consumes capacity, and the profession chat line names
-  the raw id. Cosmetic and self-healing on reload, but they will read as
-  "my ore vanished" in reports, so expect them for as long as stale tabs
-  live. Stale sessions are ended by the pre-deploy restart countdown, but a
-  reconnect rides the same stale page: only a page reload picks up the new
-  bundle.
-  The caveats above were measured against 9d7a1a021, the commit deployed
-  today; the branch has since merged the true v0.32.0 tip (0b427afca, 685
-  commits past the measured base), re-synced repeatedly through
+  Release-specific caveat for the professions tuning deploy, REWRITTEN
+  2026-09-01 under ruling qr-19-stale-client-deploy-window and CORRECTED at its
+  review round. SCOPE FIRST, because the rewrite dropped this and two sentences
+  below then read as contradicting each other: the guards described in the
+  bullets above are in bundles built from this release onward. The bundle that
+  was DEPLOYED when this window was measured (9d7a1a021) predates them and
+  THROWS rather than degrading, which is what the rest of this paragraph is
+  about.
+  What this paragraph used to prescribe was a LOOT-TABLE EXCLUSION: keep new ids
+  out of mob and chest tables until clients have rolled, because a stale bundle
+  handed an id it cannot resolve freezes the panel rendering it. That window is
+  CLOSED, and by a different mechanism than the exclusion:
+  ONLINE_WORLD_LAYOUT_VERSION now reads 26 (src/world_api.ts), and the world
+  socket is FAIL-CLOSED on it. A client whose first frame does not carry
+  `auth-world-26` is refused at the handshake before any world work runs
+  (server/ws_auth.ts): a real stale bundle sends `auth-world-<older>` and is
+  refused with `incompatibleWorldLayout`, while a frame with no recognisable
+  type at all is refused with `authRequired`. Either way it never receives a
+  snapshot, an event, a loot list or a trade offer, so it cannot be handed an
+  unknown id. STATE THE RULE PRECISELY, because it is a property of the
+  surfaces and not of the process: every id-rendering surface in that bundle
+  lives behind the world socket. REST is not epoch-gated, and `/api/characters`
+  really does return item ids to a stale bundle; they are safe only because the
+  character-preview path that consumes them resolves every lookup with optional
+  chaining. A future non-game surface that renders an id from REST would fall
+  outside this rule.
+  The epoch bump arrived for wire-shape reasons, not for this, so the closure is
+  by circumstance rather than by design.
+  VERIFIED rather than asserted, against 9d7a1a021. All 22 `ITEMS[` sites in its
+  `src/ui/hud.ts` are null-safe, and one reachable throw survives there: the
+  trade panel's `itemIcon(item)`, whose `itemIcon(item: ItemDef)` dereferences
+  `item.quality` and `item.id` with no guard. THE FIRST DRAFT OF THIS PARAGRAPH
+  SAID "exactly ONE", scoping the measurement to hud.ts and then generalising it
+  to the bundle; that is corrected here. THE ENUMERATION BELOW IS SCOPED TO
+  WS-FED SURFACES, and says so, because the same generalisation is easy to make
+  twice: three more WS-fed siblings carry the same unguarded shape, and one of
+  them is the very throw the old caveat named:
+  `src/ui/hud/loot/loot_window_controller.ts` passes an unresolved item to
+  `itemIcon` and `itemDisplayName` on its row build and to `itemTooltip` on
+  hover, and `src/ui/disenchant_yield_view.ts` passes one to `itemDisplayName`.
+  All three are WS-fed, so all three are behind the handshake and the retirement
+  stands; the count was wrong, not the conclusion. The identical shape also
+  exists in the quest log, the quest dialog and the bag reagent menu at that
+  commit, and those are deliberately NOT in the count: every one of them takes
+  its id from client-local content (the quest tables, a quest reward record, a
+  recipe's reagents), never from the server, so no unknown id can reach them by
+  any vector and they were never part of this window.
+  `src/ui/market_view.ts` drops unknown listings and `src/ui/mailbox_window.ts`
+  skips them, so those two degrade on their own. So does the vendor path: the
+  junk preview filters through `junkSellableSlot`, whose first term is a
+  definition check, and vendor stock rows come from local content.
+  "Degrades" is not uniform, and the difference matters when reading a report:
+  several of those sites degrade to NOTHING RENDERED rather than to a raw id (a
+  set-piece count reads low, a gear stat source is omitted, the junk sweep skips
+  the stack, pet food is not seen), which is the same silent-omission family as
+  the invisible bag cell below.
+  WHAT STILL HOLDS at a deploy, and needs no loot rule: a tab that harvests a
+  fine grade with an outclassing tool sees it land in an INVISIBLE bag cell (and
+  bank cell after a deposit) that still consumes capacity, and the profession
+  chat line names the raw id. Cosmetic and self-healing on reload, but it reads
+  as "my ore vanished" in reports. NOTE THE COMBINATION THIS NEEDS, because the
+  measured bundle cannot produce it alone: `src/sim/professions/material_grades.ts`
+  does not exist at 9d7a1a021 and no fine-grade id appears in its `src/`, so
+  that bundle mints no fine grade offline and, with the gate, gathers none
+  online. The arm is a NEWER bundle writing an offline save that an older cached
+  bundle then loads.
+  Stale sessions are ended by the pre-deploy restart countdown, but a reconnect
+  rides the same stale page: only a page reload picks up the new bundle.
+  The measurements above were taken against 9d7a1a021, the commit deployed when
+  the window was open; the branch has since merged the true v0.32.0 tip
+  (0b427afca, 685 commits past the measured base), re-synced repeatedly through
   release/v0.33.0 (last at 2ae71a7fbf), and then merged release/v0.34.0
-  (94f5ac63d8, at merge 706bec2d21), which together are what the
-  merged-branch numbers above describe. If the live server moves before
-  this branch deploys, re-run the compatibility diff against the commit
-  actually deployed before trusting any "N new X" claim.
-  The loot-table exclusion is enforced by
-  `tests/stale_client_rollout.test.ts` for the deploy window (delete that
-  pin once clients have rolled). Per-surface analysis for the professions
-  tuning release: the stale-client compatibility phase of
+  (94f5ac63d8, at merge 706bec2d21). If the live server moves before this branch
+  deploys, re-run the compatibility diff against the commit actually deployed
+  before trusting any "N new X" claim.
+  There is no longer a guard file behind this paragraph.
+  `tests/stale_client_rollout.test.ts` and its snapshot froze the
+  HEROIC_BOSS_LOOT id set for the deploy window and were RETIRED in the same
+  change as this rewrite: a guard whose premise is closed is a guard that fails
+  for the wrong reason later. One thing goes with it and is recorded so nobody
+  looks for it: that frozen set was also the only change-detector on the heroic
+  boss loot table, and no surviving suite pins that id SET. Per-surface analysis
+  of the window as it stood: the stale-client compatibility phase of
   `docs/design/professions-tuning-packet-review.md`.
 - **Bank ledger audit**: `node scripts/bank_audit.mjs` (reads `DATABASE_URL` from the
   environment) replays the append-only `bank_ledger` against live character bank state
   and exits non-zero on any discrepancy. Run it after an economy incident or a restore.
 - **Username bans**: set `USERNAME_BANLIST_FILE=/opt/eastbrook/username-banlist.txt`
   to load blocked username terms from a private newline- or comma-separated
-  file. `USERNAME_BANLIST` can also provide a comma-separated inline list.
+  file. `USERNAME_BANLIST` can also provide a comma-separated inline list. The same
+  screen prices every player-chosen legendary item name (the Masterwrought orange
+  promotion), a surface wider than a character name (up to 32 characters with
+  spaces, apostrophes, and hyphens), so seed the file with the slur and hate-group
+  residual the built-in word list does not carry before that feature is live. An
+  edited file takes effect without a restart, at the next name screen at least one
+  second after the edit (nothing polls between screens; the cache is keyed on the
+  file's mtime and size, checked at most once per `USERNAME_BANLIST_STAT_HOLD_MS`,
+  so a permissions-only repair, a bare `chmod`, needs a `touch` too); a missing,
+  unreadable, or over-64-KiB file (about nine thousand terms; a name screen's cost does
+  not grow with the list, only the once-per-edit parse does) warns once and keeps
+  serving the last list it read successfully (fail-open by decision: it never blocks a
+  signup), and the boot log
+  prints one `name banlist:` line saying whether the configured file loaded (the
+  `woc_username_banlist_file_loaded` gauge is its scrape-visible twin, as of the last
+  name screen). Keep the file on LOCAL disk: the server stats it once a second at most
+  and reads it on change, synchronously on the loop that runs the realm, so a hung
+  network mount stalls a name screen for the mount's timeout.
+- **Clearing a stamped legendary name** (`POST
+  /admin/api/moderation/characters/:id/clear-item-name`, permission
+  `moderation.clearItemName`, SUPERADMIN only, API-only: the dashboard has no
+  button for it): the remediation for a reported player-chosen name on a promoted
+  copy. The body names EXACTLY one target plus a required `reason`: `{"slot":
+  "neck"}` for a worn copy, `{"bag": <inventory array index>, "itemId": "<id>"}`
+  for one carried cell, or `{"all": true}` for every named copy the character
+  holds (carried bags, bank, the buyback ring, and both equipment maps). Prefer
+  `all: true` unless the index was read from the blob itself: `bag` is the
+  persisted array index, not the cell the client displays, it reaches the carried
+  bags only, and with two same-id named copies a screenshot's index can strip the
+  other one. The flow is KICK, THEN CLEAR: the endpoint refuses while the
+  character is online on this realm (disconnect them with the in-game `/kick`
+  command or a dashboard suspension first). The offline load, strip, and save
+  run in one locked transaction, so simultaneous removals preserve each other.
+  The lease fence refuses a live session; expired nonces are invalidated under
+  the lock so a stale heartbeat cannot restore the removed name. A racing login
+  either wins first and the endpoint asks for a retry, or waits and loads the
+  corrected state. A player contesting the strip by reconnect-spamming is
+  answered by suspending the account first. The audit row (`clear_item_name`, a
+  sanction badge in the moderation history) lands before the write, so a refused
+  request still records what was asked. The strip removes ONLY the name: the
+  promotion, its stats, signer, and bind stand, and the copy is a permanently
+  nameless legendary (the game offers no re-name). What the strip CANNOT reach:
+  the Discord activity card the promotion published is durable in the community
+  channel and has no in-repo takedown, so a name report also owes a manual Discord
+  message removal.
 - **Chat filter**: the word lists are now **managed live from the admin
   dashboard** (Chat Filter tab), stored in the database and seeded with sensible
   defaults on first boot. Two tiers: *soft* words are masked client-side with
@@ -473,13 +716,59 @@ For off-box safety, sync the directory to S3 occasionally:
   economy service, use `http://host.docker.internal:8798/v1/claudium/`.
   A separately deployed economy service should use its internal or remote DNS
   URL instead.
+- **$WOC market settlement service**: `WOC_MARKET_SERVICE_URL` points at the
+  same economy service's `/v1/market/` surface and is a SEPARATE knob from the
+  claudium URL above (the market proxy refuses to fall back to it; with the
+  market knob unset the Exchange reports itself unavailable). Same host
+  guidance as above. Health: probe `GET /v1/market/price` on this base (send
+  the shared `x-woc-economy-secret` header if the service requires it; the
+  game mirrors the reading at `/api/woc-market/status`, which needs a player
+  bearer token, so the service base is the operator probe); do not key market
+  monitoring on the service's `/v1/health` rail matrix, which has no
+  market-settlement rail (its `marketplace` rail is the character-marketplace
+  rail and names keys this market never reads). Deploy coupling: the
+  bond-quote contract is service-owned (the game sends the BID, the service
+  answers the bond), so enable the market only with BOTH sides at or after
+  the contract tips: for the service, the PR #31 build whose bond-quote
+  response carries `bondCents` (the probe: quote a bond and check the field);
+  for the game, the build that sends `bidCents`. An old GAME against the new
+  service refuses bond quotes fail-safe (the service demands the bid; no
+  money moves, bids lapse on their TTL). A new game against an OLD service is
+  TOLERATED by design: a quote without `bondCents` falls back to the game's
+  ceil mirror at the same knobs, so keep the knobs in lockstep until both
+  sides are current. The contract also reserves the confirm
+  verdict word `awaiting_finality` for LEDGER-MATCHED payments (the game's
+  anti-snipe extension trusts exactly that reservation); a service build that
+  starts emitting it optimistically is a breaking change, not a copy tweak.
+  Player-visible behavior note: listing an item and the seller side of a
+  directed acceptance now require a wallet SIGNATURE (the step-up challenge;
+  no transaction, no funds), so a seller whose wallet is linked but
+  unavailable at the moment cannot list; no knob controls this and no env
+  change accompanies it (the dev economy pair alone enables the devsig arm).
+  Security framing (be precise with operators): the step-up makes a custody
+  move require a live, attributable wallet signature, and the R11 wallet-link
+  re-auth gate (server/wallet_reauth.ts) closes the relink-first hole that
+  used to sit beside it: changing an existing wallet link now demands the
+  CURRENT wallet's co-signature or the account password plus its second
+  factor, removing one demands the password arm, and every link change emails
+  the account. Client-version note: desktop/native bundles older than R11
+  ship the pre-R11 client, which never shows the password prompt, so on
+  those builds a relink/unlink answers the generic verify-failed flash
+  until the bundle updates (the web client updates with the deploy).
+  History: docs/woc-marketplace-hardening/state.md (R11).
+- **Ops dashboard market reads**: `DASHBOARD_INTERNAL_SECRET` gates the ops
+  dashboard's `/internal/woc-market/*` reads; unset leaves them 404 (names
+  only here, the values live in deployment secrets).
 - **Never** set `ALLOW_DEV_COMMANDS=1` in production: it enables the full
   `/dev` cheat set (the level/teleport cheats the test bots use, plus item
   grants, mob spawns, instance teleports, and the dev command GUI).
-- Leave `RIFT_FORGE_ENABLED` unset in production: it opens the Rift forge
-  wire commands (upgrade/enchant/socket), whose client UI has not shipped.
-  Enable it only on PTR or internal playtest realms
-  (`server/rift_forge_gate.ts`).
+- `RIFT_FORGE_ENABLED` is a kill switch, not an opt-in: the Rift forge wire
+  commands (upgrade/socket at the Riftwright) are open by default. Set it to
+  `0` (or `false`, `off`, `no`) to pause the forge on a realm
+  (`server/rift_forge_gate.ts`); leave it unset otherwise. The switch only
+  works when the server actually sees the variable: `docker-compose.yml`
+  forwards it through the per-key `environment` block, so a deploy template
+  that renders its own compose must carry the same line.
 - **Community test profile**: on a disposable public test realm, set
   `PROVISION_TEST_ACCOUNTS=1` in the host `.env`, then restart the game
   container. The flag gives newly created accounts nine level-20 characters,
@@ -530,6 +819,32 @@ For off-box safety, sync the directory to S3 occasionally:
   full cross product is still pre-registered at boot by design (a Prometheus
   counter cannot backfill a scrape), and no per-request cardinality bound
   changed: the vocabularies stay content-derived and bounded.
+  The `woc_client_*` family (server/http/client_perf_metrics.ts) distills the
+  public `/api/perf-report` beacons into fleet frame-health series: report and
+  heavy-jank counts, frame p95 / fps / worst-10s / long-task / render-scale
+  histograms, context losses, and perf-doctor suggestion counts, labeled only
+  by fixed vocabularies (graphics tier, device class, GPU family, OS family,
+  scene class, suggestion id). The whole family follows the exporter's
+  zero-backfill design above: every counter cross product registers at zero and
+  every histogram series is pre-seeded at boot (roughly 600 always-present
+  samples), so the jank-share ratio reads 0% rather than "no data" for a
+  healthy cohort and first post-deploy increments are visible to rate(). The
+  values are
+  CLIENT-ATTESTED (the beacon is unauthenticated; the ingest clamps, per-IP
+  rate limit, and per-session insert throttle bound the write rate), so
+  corroborate a surprising shift against the client_perf_reports table before
+  treating it as fleet truth.
+  `woc_client_shader_warm_reports_total` (same module, same stored gameplay reports) is
+  the shader warm-up cut of that population: `shader_warm_active` says whether
+  the warm-up worker was alive on the reporting client, and
+  `shader_warm_refusal` carries the cause when it was not (`none` when there is
+  none, one `extension-drift` series for the whole family, `other` for a cause
+  this server's vocabulary does not know). Its cardinality is the two active
+  values times that fixed vocabulary, pre-registered at zero like the rest of
+  the family. The SQL drill-down is the two client_perf_reports columns behind
+  it (`shader_warm_worker_active`, `shader_warm_refusal`, both bounded at
+  ingest), plus `raw_summary.shaderWarm` for the per-session detail (mode,
+  setting, backend, and the warmed / held counts).
 - **Multi-realm scraping**: one server process hosts exactly one realm, and no
   exported series carries a `realm` label (pinned by the exporter tests; the
   DB-backed business family filters on the realm in its queries instead). Give
@@ -537,14 +852,57 @@ For off-box safety, sync the directory to S3 occasionally:
   target label in the scrape config, e.g.
   `static_configs: [{ targets: ['127.0.0.1:8787'], labels: { realm: 'emberfall' } }]`
   per realm port. Counters then sum cleanly across realms
-  (`sum(woc_fishing_catches_total)` is world-wide). The one exception:
-  `woc_rod_fee_copper` is a static content gauge published IDENTICALLY by
-  every realm process, so aggregate it with `max()` (or `avg()`), never
-  `sum()`. Both series carry a `recipe` label and the two rod fees DIFFER,
+  (`sum(woc_fishing_catches_total)` is world-wide, and the database-wide
+  `woc_bank_ledger_growth_limit_refusals_total` also sums). Gauges need their
+  own aggregation. `woc_rod_fee_copper` is static content published IDENTICALLY
+  by every realm process, so aggregate it with `max()` (or `avg()`), never
+  `sum()`. Both rod series carry a `recipe` label and the two rod fees DIFFER,
   so the aggregation must keep that label or the product multiplies every
   training by the single highest fee: the copper the rod fees took across
   realms is
   `sum(sum by (recipe) (woc_rod_fee_payments_total) * max by (recipe) (woc_rod_fee_copper))`.
+  `woc_bank_ledger_growth_budget` is another database-wide gauge exported by
+  every realm. Never sum its row count, byte size or capacity: use one target, or `max`
+  without the target `realm` label for `accounted_rows`, `total_bytes` and
+  `hard_limit_rows`. Use `max` for `observation_age_seconds` so the stalest realm
+  is visible, `max` for `limit_warning` so one realm that has observed the warn
+  crossing raises it, and `min` for `initialized` (and `bytes_known`) so one realm that
+  has never observed the singleton cannot hide behind healthy peers.
+  `accounted_rows` is the aggregate audit rows the budget currently accounts for
+  across `bank_ledger` and `material_source_journal`: it rises on inserts and FALLS when
+  an owner cascade reaps audit rows, so it tracks live storage rather than history ever
+  written. `lifetime_inserted_rows` carries the same value as a deprecated alias for
+  dashboards that predate the aggregate budget; its NAME is now wrong and it is removed
+  once those panels move to `accounted_rows`. (The earlier rename of
+  `observed_committed_rows` to `lifetime_inserted_rows` still applies to anything older.) The per-process bank-ledger FIFO drop total moved the same
+  way: `woc_bank_ledger_tail{measure="dropped_rows"}` is no longer exported,
+  so an existing any-increase alert on that arm goes silently to no-data;
+  point it at the `woc_bank_ledger_tail_dropped_rows_total` counter and alert
+  on `increase()`, which also reads correctly across realm restarts (the old
+  gauge arm did not). `woc_bank_ledger_tail` keeps only the instantaneous
+  `depth` and `rows` occupancy arms.
+  Character deletes carry their own bound on top of the realm-wide background
+  gate: at most 2 concurrent (`CHARACTER_DELETE_PERMIT_SUB_CAP`), exported as
+  `woc_character_delete_gate` (a measure-labeled sibling of
+  `woc_background_db_gate`) plus the `woc_character_delete_busy_total`
+  counter. A delete stampede parks at the sub-gate BEFORE the realm gate, so
+  read it here: `waiting` above 0 with `in_flight` pinned at the cap means
+  players are queuing to delete (the realm gate's own waiting gauge
+  structurally cannot see this); sustained
+  `increase(woc_character_delete_busy_total)` means players are receiving
+  `delete_busy` 503s; `in_flight` stuck at the cap with no delete traffic is a
+  leaked sub slot. Client-gone abandonments (a player closing the tab
+  mid-wait) count in neither series.
+  `woc_offline_fence_refusals_total` (labeled by writer family over
+  `rename_sweep`, `reclaim_sweep`, `pbe_roster`) is the one to watch after an
+  operator action that writes a character while it is OFFLINE. The lease fence
+  means the write is REFUSED rather than applied when the character has come
+  back online, and a refusal is silent to the operator: the durable effect
+  simply did not land, with nothing in the tree to re-trigger it. A rename
+  sweep is the worst of the three, because the rename itself commits first, so
+  a refusal leaves the character renamed with every crafted copy still signed
+  with the old name. Any sustained `increase()` here means operator work is
+  being dropped; the remedy is to disconnect the character and retry.
 - **Discord bot series (Grafana)**: the bot reports its rate-limit governor
   counters on the presence push it already sends, so `/metrics` carries them with
   no extra scrape target and no bot-side endpoint. Cumulative counters
@@ -718,10 +1076,140 @@ For off-box safety, sync the directory to S3 occasionally:
   zero between autosave waves; that pair means pool saturation, not an auth outage.
   The response: raise `DB_POOL_MAX_CLIENTS` a few clients at a time (it accepts 1 to 97
   and rejects loudly outside that), never straight to the ceiling, and keep the budget
-  arithmetic in view: realms sharing one `DATABASE_URL` multiply, and each realm also
-  takes one boot client, so realms x pool + realms must stay at or under the 97 usable
-  connections on stock `postgres:16` (`max_connections` 100, 3 superuser-reserved).
-  The boot log warns when the configured multiplication breaks that budget.
+  arithmetic in view. Every realm sharing one `DATABASE_URL` has the main pool plus a
+  two-client general-chat quota pool and one dedicated quota `LISTEN` client, so steady
+  state is `realms x (DB_POOL_MAX_CLIENTS + 2 + 1)`. Each realm also carries a max-1
+  deadline-cancel side pool (`woc_db_backend_cancel_requests_total` counts its use) that opens a
+  connection only in the seconds after a transaction wall deadline fires and releases
+  it on the driver's idle timeout; count it as one more TRANSIENT connection per realm
+  under load, alongside the boot clients below, and re-derive the peak with it: at
+  the default of 10 a realm is 13 steady and 14 at cancel peak, so SEVEN realms can
+  peak at 98 against the 97 usable connections and six is the largest count that
+  fits with full peak headroom. The cancel connection is demanded exactly when
+  Postgres is most contended; at `max_connections` the checkout is refused inside
+  its 500ms bound and the cancel is dropped (best-effort by contract, the
+  caller-installed statement timeout stays the backstop), with a rising
+  `woc_db_backend_cancel_failures_total` rate as the signal (both cancel series are
+  counters, so alert on `increase()`, which reads correctly across realm
+  restarts). That total must stay below the 97
+  usable connections on stock `postgres:16` (`max_connections` 100, 3
+  superuser-reserved) with room left for tooling. Eight realms at the default are
+  already 104 steady connections and cannot fit. Boot temporarily adds a dedicated
+  schema client and a concurrent-index client for each starting realm; rolling deploys
+  can overlap both old and new process budgets. Size for those peaks, not only steady
+  state. The boot log warns when the configured cancel-peak multiplication (realms x
+  (shared + quota + listener + deadline-cancel), the same arithmetic as above) breaks
+  the stock budget; the boot clients and rolling-restart overlap still ride on top of
+  what it counts.
+- **`BANK_LEDGER_GROWTH_HARD_LIMIT_ROWS`: database-wide AGGREGATE audit ceiling.** The
+  default is 10,000,000 rows, and it now covers `bank_ledger` PLUS
+  `material_source_journal` against ONE singleton, one env value and one ceiling (there
+  is no per-table budget and no second knob). `material_source_containers` is not
+  counted: an anchor is created with its first journal row and reaped with its last, so
+  its cardinality is already bounded by counted rows. First deployment
+  seeds an exact `COUNT(*)` of each counted table while writers are locked; PostgreSQL
+  then accounts every writer, including old binaries and raw SQL, in the writing
+  transaction and refuses the COMMIT that would cross the ceiling.
+  **The counter is now NET, not a lifetime tally.** Statement triggers count INSERTs and
+  DELETEs on both tables, so a character or account deletion that cascades audit rows
+  away gives that capacity back. Two consequences for operators: a transaction that only
+  REMOVES audit rows is admitted even while the budget sits over the ceiling (that is
+  the way back from an over-cap seed, with no counter surgery), and a removal larger
+  than the whole accounted figure is refused as SQLSTATE 55000 `audit growth budget
+  underflow` rather than clamped to zero, because it means the accumulator itself is
+  wrong. Reaching the limit is still not permission to prune the audit trail.
+  **The one-time aggregate migration.** An install seeded by an earlier release carries
+  `budget_revision = 1` (a bank_ledger-only lifetime insert count). The first boot of
+  this release converges it ONCE, inside the boot transaction that already holds the
+  canonical schema advisory lock: it adds the additive `budget_revision` and
+  `deleted_rows` columns, publishes the three new triggers, locks both counted tables in
+  SHARE ROW EXCLUSIVE and REPLACES `committed_rows` with an exact recount of both. That
+  boot costs one count pass per counted table (the journal is empty at cutover). Every
+  later boot reads the revision marker and does nothing: no ALTER, no COUNT, no
+  source-table lock. Concurrent realms park at the advisory acquire holding nothing.
+  Deploy it with every realm stopped, like any seeding boot. `bank_ledger` PREDATES this
+  budget (it has been accumulating since 2026-07-06), so the first install seeds over
+  the real production history, never an empty table. Know the real blocked window:
+  EVERY boot transaction (steady-state included) holds ACCESS EXCLUSIVE on
+  `bank_ledger` from its first schema fragment to COMMIT (the idempotent ADD COLUMN
+  converges take that lock even as no-ops), which stalls ledger reads AND writes from
+  every other process for the boot transaction's whole duration; the seeding boot
+  extends that one transaction by exactly one exact count. The count is a parallel
+  index-only scan over the primary key (roughly 43 MB of index per 2M rows): measured
+  at the 10,000,000-row ceiling on dev hardware it runs in roughly 0.1 to 0.25
+  seconds warm; budget low seconds cold on the production box. Deploy the seeding
+  boot with EVERY realm stopped (the standard stop-then-cutover below): a realm left
+  running during ANY boot stalls its in-flight ledger inserts and reads on the boot
+  transaction, and character saves then die at their 2s `lock_timeout`. Re-seeding
+  after deleting the singleton on a grown ledger pays the same shape and is a
+  maintenance-window operation.
+  Every process sharing `DATABASE_URL` must use
+  the same value or boot fails. A first bootstrap that is already over the configured
+  value deliberately boots read-capable but refuses every later ledger insert; watch
+  `woc_bank_ledger_growth_budget` and
+  `woc_bank_ledger_growth_limit_refusals_total`. The per-process realm row bucket is
+  telemetry-only: `woc_bank_vault_realm_row_breaches_total` (sum across realms, alert on
+  rate) counts admissions the old refusing guard would have dropped; sustained growth there
+  means organic bank/vault traffic is outrunning the old per-process budget, not abuse (the
+  per-account bucket still refuses abuse). The ceiling transitively bounds `bank_ledger_batch_receipts`
+  (also keep-forever; at least one ledger row per receipt batch, so it can never
+  outgrow the ledger ceiling). The receipt fingerprint gained the
+  operator-attribution field in this same release, and the receipts table ships
+  first here, so no pre-change receipt exists to collide; a hand-installed
+  pre-change receipt would surface as the deliberate receipt-verification
+  refusal (the cross-version test pins that shape). `storage_purchase_applied_receipts` is NOT under any
+  ceiling: one row per successful paid storage purchase, unbounded by design, with a
+  wide TEXT primary key, so put its size on the same dashboard rather than assuming
+  the ledger cap covers it. Each realm refreshes the singleton with one indexed,
+  fail-fast point read per minute through the shared background gate; the monitor
+  never queues when that gate or the database pool is full. Shutdown aborts and
+  drains active monitor SQL before closing the pool; `pool.end()` then remains the
+  final bounded teardown for any new socket connection attempt already inside
+  node-postgres.
+  That minute read also carries the AGGREGATE stored-byte figure
+  (`measure="total_bytes"`, with `measure="bytes_known"` saying whether a reading has
+  landed), summed over `bank_ledger`, `material_source_containers` and
+  `material_source_journal` in the SAME statement: rows bound the ceiling, bytes are what
+  you size disk against. It is not lock-free. `pg_total_relation_size` opens each
+  relation with AccessShareLock, so during a boot transaction (which holds ACCESS
+  EXCLUSIVE on `bank_ledger`) that minute read waits and then fails at its 1s statement
+  timeout. Expect one failed telemetry beat and one log line per boot; it self-heals on
+  the next minute.
+  Alert if `measure="observation_age_seconds"` exceeds 180 (the refresh path is stale),
+  and page before `accounted_rows / hard_limit_rows` reaches 0.8 so capacity
+  work happens before save refusals quarantine sessions; `measure="limit_warning"`
+  flips to 1 at exactly that 0.8 crossing (and the crossing realm logs one
+  console.warn per process), so an alert rule can key on it directly.
+  `accounted_rows` is the measure to use: it is the aggregate audit rows currently
+  accounted for. `lifetime_inserted_rows` is retained as a DEPRECATED alias carrying the
+  identical value so existing dashboards and alerts keep working across this deploy;
+  it stopped being a lifetime count when the budget became aggregate and net, and it is
+  removed once those panels move. Note that BOTH can now fall, so an alert written to
+  assume a monotonic counter (a `increase()`/`resets()` rule) must be re-expressed
+  against the gauge value. Raising the
+  ceiling requires a maintenance window, and the order matters: STOP every realm
+  process (a quiesced-but-running realm still holds the old compiled value and
+  refuses its first write after the update as `BANK_LEDGER_GROWTH_HARD_LIMIT_ROWS`
+  config drift), update the singleton `hard_limit_rows`, deploy every process with
+  the matching environment value, then start them and verify the boot readout
+  before reopening traffic. A missing,
+  disabled, or replaced enforcement trigger after initialization fails boot for manual
+  reconciliation rather than silently undercounting an unaudited write window.
+- **`STORAGE_PRICES`: the storage price override (server/storage_prices.ts).** One
+  JSON object of copper price lists on ONE line, any subset of
+  `{"bankExpansions":[12 ints],"bankSockets":[4 ints],"vaultUpgrades":[5 ints]}`
+  (vault rung 0 is the vault unlock). Boot-time only: the sim resolves it once at
+  world construction, so a change needs a process restart. Each list is accepted
+  only at its exact compiled length with entries that are safe integers of at
+  least 0 (zero is a legal price); a bad dimension falls back to the compiled
+  default BY ITSELF and is reported on the console at boot, the boot does not
+  fail, and an applied override logs which dimensions it covers, so check the
+  boot log after any change: silence means unset, and a rejection can never look
+  like unset. Clients always render the server-sent prices (the walked guard
+  test keeps them price-free), so no client release is needed for a retune.
+  Caveat before a production SOCKET retune: `scripts/bank_audit.mjs` mirrors the
+  compiled socket ladder and would flag legitimate unlocks as `bad_socket_price`
+  under an override.
 - **Nightly retention sweep.** The batched retention prunes run once per UTC day
   at `RETENTION_SWEEP_UTC_HOUR` (default 05:00 UTC) behind a database advisory
   lock, so with several processes on one database exactly one of them sweeps.
@@ -755,6 +1243,37 @@ For off-box safety, sync the directory to S3 occasionally:
   also performs the largest fold it will ever do (the whole backlog, budget-
   capped per night), so the deploy-time catch-up guidance above applies with
   extra weight.
+  Claudium storage refusals leave no retained operational row: the pending row
+  is deleted before a definitive no-debit refusal is reported. Pending rows are
+  bounded recovery work, unresolved rows remain operator cases, and successful
+  grants move to immutable `storage_purchase_applied_receipts` in the same
+  transaction as the character blob and audit row. The receipt, not the blob
+  alone, is the durable exactly-once authority after a rollback strips
+  `appliedStorageKeys`. The current cap is twelve purchased expansions (72
+  actual `purchasedSlots`), so at most twelve successful single-rung receipts
+  are needed to fill it. There
+  is no storage-purchase retention knob or old-binary sweep to disable: the
+  release base predates both the table and the abandoned refused-row sweep.
+  PostgreSQL enforces one open pending-or-unresolved row per character and one
+  leased outbound spender per key. Recovery tracks at most 200 characters per
+  realm process, runs two scans and two drives concurrently, and paces outbound
+  drives plus failed-scan retries at 10 starts/second with a burst of two. A
+  cancelled recovery query returns its pool slot promptly and carries a 2-second
+  PostgreSQL `statement_timeout`; the connection is reusable only after its
+  15-second startup default is restored. PostgreSQL can retain a socket-destroyed
+  backend until that server timer fires, so leave transient connection headroom
+  for the four scan/drive slots during shutdown. A drive inside its retry-safe
+  character-save transaction uses a 15-second statement ceiling (rather than an
+  ordinary heavy save's 60 seconds), with at most two such drives. A live
+  character beyond the 200-entry tracking bound remains blocked on both the gold
+  and Claudium storage rails and is retried incrementally from the session sweep;
+  do not treat a capacity refusal as proof that no older debit exists. Character
+  and account deletion are database-refused while a `pending` or `unresolved`
+  purchase exists, using the stable `storage_purchases_open_delete_guard` marker.
+  Finish recovery or resolve the operator case before retrying deletion.
+  Details in server/storage_purchase_db.ts. To find purchases that got stuck,
+  run `node scripts/bank_audit.mjs`, which reports unresolved and stranded
+  pending rows.
 - **`/api/discord` status cache** (game service). The account-scoped part of the
   `GET /api/discord` payload is served from a per-account in-memory cache; every
   in-process write (link, unlink, grants, swag claims, password set, guild-member
@@ -791,7 +1310,9 @@ Discord server and the game: status-tier roles plus a level-on-name nickname syn
 from in-game data, presence (the online count and the featured voice room) pushed
 into the HUD widget, in-game "!" community posts relayed as embeds, a
 significant-activity feed (max level, rare drops, duels, arena), daily-rewards
-winner posts, and the consumer for the game's Discord outbox. It is a pure consumer
+winner posts, opt-in queue-pop direct messages (a player's battleground offer or
+arena seat, DMed to their linked account; no channel id to configure), and the
+consumer for the game's Discord outbox. It is a pure consumer
 of the game server: it reads and writes through the secret-gated
 `/internal/discord/*` API and holds nothing durable of its own, so stopping it never
 affects the realm.

@@ -267,6 +267,7 @@ export const RELIQUARY_HORIZON_MOUNTS = [
   'thunderstrut_gobbler',
   'drakemaw_raptor',
   'avian_strider',
+  'lanternback_troll',
   'terrorspark_groundshaker',
 ] as const;
 
@@ -283,11 +284,9 @@ export const RELIQUARY_HORIZON_MOUNTS = [
 // def in content/zone3.ts), so a quest hint there would name a door that hands
 // out nothing.
 //
-// drakemaw_raptor, avian_strider, and terrorspark_groundshaker are absent, and
-// that absence IS the answer: no live table awards them (the avian and tank are
-// dev-grant only). They are the catalog's SOURCE_PENDING_RULING mounts;
-// masterwork:engineering on the professions
-// shelf is the third pending slot (QA ruling 2026-08-07).
+// Drakemaw Raptor, Viridian Valestrider, Lanternback Troll and Dreadspark
+// Groundshaker have no player acquisition path. Paid mount skins are
+// deliberately absent here.
 //
 // Keys are typed against the live mount ladder so a misspelled or renamed key
 // fails tsc at the authoring site instead of falling through to the pending
@@ -425,6 +424,19 @@ export const RELIQUARY_HORIZON_TITLES = [
   'col_reliquary_illum_nythraxis_heroic',
   'col_reliquary_illum_thunzharr',
   'col_reliquary_illum_gravewyrm_heroic',
+  // Grandmaster Jewelcrafting (Masterwrought phase 05 QA ruling): the ninth
+  // per-craft grandmaster title pages here per the locked titles-page rule.
+  'prog_grandmaster_jewelcrafting',
+  // Grandmaster Inscription (Masterwrought phase 06): the tenth per-craft
+  // grandmaster title pages here per the same locked titles-page rule.
+  'prog_grandmaster_inscription',
+  // The farming capstone (the celebrations phase): Harvestmaster pages here
+  // per the locked titles-page rule like every non-hidden title deed.
+  'prog_farming_100',
+  // The Crucible raid's flawless title (the obligations closeout,
+  // docs/prd/ignivar-raid-loot.md): every non-hidden title deed pages here
+  // per the locked titles-page rule.
+  'dgn_varkhul_flawless',
 ] as const;
 
 // Profession lifetime mark ids (Phase 7). Prefer existing visited namespaces
@@ -437,31 +449,65 @@ export const RELIQUARY_HORIZON_TITLES = [
 // restoreReliquaryState keeps only currently catalogued ids), so a mark
 // dropped from the catalog and later re-added refills from the surviving
 // visit at join. A pre-Reliquary binary is NOT covered: it predates the
-// namespace registration and drops the visits too (state.md rollback note).
+// namespace registration and drops the visits too.
 // History is never invented (the visit exists only if the proc really
 // happened).
 export const RELIQUARY_PROFESSION_MARKS = {
   /** First lifetime masterwork proc (any craft). */
   masterworkFirst: 'masterwork:first',
-  /** First masterwork per craft on the ring that the gallery catalogs. Only
-   *  the first four are gear-capable today: every engineering recipe produces
-   *  a slotless, statless tool, so masterworkBonusStats returns null and the
-   *  engineering mark can never be written (QA ruling 2026-08-07: the slot
-   *  stays catalogued but un-hinted in SOURCE_PENDING_RULING beside the two
-   *  gap mounts, an owner call; a stats-bearing engineering craftable would
-   *  un-pend it). */
+  /** First masterwork per craft on the ring that the gallery catalogs. All
+   *  seven entries are gear-capable since masterwrought Phase 11o
+   *  (2026-08-25): engineering was the exception while its every recipe
+   *  produced a slotless, statless tool or an R1-suppressed apex, so
+   *  masterworkBonusStats returned null and its mark could never be written
+   *  (QA ruling 2026-08-07: the slot stayed catalogued but un-hinted in
+   *  SOURCE_PENDING_RULING, an owner call, until "a stats-bearing
+   *  engineering craftable would un-pend it"; the 11o copperlens_ocular is
+   *  that craftable, so the slot is hinted and off the pending list).
+   *  Jewelcrafting
+   *  joined the gear-capable side when its trainer ladder landed: its outputs
+   *  are stats-bearing rings and necks, so the proc path writes
+   *  masterwork:jewelcrafting and the gallery owes it a slot. Inscription
+   *  followed with the phase 06 catalog: its tomes are stats-bearing held
+   *  offhands, so masterwork:inscription pages here the same way (the
+   *  scrolls, slotless consumables, cannot masterwork by design). The
+   *  gear-capable set is DERIVED from the live recipes in
+   *  tests/reliquary_content.test.ts (both directions), so neither a craft
+   *  gaining gear nor a craft losing it can drift from this list. */
   masterworkByCraft: [
     'masterwork:weaponcrafting',
     'masterwork:armorcrafting',
     'masterwork:tailoring',
     'masterwork:leatherworking',
+    'masterwork:jewelcrafting',
+    // Deliberately INSERTED before engineering rather than appended: the
+    // earnable marks group ahead of what was then the pended engineering
+    // slot (un-pended 2026-08-25, masterwrought Phase 11o: copperlens_ocular
+    // made the craft gear-capable, so every slot here is earnable now).
+    // Safe for a shipped page because marks are id-keyed in the sparse blob
+    // (no persisted state is index-dependent); the page-table append-only
+    // doctrine governs PAGES, and the order pin in
+    // tests/reliquary_content.test.ts moved with this row.
+    'masterwork:inscription',
     'masterwork:engineering',
   ],
-  /** Rare gather / corpse specimen visit marks already written by professions. */
+  /** Rare gather / corpse specimen visit marks already written by professions.
+   *  golden_harvest joined at masterwrought Phase 18, closing the farm bed's
+   *  missing rare-event mapping: the farm bed's rare
+   *  event is the fourth flavor the shared gather_event announce writes, and
+   *  it sat outside this allowlist (so noteReliquaryMark no-opped for it)
+   *  while its three node siblings each had a cell. Inserted BEFORE
+   *  perfect_specimen so the three-plus-one shape holds: the gathering
+   *  flavors first, then the corpse-harvest one that belongs to no gathering
+   *  profession. Safe on a shipped page for the same reason the inscription
+   *  masterwork row was: marks are id-keyed in the sparse blob, so no
+   *  persisted state is index-dependent, and the order pin in
+   *  tests/reliquary_content.test.ts moves with this row. */
   fieldNotes: [
     'gather_event:pristine_vein',
     'gather_event:ancient_heartwood',
     'gather_event:moonlit_bloom',
+    'gather_event:golden_harvest',
     'gather_event:perfect_specimen',
   ],
 } as const;
@@ -487,19 +533,26 @@ export const RELIQUARY_PROFESSION_SPECIMEN_ITEMS = [
   'glimmerfin_koi',
 ] as const;
 
-/** Field-note flavor to the gathering profession that works its node type
+/** Field-note flavor to the gathering profession that works its source
  *  (gatherRareEventFlavor plus NODE_HARVEST_TABLE, src/sim/professions/).
+ *  The first three are node types (ore to mining, wood to logging, herb to
+ *  herbalism); golden_harvest has no node at all, since a farm bed is worked
+ *  rather than found, so it names farming as the profession whose harvest
+ *  rolls it (professions/farming.ts harvestCrop).
  *  gather_event:perfect_specimen is absent on purpose: it fires on corpse
  *  harvest, which belongs to no gathering profession and takes the
  *  corpse_harvest ACTIVITY hint instead.
  *
  *  Exported because the client's cell-art resolver paints each field note
  *  with its gathering profession's art and must read that pairing from here
- *  rather than re-listing it. */
+ *  rather than re-listing it. Farming is the one member with no committed
+ *  gather_* sheet art, so the resolver gives its note an authored glyph and
+ *  reads this map for the SOURCE HINT only. */
 export const FIELD_NOTE_PROFESSIONS: Readonly<Record<string, string>> = Object.freeze({
   'gather_event:pristine_vein': 'mining',
   'gather_event:ancient_heartwood': 'logging',
   'gather_event:moonlit_bloom': 'herbalism',
+  'gather_event:golden_harvest': 'farming',
 });
 
 /** Specimen jackpot to its gathering profession. The five corpse-harvest
@@ -577,6 +630,15 @@ export const RELIQUARY_SET_MEMBERS = {
     'stormcallers_crown',
     'stormcallers_spaulders',
   ],
+  bramblehide: [
+    'bramblehide_crown',
+    'bramblehide_mantle',
+    'bramblehide_harness',
+    'bramblehide_cinch',
+    'bramblehide_legguards',
+    'bramblehide_grips',
+    'bramblehide_treads',
+  ],
 } as const;
 
 // Per-member source for the set pages. A set page cannot take a page default:
@@ -639,6 +701,13 @@ const SET_MEMBER_SOURCES: Readonly<
   stormcallers_waistguard: fromBoss('thunzharr_waking_peak'),
   stormcallers_crown: fromBoss('nythraxis_scourge_of_thornpeak'),
   stormcallers_spaulders: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_crown: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_mantle: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_harness: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_cinch: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_legguards: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_grips: fromBoss('nythraxis_scourge_of_thornpeak'),
+  bramblehide_treads: fromBoss('nythraxis_scourge_of_thornpeak'),
 };
 
 /** Set-page members carrying their SET_MEMBER_SOURCES hint. A member with no
@@ -707,6 +776,24 @@ export const RELIQUARY_HEROIC_GEAR = {
     'deathless_greatblade',
     'scepter_of_the_deathless_court',
     'stormcallers_focus',
+  ],
+  // Crucible of the Last Spring: the heroic-only weapon and shield appends.
+  // The sigil redemption tokens that share both bosses' heroic tables are
+  // NOT catalogued (kind 'tool'): they are per-slot redemption currency the
+  // Crucible Quartermaster consumes, not unique spoils, the same carve-out
+  // the delve pages apply to Marks-counter tools and heroic_mark itself.
+  ignivar_herald_of_the_last_flame: [
+    'forgefathers_warhammer',
+    'anvilguard_blade',
+    'springtouched_crozier',
+  ],
+  varkhul_forgefather_of_the_last_flame: [
+    'bulwark_of_the_inner_crucible',
+    'ember_wardens_barrier',
+    'varkhul_emberward',
+    'heart_of_the_end_greatblade',
+    'forgefire_spire',
+    'staff_of_the_last_spring',
   ],
 } as const;
 
@@ -1003,6 +1090,9 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
       ['gravewyrm_stalkers_treads', fromBoss('grand_necromancer_velkhar')],
       ['deathlord_legguards', fromBoss('grand_necromancer_velkhar')],
       ['necromancers_soulsteps', fromBoss('grand_necromancer_velkhar')],
+      // The dungeon rung of the materials-satchel ladder (bank-storage):
+      // velkhar_bonus 0.2, Velkhar's table only, so one door is the truth.
+      ['necromancers_reagent_satchel', fromBoss('grand_necromancer_velkhar')],
       ['wyrmshadow_legguards', fromBoss('grand_necromancer_velkhar')],
       // Korzul final
       ['wyrmfang_greatblade', fromBoss('korzul_the_gravewyrm')],
@@ -1018,7 +1108,13 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
       ['wildgrowth_leggings', fromBoss('korzul_the_gravewyrm')],
       ['grovewardens_grips', fromBoss('korzul_the_gravewyrm')],
       ['verdant_walkers', fromBoss('korzul_the_gravewyrm')],
-      ['gravewyrm_bone_quiver', fromBoss('korzul_the_gravewyrm')],
+      // korzul_bonus 0.05 plus the leatherworking trophy recipe
+      // recipe_gravewyrm_bone_quiver (Masterwrought phase 11l): two
+      // comparable doors, so both are named, the boundstone_helm shape.
+      [
+        'gravewyrm_bone_quiver',
+        [fromBoss('korzul_the_gravewyrm'), fromProfession('leatherworking')],
+      ],
     ),
   },
   {
@@ -1079,6 +1175,20 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
       'stormcallers_crown',
       'stormcallers_spaulders',
       'direfang_quiver',
+      'bramblehide_crown',
+      'bramblehide_mantle',
+      'bramblehide_harness',
+      'bramblehide_cinch',
+      'bramblehide_legguards',
+      'bramblehide_grips',
+      'bramblehide_treads',
+      'courtiers_bonefang',
+      'thornpeak_wardblade',
+      'gravecourt_hewer',
+      'votive_ward_of_the_deathless_court',
+      'thornpeak_moonhide_cowl',
+      'stormhymn_chain_grips',
+      'stormhymn_chain_treads',
     ),
   },
   {
@@ -1219,22 +1329,23 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
     desc: 'Lifetime trophies for first masterworks. Empty until the next proc if a veteran predates the gallery (no invented craft history).',
     clearSource: { kind: 'none' },
     // Each per-craft mark names its craft. masterworkFirst names the ACTIVITY
-    // instead: it fires on the first masterwork from ANY of the five gear
-    // crafts (src/sim/professions/crafting.ts), so no single profession id is
-    // its source, but "land a masterwork proc" is exactly the thing a player
-    // does to earn it.
+    // instead: it fires on the first masterwork from ANY gear-capable craft
+    // (src/sim/professions/crafting.ts), so no single profession id is its
+    // source, but "land a masterwork proc" is exactly the thing a player does
+    // to earn it.
     relics: marks(
       [RELIQUARY_PROFESSION_MARKS.masterworkFirst, fromActivity('masterwork_craft')],
-      // masterwork:engineering stays a BARE entry (no hint): no engineering
-      // recipe can proc a masterwork (see the masterworkByCraft comment), so
-      // a profession hint here would name a door that awards nothing. The
-      // slot rides SOURCE_PENDING_RULING with the two gap mounts; the
-      // gear-capability pin in tests/reliquary_content.test.ts derives the
-      // eligible set from masterworkBonusStats and reds if either side moves.
-      ...RELIQUARY_PROFESSION_MARKS.masterworkByCraft.map((markId) =>
-        markId === 'masterwork:engineering'
-          ? markId
-          : ([markId, fromProfession(markId.slice('masterwork:'.length))] as const),
+      // Every per-craft mark carries its profession hint. masterwork:
+      // engineering rode SOURCE_PENDING_RULING as a BARE entry (no hint)
+      // while no engineering recipe could proc a masterwork; masterwrought
+      // Phase 11o's copperlens_ocular (a stats-bearing, non-masterwrought
+      // held offhand) made the craft gear-capable, which is exactly the
+      // un-pend condition the 2026-08-07 QA ruling named, so the slot is
+      // hinted like its six siblings since 2026-08-25. The gear-capability
+      // pin in tests/reliquary_content.test.ts derives the eligible set from
+      // craftBonusStatsFor and reds if either side moves.
+      ...RELIQUARY_PROFESSION_MARKS.masterworkByCraft.map(
+        (markId) => [markId, fromProfession(markId.slice('masterwork:'.length))] as const,
       ),
     ),
   },
@@ -1242,12 +1353,14 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
     id: 'professions_field_notes',
     shelf: 'professions',
     name: 'Rare Field Notes',
-    desc: 'Signature rare finds from the wild: veins, heartwood, moonlit blooms, and perfect specimens.',
+    desc: 'Signature rare finds from the wild: veins, heartwood, moonlit blooms, golden harvests, and perfect specimens.',
     clearSource: { kind: 'none' },
     // gatherRareEventFlavor (src/sim/professions/gather_events.ts) maps the
     // node type to the flavor, and NODE_HARVEST_TABLE maps that node type to
     // the profession that works it: ore to mining, wood to logging, herb to
-    // herbalism. perfect_specimen is the corpse-harvest flavor instead, and
+    // herbalism. golden_harvest comes off the same announce with a STRUCTURAL
+    // source instead of a node (a farm bed is never a gather node), so it
+    // names farming. perfect_specimen is the corpse-harvest flavor, and
     // corpse harvest belongs to no gathering profession, so it names the
     // corpse_harvest activity (the src/sim/interaction.ts write site) rather
     // than a profession it does not have.
@@ -1273,14 +1386,28 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
     // harvest, which no gathering profession owns, so they name the
     // corpse_harvest activity, the same answer gather_event:perfect_specimen
     // gives (one write site, src/sim/interaction.ts, awards the mark and these
-    // five items together). The two top fishing rods close the angler's chase:
-    // engineering crafts both at the toolworks (ROD_RECIPES in
-    // content/recipes.ts, trainer-taught), and the Drowned Litany Marks
-    // counter sells both (content/delves/shop.ts, the non-crafter route), so
-    // each names the craft plus the board keeper, the Marks-stock-only vendor
-    // idiom the Litany page set (sister_nhalia_choir_plate). They are shop
-    // rows on the Litany board ONLY; the Collapsed Reliquary counter carries
-    // no tool rows, so no second delve door exists to name.
+    // five items together). The CRAFTED FISHING ROD LADDER closes the angler's
+    // chase, and since masterwrought Phase 11i that ladder is three rungs, not
+    // two. Engineering crafts all three at the toolworks (ROD_RECIPES in
+    // content/recipes.ts), so every one of them names the craft. What differs
+    // is the SECOND door, and the difference is the reason each rod's hint pair
+    // is authored rather than derived:
+    //
+    // - stormreel and tidewrought are trainer-taught, and the Drowned Litany
+    //   Marks counter sells the finished rods (content/delves/shop.ts, the
+    //   non-crafter route), so each names the craft plus the board keeper: the
+    //   Marks-stock-only vendor idiom the Litany page set
+    //   (sister_nhalia_choir_plate). They are shop rows on the Litany board
+    //   ONLY; the Collapsed Reliquary counter carries no tool rows, so no
+    //   second delve door exists to name.
+    // - clockreel, the apex rung, names the craft and NOTHING ELSE, which is a
+    //   deliberate authored answer rather than an omission. No counter stocks
+    //   the finished rod; the Heroic Quartermaster stocks its SCHEMATIC
+    //   (pattern_clockreel_fishing_rod, 16 marks, content/heroic_vendor.ts).
+    //   A vendor hint points a player at where the RELIC itself is bought, so
+    //   naming the quartermaster here would send a collector to a counter that
+    //   has never sold the thing they are hunting. The schematic is a step on
+    //   the craft route, and the craft hint already covers it.
     relics: items(
       ...withProfessions(
         RELIQUARY_PROFESSION_SPECIMEN_ITEMS,
@@ -1295,6 +1422,23 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
         'tidewrought_fishing_rod',
         [fromProfession('engineering'), fromVendor('brother_halven_marsh')],
       ],
+      ['clockreel_fishing_rod', [fromProfession('engineering')]],
+      // NO HOE PAGE, and the reason is the LAND-TOOL precedent rather than the
+      // one first written down (masterwrought Phase 11j). "A crafted gathering
+      // tool is not conquerable unique loot" is contradicted by this very
+      // shelf, which catalogues three crafted rods; what actually decides it is
+      // that arcanite_mining_pick, elderwood_axe and sunpetal_sickle carry no
+      // relic row either, so the pick, axe, sickle and hoe are consistent and
+      // only the ROD family is catalogued. Known residual, now RATIFIED and no
+      // longer an unruled one: RULED (qr-19-apex-hoe-reliquary-decline,
+      // 2026-09-01, under qr-19-best-for-project) keeps the decline on that
+      // corrected ground, as the Reliquary twin of the deed decline
+      // (qr-19-apex-hoe-deed-decline). The reliquary is the one surface where
+      // the completed tier-5 tool family reads asymmetric, one of five.
+      // Authoring a hoe page later also means growing the DOC_RELICS pin in
+      // tests/delve_shop.test.ts in the same change, since both hoe rungs sit
+      // on a delve counter, and extending the exact catalog-art assertions in
+      // tests/reliquary_cell_art.test.ts for the newly reachable item rows.
     ),
   },
 
@@ -1305,13 +1449,12 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
     name: 'Mounts',
     desc: 'Rideable mounts from the stable, heroic reins, Rift epics, and rarer saddles. Ownership follows the live reins seam (bags and bank).',
     clearSource: { kind: 'none' },
-    // Seven of the ten mounts name every door that awards their reins (see
+    // Earnable mounts name every door that awards their reins (see
     // MOUNT_SOURCES above): the four heroic reins each drop from two or three
     // HEROIC_BOSS_LOOT bosses AND from their Rift rank's ladder, the two epic
     // reins are Rift-only, and valorsteed is Marla's counter. The page-wide
-    // pending ruling that used to cover all nine is executed; the two that
-    // remain (drakemaw_raptor, avian_strider, terrorspark_groundshaker) are content gaps, not
-    // vocabulary gaps, and stay hand-listed in SOURCE_PENDING_RULING.
+    // Remaining source-pending mounts are content gaps,
+    // not vocabulary gaps, and stay hand-listed in SOURCE_PENDING_RULING.
     relics: mounts(...mountEntries(RELIQUARY_HORIZON_MOUNTS)),
   },
   {
@@ -1454,6 +1597,16 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
       ['crag_warden_cudgel', [fromBoss('brutok_skullsmasher'), fromZone('thornpeak_heights')]],
       ['skullsplitter_dirk', [fromBoss('brutok_skullsmasher'), fromZone('thornpeak_heights')]],
       ['stormroot_cowl', [fromBoss('brutok_skullsmasher'), fromZone('thornpeak_heights')]],
+      // The rare world-drop bag (bank-storage): Brutok's elevated row is the
+      // only rare-template carrier (the ordinary-mob world-drop rows are not
+      // in the slain walk), so the hint names him alone. The bag also drops
+      // off ordinary mobs in Mirefen Marsh (zone2's fen_troll) and Thornpeak,
+      // but the zone arm pins exactly ONE zone beside the boss hints and
+      // walks every hinted boss's camps against it (zoneHintShapeOk refuses
+      // a second zone, and Brutok camps in Thornpeak), so mirefen_marsh
+      // cannot be hinted; those farm rows are the acknowledged dominated
+      // routes in tests/reliquary_content.test.ts.
+      ['wayfarers_backpack', [fromBoss('brutok_skullsmasher'), fromZone('thornpeak_heights')]],
       // Voskar the Emberwing (Thornpeak Heights)
       ['emberwing_legguards', [fromBoss('voskar_emberwing'), fromZone('thornpeak_heights')]],
       ['emberfang_warblade', [fromBoss('voskar_emberwing'), fromZone('thornpeak_heights')]],
@@ -1536,6 +1689,166 @@ export const RELIQUARY_PAGES: readonly ReliquaryPageDef[] = freezePageTable([
     relics: items(
       ...RIFT_GEAR_ITEM_IDS.map((id) => [id, fromActivity('rift_first_clear')] as const),
     ),
+  },
+
+  // ---- Crucible of the Last Spring (the Ignivar raid, per boss room) ----
+  // Each raid room is its own dungeon id with its own clear record, so the
+  // raid pages come per boss, the conquerors_nythraxis shape. The sigil
+  // redemption tokens on both bosses' tables are deliberately NOT catalogued
+  // (kind 'tool', redemption currency, see RELIQUARY_HEROIC_GEAR above); the
+  // vendor-redeemed tier pieces are not catalogued either: beyond being a
+  // chosen purchase, paging all 145 would grow the relic catalog by roughly
+  // half against the design doc's deliberate-authoring bound on catalog
+  // growth and the measured autosave cost per catalogued id; if the sets
+  // earn a prestige surface it should be an authored per-lineage page shape
+  // (the honor-stock precedent), a curator decision recorded for the
+  // maintainer. Emberward is catalogued on Varkhul's heroic page because its
+  // 3 percent roll is heroic-only. Forgebreaker's one-time quest shaping
+  // lives on its own personal professions page, never a conquerors page:
+  // its class restriction must not dead-end col_reliquary_conquerors.
+  {
+    id: 'conquerors_ignivar',
+    shelf: 'conquerors',
+    name: 'Crucible of the Last Spring',
+    desc: 'Epic spoils claimed from Ignivar, Herald of the Last Flame.',
+    clearSource: { kind: 'dungeon', dungeonId: 'ignivar_raid_arena', difficulty: 'normal' },
+    // The arena's one boss drops every relic on the page.
+    sourceDefault: fromBoss('ignivar_herald_of_the_last_flame'),
+    relics: items(
+      'cinderfang_kris',
+      'slagrender_cleaver',
+      'wand_of_quenched_sparks',
+      'pendant_of_the_first_tempering',
+      'ignivars_ember_choker',
+      'locket_of_the_last_flame',
+      'heartspring_amulet',
+      'cord_of_the_last_flame',
+      'springbinder_sash',
+      'cinderbark_cinch',
+      'slagstalker_belt',
+      'moonscorch_waistwrap',
+      'grovetender_belt',
+      'forgewall_girdle',
+      'warforged_waistguard',
+      'stormkindled_chain',
+      'tidebinder_links',
+    ),
+  },
+  {
+    id: 'conquerors_ignivar_heroic',
+    shelf: 'conquerors',
+    name: 'Heroic Crucible of the Last Spring',
+    desc: 'Heroic-only weapons from Ignivar, Herald of the Last Flame.',
+    clearSource: { kind: 'dungeon', dungeonId: 'ignivar_raid_arena', difficulty: 'heroic' },
+    sourceDefault: fromBoss('ignivar_herald_of_the_last_flame'),
+    relics: items(...RELIQUARY_HEROIC_GEAR.ignivar_herald_of_the_last_flame),
+  },
+  {
+    id: 'conquerors_varkhul',
+    shelf: 'conquerors',
+    name: 'The Inner Crucible',
+    desc: 'Epic spoils claimed from Varkhul, Forgefather of the Last Flame.',
+    clearSource: { kind: 'dungeon', dungeonId: 'ignivar_inner_crucible', difficulty: 'normal' },
+    // The wing's one boss drops every normal relic on the page. Emberward is
+    // heroic-only and lives on the heroic page below. Forgebreaker lives on
+    // its personal professions page because the quest craft is not boss loot.
+    sourceDefault: fromBoss('varkhul_forgefather_of_the_last_flame'),
+    relics: items(
+      'orb_of_the_last_spring',
+      'cinder_of_the_first_design',
+      'seal_of_the_forgewall',
+      'band_of_marked_strikes',
+      'circle_of_cinders',
+      'loop_of_quiet_springs',
+      'cindersoaked_slippers',
+      'steps_of_quiet_water',
+      'ashenbark_treads',
+      'ashrunner_boots',
+      'scorchgrove_striders',
+      'dewfall_moccasins',
+      'anvilstance_sabatons',
+      'furnace_march_greaves',
+      'thundershock_treads',
+      'springwarden_sabatons',
+    ),
+  },
+  {
+    id: 'conquerors_varkhul_heroic',
+    shelf: 'conquerors',
+    name: 'Heroic Inner Crucible',
+    desc: 'Heroic-only shields and weapons from Varkhul, Forgefather of the Last Flame.',
+    clearSource: { kind: 'dungeon', dungeonId: 'ignivar_inner_crucible', difficulty: 'heroic' },
+    sourceDefault: fromBoss('varkhul_forgefather_of_the_last_flame'),
+    relics: items(...RELIQUARY_HEROIC_GEAR.varkhul_forgefather_of_the_last_flame),
+  },
+  // Roots' Bramblehide (the feral druid's Strength leather family off the
+  // Nythraxis raid). Appended at the END, after the Crucible pages, per the
+  // append-only page order; the family's seven members also sit on the
+  // conquerors_nythraxis page above, and the cross-page agreement pin holds
+  // both authorings equal.
+  {
+    id: 'conquerors_set_bramblehide',
+    shelf: 'conquerors',
+    name: "Roots' Bramblehide",
+    desc: 'The full Bramblehide leather family.',
+    clearSource: { kind: 'none' },
+    relics: items(...setMembers(RELIQUARY_SET_MEMBERS.bramblehide)),
+  },
+  {
+    id: 'professions_crucible',
+    shelf: 'professions',
+    name: 'Crucible Craftsmanship',
+    desc: 'Eleven raid-crafted collections, each offering a chest, waist, and feet piece. Manuals and formulas are knowledge, not relics.',
+    clearSource: { kind: 'none' },
+    relics: items(
+      ['crucible_str_mail_chest', fromProfession('armorcrafting')],
+      ['crucible_str_mail_waist', fromProfession('armorcrafting')],
+      ['crucible_str_mail_feet', fromProfession('armorcrafting')],
+      ['crucible_tank_mail_chest', fromProfession('armorcrafting')],
+      ['crucible_tank_mail_waist', fromProfession('armorcrafting')],
+      ['crucible_tank_mail_feet', fromProfession('armorcrafting')],
+      ['crucible_caster_mail_chest', fromProfession('armorcrafting')],
+      ['crucible_caster_mail_waist', fromProfession('armorcrafting')],
+      ['crucible_caster_mail_feet', fromProfession('armorcrafting')],
+      ['crucible_healer_mail_chest', fromProfession('armorcrafting')],
+      ['crucible_healer_mail_waist', fromProfession('armorcrafting')],
+      ['crucible_healer_mail_feet', fromProfession('armorcrafting')],
+      ['crucible_agi_leather_chest', fromProfession('leatherworking')],
+      ['crucible_agi_leather_waist', fromProfession('leatherworking')],
+      ['crucible_agi_leather_feet', fromProfession('leatherworking')],
+      ['crucible_str_leather_chest', fromProfession('leatherworking')],
+      ['crucible_str_leather_waist', fromProfession('leatherworking')],
+      ['crucible_str_leather_feet', fromProfession('leatherworking')],
+      ['crucible_tank_leather_chest', fromProfession('leatherworking')],
+      ['crucible_tank_leather_waist', fromProfession('leatherworking')],
+      ['crucible_tank_leather_feet', fromProfession('leatherworking')],
+      ['crucible_caster_leather_chest', fromProfession('leatherworking')],
+      ['crucible_caster_leather_waist', fromProfession('leatherworking')],
+      ['crucible_caster_leather_feet', fromProfession('leatherworking')],
+      ['crucible_healer_leather_chest', fromProfession('leatherworking')],
+      ['crucible_healer_leather_waist', fromProfession('leatherworking')],
+      ['crucible_healer_leather_feet', fromProfession('leatherworking')],
+      ['crucible_caster_cloth_chest', fromProfession('tailoring')],
+      ['crucible_caster_cloth_waist', fromProfession('tailoring')],
+      ['crucible_caster_cloth_feet', fromProfession('tailoring')],
+      ['crucible_healer_cloth_chest', fromProfession('tailoring')],
+      ['crucible_healer_cloth_waist', fromProfession('tailoring')],
+      ['crucible_healer_cloth_feet', fromProfession('tailoring')],
+    ),
+  },
+  // The one-time quest shaping is class-restricted and soulbound. Its own
+  // page celebrates the smith without making an impossible requirement for
+  // the five classes that cannot take the chain. Appended at the true tail
+  // to preserve page order; the shelf still places it under professions.
+  {
+    id: 'professions_forgebreaker',
+    shelf: 'professions',
+    name: 'Forgebreaker',
+    desc: 'The voice of the Last Spring, freed from the forge and carried in a hammer of your own making.',
+    clearSource: { kind: 'none' },
+    excludeFromCompletion: 'personal',
+    sourceDefault: fromProfession('weaponcrafting'),
+    relics: items('varkhul_forgebreaker'),
   },
 ]);
 

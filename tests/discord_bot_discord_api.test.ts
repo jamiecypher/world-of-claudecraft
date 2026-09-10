@@ -604,6 +604,55 @@ describe('DiscordApi governor wiring', () => {
   });
 });
 
+describe('DiscordApi sendDirectMessage', () => {
+  it('opens the DM channel by recipient, then posts into the channel it answered', async () => {
+    const { calls, impl } = recordingFetch([
+      fakeResponse({ body: { id: 'dm-77' } }),
+      fakeResponse({ body: {} }),
+    ]);
+
+    await new DiscordApi('tok', impl).sendDirectMessage('u1', { content: 'pop' });
+
+    expect(calls.map((c) => `${c.init.method} ${c.url}`)).toEqual([
+      `POST ${API}/users/@me/channels`,
+      `POST ${API}/channels/dm-77/messages`,
+    ]);
+    expect(calls[0].init.body).toBe('{"recipient_id":"u1"}');
+    expect(calls[1].init.body).toBe('{"content":"pop"}');
+  });
+
+  it('throws before posting when the channel open answers no id', async () => {
+    const { calls, impl } = recordingFetch([fakeResponse({ body: {} })]);
+    await expect(
+      new DiscordApi('tok', impl).sendDirectMessage('u1', { content: 'pop' }),
+    ).rejects.toThrow('answered no id');
+    expect(calls.length).toBe(1);
+  });
+
+  it('caches a 403 on the MESSAGE (DMs closed) so the next pop for that user is never sent', async () => {
+    // Discord answers the channel open with 200 for a user whose privacy
+    // settings refuse DMs, and refuses the message (code 50007). Both calls
+    // share the dm:<user> subject, so the 403 blocks the whole next attempt
+    // at the governor, channel open included.
+    const { governor } = testGovernor();
+    const { calls, impl } = recordingFetch([
+      fakeResponse({ body: { id: 'dm-77' } }),
+      fakeResponse({ status: 403, text: 'Cannot send messages to this user' }),
+    ]);
+    const api = new DiscordApi('tok', impl, governor);
+
+    await expect(api.sendDirectMessage('u1', { content: 'a' })).rejects.toThrow('-> 403');
+    await expect(api.sendDirectMessage('u1', { content: 'b' })).rejects.toThrow(
+      'subject previously answered 400, 401 or 403',
+    );
+    expect(calls.length).toBe(2);
+    // Another user is a different subject and is still attempted.
+    await expect(api.sendDirectMessage('u2', { content: 'c' })).rejects.toThrow(
+      'ran out of queued responses',
+    );
+  });
+});
+
 describe('DiscordApi essential traffic survives an open breaker', () => {
   /** A governor whose breaker is already open, driven there by counted 401s. */
   async function openBreakerGovernor(): Promise<RateGovernor> {
@@ -834,11 +883,13 @@ describe('governorFromConfig', () => {
       paced.run({ method: 'POST', path: '/channels/2/messages' }, ok),
     ]);
 
-    // The real global was asked for the slot spacing the config implies.
+    // The real global was asked for the slot spacing the config implies. The
+    // production clock reads Date.now(), so elapsed test time can shave a
+    // millisecond off the nominal 500 ms slot without changing the contract.
     // `toContain` rather than an exact array: the stub is global for this window,
     // so an unrelated runtime timer would make an equality pin flake without
     // saying anything about the default clock.
-    expect(delays).toContain(500);
+    expect(delays.some((delay) => Math.abs(delay - 500) <= 1)).toBe(true);
     vi.unstubAllGlobals();
   });
 });

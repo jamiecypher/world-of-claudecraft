@@ -228,10 +228,15 @@ export const FROSTVEIL_MOBS: Record<string, MobTemplate> = {
   },
   frostmane_yeti: {
     id: 'frostmane_yeti',
-    name: 'Frostmane Yeti',
+    name: 'Rimemane Yeti',
     minLevel: 19,
     maxLevel: 20,
-    family: 'ogre',
+    // A beast, not a brute: it renders on the yeti body and was only in the ogre
+    // family from the era when that family's fallback was a generic giant. Beast
+    // is tameable, but this one is elite, which the tame gate refuses anyway.
+    // The den also stops tending a night brazier with the move (ogre is a
+    // FIRE_BUILDING_FAMILIES member, beast is not), which reads right for a yeti.
+    family: 'beast',
     hpBase: 120,
     hpPerLevel: 30,
     dmgBase: 15,
@@ -244,6 +249,11 @@ export const FROSTVEIL_MOBS: Record<string, MobTemplate> = {
     loot: [{ copper: 100, chance: 1 }],
     scale: 1.5,
     color: 0xf2f6fa,
+    // Carried in with the family move: a beast owes the corpse-harvest system
+    // something to take (tests/economy_yield.test.ts holds every camp-spawned
+    // beast to a mapped tag), and the Reach's other furred beasts skin exactly
+    // this way.
+    componentTags: ['hide', 'fang', 'meat'],
   },
 };
 // The folk of the Reach: the warden and hearthkeeper hold Icemantle, a scout
@@ -513,14 +523,14 @@ export const FROSTVEIL_QUESTS: Record<string, QuestDef> = {
   },
   q_fv_frostmane_tyrant: {
     id: 'q_fv_frostmane_tyrant',
-    name: 'The Frostmane Tyrant',
+    name: 'The Rimemane Tyrant',
     giverNpcId: 'warden_kaldra',
     turnInNpcId: 'warden_kaldra',
-    text: 'The howlers were not hunting when they came down the terraces. They were fleeing. A yeti has claimed the high ground, the mountain folk call it the Frostmane, and even the packs will not share a slope with it. It has to end, $N, before winter drives it down to my walls. Bring a friend. Bring two.',
+    text: 'The howlers were not hunting when they came down the terraces. They were fleeing. A yeti has claimed the high ground, the mountain folk call it the Rimemane, and even the packs will not share a slope with it. It has to end, $N, before winter drives it down to my walls. Bring a friend. Bring two.',
     completionText:
-      'When the wind dropped last night the whole village heard the silence where the Frostmane used to be. The Reach owes you a debt it will be years in paying, $N. Wear this, and every door in Icemantle is open to you.',
+      'When the wind dropped last night the whole village heard the silence where the Rimemane used to be. The Reach owes you a debt it will be years in paying, $N. Wear this, and every door in Icemantle is open to you.',
     objectives: [
-      { type: 'kill', targetMobId: 'frostmane_yeti', count: 1, label: 'The Frostmane slain' },
+      { type: 'kill', targetMobId: 'frostmane_yeti', count: 1, label: 'The Rimemane slain' },
     ],
     xpReward: 6000,
     copperReward: 3600,
@@ -597,7 +607,7 @@ export const FROSTVEIL_ITEMS: Record<string, ItemDef> = {
   },
   frostmane_mantle: {
     id: 'frostmane_mantle',
-    name: 'Mantle of the Frostmane',
+    name: 'Mantle of the Rimemane',
     kind: 'armor',
     armorType: 'cloth',
     slot: 'shoulder',

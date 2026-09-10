@@ -5,6 +5,7 @@ import {
   GENERAL_CHAT_QUOTA_ADVISORY_NAMESPACE,
   GENERAL_CHAT_QUOTA_DB_POOL_MAX_CLIENTS,
 } from './general_chat_quota_config';
+import { bustWocAuthGuardAccount } from './woc_auth_guard_cache';
 
 export {
   GENERAL_CHAT_QUOTA_ACQUIRE_TIMEOUT_MS,
@@ -33,12 +34,20 @@ const GENERAL_CHAT_QUOTA_LISTENER_RETRY_MAX_MS = 5_000;
 // .env loading and fail-fast validation). Read its resolved connection string
 // when available; the env fallback keeps legacy unit-test partial pool mocks
 // importable without widening the db.ts mock contract across the repository.
+// The shared pool's `options` config property (materialSourceConnection.ts)
+// carries the operator's own lifted startup options PLUS the code-owned
+// writer capability, as a string separate from the connection string: lift
+// only that one field, never the rest of the shared pool's config, so this
+// module's independently-sized timeouts below stay its own.
 const GENERAL_CHAT_QUOTA_DATABASE_URL =
   (pool as { options?: { connectionString?: string } }).options?.connectionString ??
   process.env.DATABASE_URL;
+const GENERAL_CHAT_QUOTA_DATABASE_OPTIONS = (pool as { options?: { options?: string } }).options
+  ?.options;
 
 const quotaPool = new Pool({
   connectionString: GENERAL_CHAT_QUOTA_DATABASE_URL,
+  options: GENERAL_CHAT_QUOTA_DATABASE_OPTIONS,
   max: GENERAL_CHAT_QUOTA_DB_POOL_MAX_CLIENTS,
   connectionTimeoutMillis: GENERAL_CHAT_QUOTA_ACQUIRE_TIMEOUT_MS,
   lock_timeout: GENERAL_CHAT_QUOTA_LOCK_TIMEOUT_MS,
@@ -308,6 +317,12 @@ export async function setGeneralChatRateLimit(input: {
       JSON.stringify({ accountId: input.accountId }),
     ]);
     await client.query('COMMIT');
+    // The policy columns (messages/window_minutes) ride the cached guard
+    // read's projection; post-commit so a concurrent read cannot re-prime
+    // the old row. Other processes learn through the pg_notify above ONLY
+    // because main.ts's listener also busts the guard cache on
+    // change/resync; the NOTIFY payload itself reaches nothing else here.
+    bustWocAuthGuardAccount(input.accountId);
     return { before, after, changed: true };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
@@ -523,6 +538,7 @@ export function createGeneralChatQuotaListener(deps: {
 async function connectGeneralChatQuotaListener(): Promise<GeneralChatQuotaListenerClient> {
   const raw = new Client({
     connectionString: GENERAL_CHAT_QUOTA_DATABASE_URL,
+    options: GENERAL_CHAT_QUOTA_DATABASE_OPTIONS,
     connectionTimeoutMillis: GENERAL_CHAT_QUOTA_ACQUIRE_TIMEOUT_MS,
     statement_timeout: GENERAL_CHAT_QUOTA_STATEMENT_TIMEOUT_MS,
     query_timeout: GENERAL_CHAT_QUOTA_STATEMENT_TIMEOUT_MS + GENERAL_CHAT_QUOTA_ACQUIRE_TIMEOUT_MS,

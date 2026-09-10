@@ -3,6 +3,7 @@ import { MOBS } from '../src/sim/data';
 import { createMob } from '../src/sim/entity';
 import { Sim } from '../src/sim/sim';
 import type { Entity } from '../src/sim/types';
+import { WORLD_WITHOUT_HUB_YARD } from './helpers/hub_yard';
 
 type PaladinSpec = 'holy' | 'protection' | 'retribution';
 
@@ -19,12 +20,32 @@ const PRIORITY: Readonly<Record<PaladinSpec, readonly string[]>> = {
 // Re-pinned for the v0.36 composition: holy 41.25 to 42.45, protection 38.65
 // to 38.1, retribution 54.35 to 48.35. Re-pinned again on the v0.37.0 castle
 // base, whose world content forks the shared stream: holy 42.45 to 41.25,
-// protection 38.1 to 38.65, retribution 48.35 to 55.75. The wide 35-65s
-// design band still holds.
+// protection 38.1 to 38.65, retribution 48.35 to 55.75. Re-pinned 2026-08 on
+// the v0.39 Eastbrook harbor move (d19aa33f76,
+// docs/design/eastbrook-revamp/site-plan.md), whose world content forks the
+// shared stream again: holy 41.25 to 42.45; protection and retribution
+// unmoved. Re-pinned for owner refinement round 3 (the coastline pulled to
+// the town, re-threaded streets, three promoted home lots), which forks the
+// shared stream once more: retribution 55.75 to 52.45; holy and protection
+// unmoved. Re-pinned for owner refinement rounds 6 and 6b (the camps traded
+// ground, the harbour quarter and churchyard landed, the delve and its POI
+// moved to the Mirror Lake shore, three town NPCs were redistributed), which
+// forks the shared stream again: protection 38.65 to 42.7; holy and
+// retribution unmoved. Re-pinned on the eastbrook-plus-tutorial integration
+// merge (the harbor town and the Proving Shore island land in one world),
+// which forks the shared stream again: holy 42.45 to 41.25, protection 42.7
+// to 41.7; retribution unmoved. Re-pinned for the Drakelands site swap
+// (docs/design/drakelands-improvements/plan.md: the keep castle removed to
+// flat land, the troll sites traded, Wyrmwatch stripped), which forks the
+// shared stream again: protection 41.7 to 40.15, retribution 52.45 to
+// 55.75; holy unmoved. The keep-side graveyard's move to the owner's
+// churchyard (the rebuild epic's Pale Keeper seat) forks it once more:
+// retribution 55.75 to 59.2; holy and protection unmoved. The wide
+// 35-65s design band still holds.
 const EXPECTED_SECONDS: Readonly<Record<PaladinSpec, number>> = {
   holy: 41.25,
-  protection: 38.65,
-  retribution: 55.75,
+  protection: 40.15,
+  retribution: 59.2,
 };
 
 function addDummy(sim: Sim): Entity {
@@ -60,7 +81,12 @@ function castFirstReady(
 }
 
 function secondsToTwenty(spec: PaladinSpec): number {
-  const sim = new Sim({ seed: 53, playerClass: 'paladin', autoEquip: true });
+  const sim = new Sim({
+    seed: 53,
+    playerClass: 'paladin',
+    autoEquip: true,
+    world: WORLD_WITHOUT_HUB_YARD,
+  });
   sim.setPlayerLevel(20);
   sim.setSpec(spec);
   if (spec === 'protection') {
@@ -94,7 +120,12 @@ function secondsToTwenty(spec: PaladinSpec): number {
 }
 
 function protectionSecondsToTwentyWhileBlocking(): { seconds: number; devotionFromBlocks: number } {
-  const sim = new Sim({ seed: 61, playerClass: 'paladin', autoEquip: true });
+  const sim = new Sim({
+    seed: 61,
+    playerClass: 'paladin',
+    autoEquip: true,
+    world: WORLD_WITHOUT_HUB_YARD,
+  });
   sim.setPlayerLevel(20);
   sim.setSpec('protection');
   sim.addItem('eastbrook_buckler', 1);

@@ -28,8 +28,22 @@ import {
 
 // jsdom ships no 2D canvas, so the procedural item-icon compositor cannot run
 // here; the painter only ever uses the returned string as an <img src>.
-vi.mock('../src/ui/icons', () => ({
+// ADDITIVE BY CONSTRUCTION, and the form is the point rather than the
+// overrides. The bare-factory version of this mock listed exactly the exports
+// the suite used, so the day reliquary_cell_art gained one (masterwrought Phase
+// 11i, reading both committed-art pipelines to decide a cell's opacity) this
+// file went red with 89 failures and an unhandled error, in a suite the change
+// never touched and no targeted run selects. Spreading importOriginal first
+// means a new dependency resolves to the real export instead of undefined, so
+// only a deliberate override can ever change behavior here.
+vi.mock('../src/ui/icons', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/ui/icons')>()),
   iconDataUrl: (kind: string, id: string) => `data:,${kind}:${id}`,
+  // reliquaryCellArtOpaque's item arm consults both committed pipelines; the
+  // jump tests only care that the answer is stable, so mock everything as
+  // committed (non-opaque), matching the pre-art-pending behavior.
+  itemImageUrl: (id: string) => `/ui/items/${id}.webp`,
+  weaponIconUrl: () => null,
 }));
 
 // A Conquerors page and a Professions page: the pair that makes a cross-shelf
@@ -97,6 +111,8 @@ function makeWindow(state: WorldState, opts: { open?: boolean; nav?: ReliquaryNa
     captureFocus: () => null,
     restoreFocus: () => {},
     onPinChanged: () => {},
+    trackerShown: () => true,
+    setTrackerShown: () => {},
     itemIcon: (item) => `<img data-item-icon="${item.id}" alt="">`,
     moneyHtml: () => '',
     itemTooltip: () => '',

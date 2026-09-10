@@ -119,6 +119,10 @@ export interface SpellbookWindowDeps {
   resetFormBar(): void;
   setDragAction(action: { type: 'ability'; id: string } | null): void;
   clearActionDropTargets(): void;
+  /** Open the touch bar editor with this spell armed for the next tap. Touch has
+   *  no drag onto the bar, and the +/- toggle only reaches the FIRST free slot,
+   *  so this is how a touch player CHOOSES a slot. */
+  openBarEditor(abilityId: string): void;
 }
 
 /** The ability on a bar slot, or null for an empty slot or an item. */
@@ -584,8 +588,25 @@ export class SpellbookWindow {
     list.appendChild(el);
   }
 
+  // The spellbook lists every LEARNED spell under its own base identity, never
+  // the live action-bar transform (Redharvest/Overbloom/Venomrend/Pack Rally):
+  // a row is an index entry, not a cast preview. world.resolvedAbility(id) runs
+  // the full display chain and can swap def.id when an action-replacement
+  // engine is currently active, so this keeps only the id-PRESERVING part of
+  // that resolve (the Coldsight window tweaks, Vespers Dirge/Mindfracture) by
+  // falling back to the raw `known` the instant the id would change.
+  private resolvedForDisplay(known: ResolvedAbility): ResolvedAbility {
+    const resolved = this.deps.world().resolvedAbility(known.def.id);
+    return resolved && resolved.def.id === known.def.id ? resolved : known;
+  }
+
   private appendRow(list: HTMLElement, row: SpellbookRow): void {
     const def = ABILITIES[row.abilityId];
+    // The STATIC row summary/rank stay on the raw row.known: tickOpen's
+    // knownChanged gate only diffs raw known (rank/cost/castTime/cooldown),
+    // never an aura-driven resolve, so a build-time live resolve here would
+    // stick after the aura expires with nothing left to trigger a rebuild.
+    // Only the hover tooltip below resolves live, on every open.
     const known = row.known;
     const el = document.createElement('div');
     el.className = `spell-row${known ? '' : ' locked'}`;
@@ -641,6 +662,26 @@ export class SpellbookWindow {
         });
         el.appendChild(pageLabel);
       }
+      // Touch-only assign control (Phase 4.5). Desktop chooses a slot by dragging
+      // the row onto a visible bar; touch has no drag, and the +/- toggle beside
+      // this one only reaches the FIRST free slot, so without this the 32
+      // directional ring slots could not be bound at all.
+      if (document.body.classList.contains('mobile-touch')) {
+        const assign = document.createElement('button');
+        assign.type = 'button';
+        assign.className = 'spell-hotbar-assign';
+        assign.dataset.abilityId = known.def.id;
+        assign.innerHTML = svgIcon('swap');
+        assign.setAttribute('aria-label', t('hudChrome.spellbook.assignAria', { name }));
+        assign.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+        assign.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          audio.click();
+          this.deps.openBarEditor(known.def.id);
+        });
+        el.appendChild(assign);
+      }
       toggle.addEventListener('pointerdown', (ev) => ev.stopPropagation());
       toggle.addEventListener('click', (ev) => {
         ev.preventDefault();
@@ -678,7 +719,7 @@ export class SpellbookWindow {
       // passive rows that deliberately have no action-bar controls.
       this.deps.attachTooltip(el, () => {
         const live = this.deps.world().known.find((k) => k.def.id === known.def.id) ?? known;
-        return this.deps.abilityTooltip(live);
+        return this.deps.abilityTooltip(this.resolvedForDisplay(live));
       });
     } else {
       this.deps.attachTooltip(

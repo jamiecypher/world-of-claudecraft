@@ -28,7 +28,6 @@ const itemConsistencyManifestPath = path.join(
   repoRoot,
   'docs/achievements/item-art-consistency-2026-08-09/accepted-art.json',
 );
-const GENERATED_ABILITY_SOURCE_PACK = 'woc_openai_missing_painted_icons_2026_08_01';
 
 interface ReferenceRecord {
   path: string;
@@ -165,14 +164,6 @@ interface AbilityMappingEntry {
   license?: string;
   references?: ReferenceRecord[];
   generationPrompt?: string;
-  provenanceRecord?: string;
-  acceptedSha256?: string;
-  acceptedBytes?: number;
-  supersedes?: {
-    sourcePack: string;
-    shippingSha256: string;
-    shippingBytes: number;
-  };
 }
 
 function manifest(): AcceptedArtManifest {
@@ -187,28 +178,6 @@ function resolvedShippingPin(asset: RasterAsset): {
   acceptedSha256: string;
   acceptedBytes: number;
 } {
-  if (asset.kind === 'ability') {
-    const ability = ABILITIES[asset.id];
-    if (!ability) throw new Error(`manifest ability ${asset.id} is not canonical`);
-    const mapping = JSON.parse(
-      readFileSync(path.join(repoRoot, `public/ui/skills/${ability.class}/mapping.json`), 'utf8'),
-    ) as { abilities: AbilityMappingEntry[] };
-    const owner = mapping.abilities.find(({ abilityId }) => abilityId === asset.id);
-    if (!owner || owner.sourcePack === GENERATED_ABILITY_SOURCE_PACK) return asset;
-
-    expect(owner.supersedes, `${asset.id} historical generated-art lineage`).toMatchObject({
-      sourcePack: GENERATED_ABILITY_SOURCE_PACK,
-      shippingSha256: asset.acceptedSha256,
-      shippingBytes: asset.acceptedBytes,
-    });
-    expect(owner.provenanceRecord, `${asset.id} replacement provenance`).toBeTruthy();
-    expect(owner.acceptedSha256, `${asset.id} replacement SHA-256`).toMatch(/^[0-9a-f]{64}$/);
-    expect(owner.acceptedBytes, `${asset.id} replacement bytes`).toBeGreaterThan(0);
-    return {
-      acceptedSha256: owner.acceptedSha256 as string,
-      acceptedBytes: owner.acceptedBytes as number,
-    };
-  }
   if (asset.kind !== 'item') return asset;
   const replacementManifest = itemConsistencyManifest();
   const supersession = replacementManifest.supersedes.find(({ itemId }) => itemId === asset.id);
@@ -260,6 +229,7 @@ function expectedAssetLocations(asset: RasterAsset): {
   return { runtimeUrl, shippingPath: `public${runtimeUrl}` };
 }
 
+const GENERATED_ABILITY_SOURCE_PACK = 'woc_openai_missing_painted_icons_2026_08_01';
 const ALLOWED_REFERENCE_ROLES = [
   'composition reference',
   'frame reference',
@@ -267,8 +237,8 @@ const ALLOWED_REFERENCE_ROLES = [
   'subject reference',
 ] as const;
 
-// Choice-row talents, modifier art, retired summon paintings, pet signature
-// actions, and shared pet commands are image ids without live ABILITIES rows by design.
+// Choice-row talents, modifier art, retired summon paintings, and pet signature
+// actions are image ids without live ABILITIES rows by design.
 const PRESERVED_IMAGE_BACKED_MODIFIER_IDS = [
   'anger_management',
   'attack',
@@ -335,19 +305,23 @@ describe('missing painted icon accepted-art manifest', () => {
     // heroic_duskwhisper resolver, so 209/194/90/15 became 206/190/86/16.
     // The 2026-08-09 wave adds the 13 missing overhaul ability icons plus the
     // bespoke Elemental Trance replacing its interim duplicate: 206/190/86
-    // become 220/204/100.
+    // become 220/204/100. The Sowfield demolition retires the 10 sport_*
+    // Vale Cup abilities with their art: 220/204/100 become 210/194/90.
+    // The Nythraxis gap-fill one-handers add three generated heroic resolvers at
+    // the current head (heroic_courtiers_bonefang, heroic_gravecourt_hewer,
+    // heroic_thornpeak_wardblade): 210/16/12 become 213/19/15.
     expect(accepted.scope).toEqual({
-      targetRows: 220,
-      rasterPaintings: 204,
-      abilities: 100,
+      targetRows: 213,
+      rasterPaintings: 194,
+      abilities: 90,
       items: 101,
       deeds: 3,
-      heroicWeaponResolvers: 16,
+      heroicWeaponResolvers: 19,
       originalInventoryRows: 197,
-      supplementalCurrentHeadRows: 12,
+      supplementalCurrentHeadRows: 15,
     });
-    expect(accepted.assets).toHaveLength(204);
-    expect(accepted.assets.filter((asset) => asset.kind === 'ability')).toHaveLength(100);
+    expect(accepted.assets).toHaveLength(194);
+    expect(accepted.assets.filter((asset) => asset.kind === 'ability')).toHaveLength(90);
     expect(accepted.assets.filter((asset) => asset.kind === 'item')).toHaveLength(101);
     expect(accepted.assets.filter((asset) => asset.kind === 'deed')).toHaveLength(3);
 
@@ -361,7 +335,7 @@ describe('missing painted icon accepted-art manifest', () => {
         accepted.assets.filter((asset) => asset.kind === kind).map((asset) => asset.id),
       ).toEqual(ids);
     }
-    expect(accepted.targetSets.heroicWeaponResolvers).toHaveLength(16);
+    expect(accepted.targetSets.heroicWeaponResolvers).toHaveLength(19);
     expect(accepted.targetSets.heroicWeaponResolvers.map(({ id }) => id)).toEqual(
       sorted(new Set(accepted.targetSets.heroicWeaponResolvers.map(({ id }) => id))),
     );
@@ -492,9 +466,9 @@ describe('missing painted icon accepted-art manifest', () => {
         ).toBe(true);
       }
     }
-    expect(shippingHashes.size).toBe(204);
-    expect(sourceHashes.size).toBe(204);
-    expect(masterHashes.size).toBe(204);
+    expect(shippingHashes.size).toBe(194);
+    expect(sourceHashes.size).toBe(194);
+    expect(masterHashes.size).toBe(194);
     expect(sorted(referenceRoles)).toEqual([...ALLOWED_REFERENCE_ROLES]);
   });
 });
@@ -502,7 +476,7 @@ describe('missing painted icon accepted-art manifest', () => {
 describe('missing painted ability integration', () => {
   it('makes every live ability image-backed while preserving non-ABILITY image ids', () => {
     const accepted = manifest();
-    expect(accepted.targetSets.abilities).toHaveLength(100);
+    expect(accepted.targetSets.abilities).toHaveLength(90);
     expect(Object.keys(ABILITIES).filter((id) => !ABILITY_IMAGE_IDS.has(id))).toEqual([]);
     expect(sorted([...ABILITY_IMAGE_IDS].filter((id) => !Object.hasOwn(ABILITIES, id)))).toEqual([
       ...PRESERVED_IMAGE_BACKED_MODIFIER_IDS,
@@ -544,12 +518,9 @@ describe('missing painted ability integration', () => {
       };
       expect(mapping.licenseScope).toContain('explicitly override');
       allEntries.push(...mapping.abilities.map((entry) => ({ className, entry })));
-      const generated = mapping.abilities.filter((entry) => {
-        return (
-          entry.sourcePack === GENERATED_ABILITY_SOURCE_PACK ||
-          entry.supersedes?.sourcePack === GENERATED_ABILITY_SOURCE_PACK
-        );
-      });
+      const generated = mapping.abilities.filter(
+        (entry) => entry.sourcePack === GENERATED_ABILITY_SOURCE_PACK,
+      );
       for (const entry of generated) {
         mapped.push(entry.abilityId);
         const asset = assetById.get(entry.abilityId);
@@ -558,21 +529,10 @@ describe('missing painted ability integration', () => {
         expect(entry.owner).toBe('World of ClaudeCraft');
         expect(entry.license).toContain('project asset');
         expect(entry.license).not.toContain('CraftPix');
+        expect(entry.sourceFile).toBe(asset?.source.path);
         expect(entry.output).toBe(`${entry.abilityId}.webp`);
-        if (entry.sourcePack === GENERATED_ABILITY_SOURCE_PACK) {
-          expect(entry.sourceFile).toBe(asset?.source.path);
-          expect(entry.references).toEqual(asset?.generation.references);
-          expect(entry.generationPrompt).toBe(asset?.generation.prompt);
-        } else {
-          expect(entry.supersedes).toMatchObject({
-            sourcePack: GENERATED_ABILITY_SOURCE_PACK,
-            shippingSha256: asset?.acceptedSha256,
-            shippingBytes: asset?.acceptedBytes,
-          });
-          expect(entry.provenanceRecord).toBeTruthy();
-          expect(entry.acceptedSha256).toMatch(/^[0-9a-f]{64}$/);
-          expect(entry.acceptedBytes).toBeGreaterThan(0);
-        }
+        expect(entry.references).toEqual(asset?.generation.references);
+        expect(entry.generationPrompt).toBe(asset?.generation.prompt);
       }
     }
     expect(sorted(mapped)).toEqual(accepted.targetSets.abilities);
@@ -581,20 +541,14 @@ describe('missing painted ability integration', () => {
     for (const id of accepted.targetSets.abilities) {
       const owners = allEntries.filter(({ entry }) => entry.abilityId === id);
       expect(owners, `${id} must have exactly one mapping owner`).toHaveLength(1);
-      expect(
-        owners[0].entry.sourcePack === GENERATED_ABILITY_SOURCE_PACK ||
-          owners[0].entry.supersedes?.sourcePack === GENERATED_ABILITY_SOURCE_PACK,
-        `${id} mapping owner or explicit supersession`,
-      ).toBe(true);
+      expect(owners[0].entry.sourcePack, `${id} mapping owner`).toBe(GENERATED_ABILITY_SOURCE_PACK);
       expect(owners[0].className, `${id} mapping class`).toBe(ABILITIES[id].class);
     }
     expect(
       allEntries
         .filter(
           ({ entry }) =>
-            targets.has(entry.abilityId) &&
-            entry.sourcePack !== GENERATED_ABILITY_SOURCE_PACK &&
-            entry.supersedes?.sourcePack !== GENERATED_ABILITY_SOURCE_PACK,
+            targets.has(entry.abilityId) && entry.sourcePack !== GENERATED_ABILITY_SOURCE_PACK,
         )
         .map(({ entry }) => entry.abilityId),
       'generated abilities must not also appear as ordinary CraftPix entries',
@@ -682,16 +636,43 @@ describe('missing painted deed and Heroic weapon integration', () => {
       'pvp_card_duel_first_win',
     ]);
     // Later releases appended more deeds after this historical wave. The
-    // release art audit painted those additions, so the wave's own claim is
-    // unchanged: every deed that existed when it landed is painted. The only
-    // artless ids are the walk-in castle visit pair appended after the audit,
-    // riding the category-crest fallback the Icons authoring rule in
-    // docs/design/deeds.md sanctions until their 512px sources are
-    // commissioned (flagged in docs/achievements/icon-brief.md). Read from
-    // DEED_ART_PENDING, the one enumeration of that debt (src/ui/icons.ts),
-    // so this file cannot end up naming a different pending set than the
-    // other two art suites. Exhaustive: a third artless deed still reds here.
-    expect(DEED_ORDER).toHaveLength(273);
+    // release art audit painted those additions, and the six Masterwrought
+    // jewelcrafting and inscription milestone deeds (phases 05 and 06) each
+    // shipped their crest in the change that added them. The only artless ids
+    // are the release's walk-in castle visit pair, its bank socket pair (Bank
+    // Storage phase 06), and the six farming
+    // celebration deeds appended after the audit, riding the category-crest
+    // fallback the Icons authoring rule in docs/design/deeds.md sanctions
+    // until their 512px sources are commissioned (flagged in
+    // docs/achievements/icon-brief.md). Read from DEED_ART_PENDING, the one
+    // enumeration of that debt (src/ui/icons.ts), so this file cannot end up
+    // naming a different pending set than the other two art suites.
+    // Exhaustive: an unenumerated artless deed still reds here.
+    // 286 at the farming absorb (Phase 11d): the base 273 plus the six
+    // Masterwrought milestone deeds plus farming's seven (six pending
+    // celebration deeds and the painted prog_farming_100 crest). 287 at Phase
+    // 11e, whose roster deed joins the PENDING side: that phase ships no crest
+    // under the packet's declared art park for 11e to 11k. 288 at Phase 11i,
+    // whose one deed (col_deepest_cast) joins the same pending side for the
+    // same reason, and 289 at Phase 11k, whose prog_field_to_feast does too.
+    // 290 at the release/v0.41.0 sync: the release's Proving Shore graduation
+    // deed (prog_ready_for_an_adventure, 273 to 274 on its own arm) joins the
+    // same pending side, riding the deed_cat_progression crest until its
+    // commissioned art lands. 291 at masterwrought Phase 13, whose promotion
+    // capstone (prog_legendmaker) joins the same pending side on the same
+    // crest: no title, so the Reliquary title-shelf rule does not force a
+    // committed crest. 293 at the v0.41.0 release-batch sync: the release's
+    // bank socket pair (Bank Storage phase 06, 274 to 276 on its own arm)
+    // joins the same pending side.
+    // 298 at the release/v0.41.0 merge (2026-08-30): the release's five
+    // Crucible raid deeds (276 to 281 on its own arm) join the same pending
+    // side on the deed_cat_dungeon crest.
+    // The personal hammer quest uses the explicitly pending hidden-category crest.
+    // 300 at THIS release/v0.42.0 merge: the Roots' Bramblehide set collection
+    // (col_set_bramblehide, 281 to 282 on the release's own arm) joins the
+    // same pending side.
+    expect(DEED_ORDER).toHaveLength(300);
+    expect(DEED_ART_PENDING.has('hid_forgebreaker')).toBe(true);
     expect(DEED_ORDER.filter((id) => !DEED_IMAGE_IDS.has(id))).toEqual([...DEED_ART_PENDING]);
     const credits = readFileSync(path.join(repoRoot, 'CREDITS.md'), 'utf8');
     const provenance = readFileSync(

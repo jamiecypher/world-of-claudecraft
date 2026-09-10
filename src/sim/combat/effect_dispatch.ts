@@ -16,11 +16,18 @@
 // shared `ctx.rng` stream, drawn in the exact pre-move order.
 
 import { isDebuffAura, isDispellableAura, isPlayerRemovableAura } from '../aura_classify';
+import {
+  EMBERFURY_4PC_BLOODLETTING_HEAL_PCT_MAX,
+  SPRINGMENDER_4PC_BONUS_JUMPS,
+  setBonusFlag,
+} from '../content/ignivar_set_bonuses';
 import { ABILITIES, isDelvePos, MOBS } from '../data';
 import { logCascadeCast, recordCascadeInitial } from '../dev/cascade_playtest';
 import { recalcPlayerStats } from '../entity';
 import type { GroundAoE } from '../entity_roster';
+import { incapacitateDrCategory } from '../incapacitate_dr';
 import { SCRIPTED_INTERRUPTIBLE_CHANNELS } from '../mob/healer_channel';
+import { questGateBlocksAggro } from '../mob/quest_gated_aggro';
 import {
   activateDivineAscension,
   ascensionImpactKind,
@@ -34,10 +41,13 @@ import {
   syncDivineAscensionAura,
 } from '../paladin_devotion';
 import { PLAYER_BODY_RADIUS } from '../pathfind';
+import { scalePrimaryHealing } from '../primary_healing';
 import { scheduleProjectile } from '../projectile_travel';
 import type { PlayerMeta, ResolvedAbility } from '../sim';
 import type { SimContext } from '../sim_context';
+import { duelJustEndedBetween } from '../social/duel';
 import { summonSoulwell } from '../soulwell';
+import { primaryHealingMultiplier } from '../spec_output_tuning';
 import {
   abilityScalingPower,
   absorbBonus,
@@ -49,6 +59,8 @@ import {
 import { stunDrCategory } from '../stun_dr';
 import { resolveTalentHitMult } from '../talent_hit_mult';
 import { addThreat, dropThreat } from '../threat';
+import { creditAbilityDrill } from '../tutorial/ability_drill';
+import { creditHubHealingDrill } from '../tutorial/hub_healing_drill';
 import type { AbilityDef, Aura, Entity } from '../types';
 import {
   angleTo,
@@ -83,6 +95,8 @@ import {
   hasSweepingStrikes,
   sweepStrikeDamage,
 } from './area_echo';
+import { absorbAuraId, buffTargetAuraId, selfBuffAuraId } from './aura_ids';
+import { resetSwingTimer } from './auto_attack';
 import {
   damageBreakThreshold,
   hasUnbreakableMovementLock,
@@ -98,6 +112,7 @@ import {
   placeTemporalEcho,
   selectCascadeTargets,
 } from './chronomancy';
+import { cascadeReliefMultiplier } from './chronomancy_echo_distribution';
 import {
   advanceBurningPactTick,
   applyDuskfireClaim,
@@ -171,7 +186,7 @@ import {
 import { placeBeaconOfLight } from './paladin_beacon';
 import { PROTECTION_CONSECRATION_DAMAGE_REDUCTION } from './paladin_consecration';
 import { pullPaladinTargets, pulsePaladinThreat } from './paladin_control';
-import { triggerPaladinDawnRhythm } from './paladin_dawn_rhythm';
+import { dawnRhythmCutSec, triggerPaladinDawnRhythm } from './paladin_dawn_rhythm';
 import { tryGrantDawnsWrath } from './paladin_dawns_wrath';
 import { grantRadiantResonance } from './paladin_radiant_resonance';
 import { riteAnswersTheWholeGroup } from './paladin_rite_of_many';
@@ -196,6 +211,12 @@ import {
 } from './paladin_talents';
 import { armValkyrsCalling } from './paladin_valkyrs_calling';
 import { activateVeilboundMarch } from './paladin_veilbound_march';
+import {
+  captureDirgeReapplication,
+  doctrineScouringMercyRescue,
+  refreshDirgeFieldAfterReapplication,
+  vespersDirgeSpMultiplier,
+} from './priest';
 import { benisonAfterAbility } from './priest/benison';
 import { doctrineAfterAbility } from './priest/doctrine';
 import { priestAfterAbility, priestOnGroupHeal } from './priest/talents';
@@ -211,6 +232,12 @@ import {
   rogueEngineOnFinisher,
   rogueGloamDetonation,
 } from './rogue_engines';
+import {
+  capturedTrueStealthAmbush,
+  trueStealthOpenerMultiplier,
+  trueStealthOpenerScaleBonus,
+} from './rogue_stealth_opener';
+import { wearsSetBonus } from './set_bonus_wearer';
 import { consumeMendingCurrent, depositMendingCurrent } from './shaman_spiritmend';
 import {
   applyPrimalExaltation,
@@ -234,8 +261,10 @@ import {
   stoneboundThreatMultiplier,
 } from './shaman_warspirit';
 import { noteSpellHit, spellDamageMultFromAuras } from './spell_combat';
+import { dropTargetsOnStealth } from './stealth';
 import { consumeSureCritCharge, hasSureCritAura } from './sure_crit';
 import { applyTemporalHourglass } from './temporal_hourglass';
+import { warlockFearBreakThreshold } from './warlock_fear';
 import { applyBlacktideReturnSpeed } from './warlock_talents';
 import { placeOrRecallUmbralAnchor } from './warlock_utility';
 
@@ -243,10 +272,10 @@ export { SWEEP_MULT } from './area_echo';
 
 const CHARGE_MAX_DURATION = 3; // seconds before a blocked charge gives up
 
-// Fear-family break scaling (G5): a single hit for this fraction of the
-// target's max health always breaks the fear; smaller hits break it with
-// proportional probability (combat/damage.ts). Applies to the fear family
-// only (aoeFear and fearDr incapacitates): plain incapacitates keep the
+// Generic fear-family break scaling (G5): a single hit for this fraction of
+// the target's max health always breaks the fear; smaller hits break it with
+// proportional probability (combat/damage.ts). Harrow and Dread Chorus use
+// the deterministic Warlock budget instead. Plain incapacitates keep the
 // classic break-on-any-damage rule.
 export const FEAR_BREAK_CHANCE_SCALE = 0.1;
 
@@ -271,7 +300,13 @@ function dropsCombatOnStealth(ability: AbilityDef): boolean {
   return ability.id === 'vanish';
 }
 
-function dropSelfFromHostileFocus(ctx: SimContext, p: Entity): void {
+/**
+ * The combat-drop half of Vanish / Greater Invisibility: clear the caster's own
+ * combat state, clear the escaping pet, wipe both ids from hostile mob hate, and
+ * return the extra ids the live-target sweep must clear. Ordinary stealth uses
+ * only that live-target sweep, so it never becomes a full threat dump.
+ */
+function dropSelfFromHostileFocus(ctx: SimContext, p: Entity): readonly number[] {
   p.combatTimer = 5;
   p.inCombat = false;
   p.autoAttack = false;
@@ -308,6 +343,7 @@ function dropSelfFromHostileFocus(ctx: SimContext, p: Entity): void {
       entity.inCombat = false;
     }
   }
+  return pet ? [pet.id] : [];
 }
 
 // Resolve the exclusiveGroup for an AURA id: either a plain ability id (a
@@ -343,6 +379,21 @@ function consumeMatchingAura(
   eff: Extract<ResolvedAbility['effects'][number], { type: 'consumeAura' }>,
 ): number {
   if (!target) return -1;
+  // Grovespring 2pc: Swiftmend (the only hot-kind consumer) prefers the
+  // caster's OWN Wildbloom or Second Bloom, so a wearer stops eating another
+  // healer's HoT while their own is up. With none of their own present the
+  // base pick below still applies (the set doc's explicit fallback: a paid
+  // cast must never turn into a silent no-heal). Selection only; draws no
+  // rng and never changes which auras are eligible for anyone else.
+  if (eff.auraKind === 'hot' && wearsSetBonus(ctx, caster, 'grovespring', 2)) {
+    const own = target.auras.findIndex(
+      (a) =>
+        a.kind === 'hot' &&
+        a.sourceId === caster.id &&
+        (a.id === 'rejuvenation' || a.id === 'regrowth'),
+    );
+    if (own >= 0) return own;
+  }
   return target.auras.findIndex((a) => {
     // Only dot/hot auras are consumable, even by id: a raw splice skips the
     // stat-aura teardown expiry performs, so consuming a stat-carrying aura
@@ -406,16 +457,32 @@ export function runEffects(
   target: Entity | null,
   res: ResolvedAbility,
   attackAnimationStarted = false,
+  // Cast-scoped outgoing-heal multiplier for the direct 'heal' effect: 1 for
+  // every cast unless the caller marks this one (today only the Stonehearth
+  // 2pc's Stormcast-while-Stonebound Mending Waters, combat/
+  // shaman_stonehearth.ts). It multiplies the WHOLE resolved heal (authored
+  // roll plus the Spell Power rider) so a printed percent is delivered
+  // exactly; at 1 the arithmetic below is untouched.
+  castHealMult = 1,
   deferredBastionImpact = false,
   facingOverride?: number,
 ): void {
   const ability = res.def;
+  // The island's ability drill (tutorial/ability_drill.ts): the lesson is
+  // "use your own button on an effigy", so it credits on DELIVERY, not on
+  // damage. Here rather than in dealDamage for two reasons: this runs once
+  // per cast instead of once per damage instance, and a hit that lands for
+  // zero (a resisted bolt, a full absorb) was still the press the coach
+  // asked for. The resist branch that returns before this point credits
+  // itself (combat/casting_lifecycle.ts). Draws no rng.
+  if (target) creditAbilityDrill(ctx, p, target, ability.id);
   const vespersGloomtitheStacks = gloomtitheStacksForCast(p, ability.id);
   const initialTarget = target;
   const ascensionFxTargetId = target?.id ?? p.id;
   const ascensionFxTargetHostile = target !== null && ctx.isHostileTo(p, target);
   const isSpell = ability.school !== 'physical';
   const mods = ctx.playerMods(meta);
+  const primaryHealMult = primaryHealingMultiplier(meta.cls, mods.spec);
   // The resolved mastery/talent damage and heal multiplier for this ability
   // (talent_hit_mult.ts): the SAME number applyTalentMods already baked into
   // its authored base magnitudes, reused here to scale the SP/AP rider a
@@ -450,6 +517,7 @@ export function runEffects(
   // in the open with a full Gloam bank raises the shadow veil BEFORE this
   // cast's effects resolve, so the detonating Lurker's Strike is the doubled
   // one. Checked before breakStealth: a true-stealth opener banks instead.
+  const trueStealthOpener = capturedTrueStealthAmbush(ctx, p, ability.id);
   rogueGloamDetonation(ctx, p, ability.id);
   // acting breaks stealth (the opener itself still lands first inside the swing).
   // Stealth toggles and Rogue Sprint are allowed while remaining hidden.
@@ -532,7 +600,7 @@ export function runEffects(
     }
   }
 
-  // requiresAuraKind (Glacial Spike's Icicles, Victory Rush's kill window) is now
+  // requiresAuraKind (Rimeneedle's Icicles, Victor's Surge's kill window) is now
   // consumed atomically at cast commit in casting_lifecycle.ts's applyAbility,
   // alongside spendAbilityCost/armAbilityCooldown, not here: a ranged ability's
   // runEffects can run ticks after the cast committed (once its projectile
@@ -541,7 +609,7 @@ export function runEffects(
   // consuming its Doom pool after the cast is committed.
 
   let targetBuffIndex = 0;
-  for (const eff of res.effects) {
+  effects: for (const eff of res.effects) {
     switch (eff.type) {
       case 'destructionConflagrate': {
         if (target) advanceBurningPactTick(ctx, p, target);
@@ -599,8 +667,14 @@ export function runEffects(
           (ability.id === 'raptor_strike' || ability.id === 'mongoose_bite');
         let landedDamage = 0;
         // Veiled Edge (rogue sub engine): the first Lurker's Strike from
-        // inside the veil consumes the edge and strikes for double.
-        weaponMult *= consumeVeiledEdge(ctx, p, ability.id);
+        // inside the veil consumes the edge and strikes for +50% weapon
+        // damage. A true-stealth opener wins its own (stronger) reward
+        // instead and must not spend an armed Edge for a discarded return
+        // value: "cannot stack" leaves the Edge armed for the next eligible
+        // strike, so the consume call is skipped entirely here.
+        const veiledEdgeMult = trueStealthOpener ? 1 : consumeVeiledEdge(ctx, p, ability.id);
+        weaponMult *= trueStealthOpener ? trueStealthOpenerMultiplier(true) : veiledEdgeMult;
+        bonus = trueStealthOpenerScaleBonus(trueStealthOpener, bonus);
         const hit = ctx.meleeSwing(p, target, bonus, ability.name, {
           cannotBeDodged: eff.cannotBeDodged,
           normalizedInstant: eff.normalized,
@@ -679,7 +753,8 @@ export function runEffects(
             fx: 'paladinFinalEdict',
             ability: ability.id,
           });
-          triggerPaladinDawnRhythm(p, ability.id);
+          // Zealfire 2pc deepens the paired cut for wearers (dawnRhythmCutSec).
+          triggerPaladinDawnRhythm(p, ability.id, dawnRhythmCutSec(mods));
           tryGrantDawnsWrath(ctx, p);
         }
         if (hit && ability.id === 'vowkeeper_strike') {
@@ -705,9 +780,37 @@ export function runEffects(
         if (
           ability.id === 'marrowbreak' &&
           marrowbreakGuard?.type === 'druidMarrowbreakGuard' &&
-          druidMarrowbreakUsesGuard(p, marrowbreakGuard.belowFrac)
+          druidMarrowbreakUsesGuard(p, marrowbreakGuard.belowFrac) &&
+          // Cinderbark 4pc: the emergency guard no longer REPLACES the
+          // strike. This break is the one replacement site; skipping it for
+          // wearers lands the strike (with its authored flat-110 mult-2
+          // threat) while the druidMarrowbreakGuard arm below still applies
+          // the absorb and rage refund. Wearer-only rng note, disclosed by
+          // the set doc: the restored strike draws its damage and crit rolls
+          // below half health where the base path drew none.
+          !wearsSetBonus(ctx, p, 'cinderbark', 4)
         ) {
           break;
+        }
+        // A physical direct hit can miss like any melee attack (Hit rating reduces
+        // it, via swingMissChance), the same roll the sunder effect takes; a miss
+        // deals no damage and causes no threat. Rolled before this hit's damage and
+        // crit draws, and ONLY when it can actually fail: a hit-capped attacker
+        // cannot miss, so drawing there would fork the shared stream for nothing.
+        const directMissChance = isSpell ? 0 : swingMissChance(p, target);
+        if (directMissChance > 0 && ctx.rng.chance(directMissChance)) {
+          ctx.emit({
+            type: 'damage',
+            sourceId: p.id,
+            targetId: target.id,
+            amount: 0,
+            crit: false,
+            school: 'physical',
+            ability: ability.name,
+            kind: 'miss',
+          });
+          ctx.enterCombat(p, target);
+          break effects;
         }
         const rooted = isRootedOrChilled(target);
         const abilityMod = mods.abilities[ability.id];
@@ -767,9 +870,9 @@ export function runEffects(
         if (isSpell) dmg *= spellDamageMultFromAuras(p);
         if (!isSpell) dmg *= 1 - armorReduction(ctx.effectiveArmor(target), p.level);
         // Aether Surge (Chronomancy Phase 3): each held Arcane Charge scales the
-        // FULL post-spell-power, post-crit damage. The extra damage is what feeds
-        // more Temporal Echo healing (no hidden heal bonus). Deterministic; reads
-        // the caster's charge aura (combat/chronomancy.ts).
+        // FULL post-spell-power, post-crit damage. The extra damage feeds more
+        // Temporal Echo healing before Chronomancy applies its individual-mark
+        // rotation weight. Deterministic; reads the caster's charge aura.
         if (ability.id === ARCANE_SURGE_ID) dmg *= aetherSurgeDamageMult(p);
         dmg *= thundercallDamageMultiplier(ctx, p, ability.id);
         dmg *= druidApexPayoffMult(ctx, p, ability.id);
@@ -795,7 +898,9 @@ export function runEffects(
         // Read before the hunter/shaman follow-up hooks below, which can deal their
         // own damage: this must stay the damage THIS ability landed.
         const effectiveDamage = Math.max(0, targetHpBefore - target.hp);
-        onHunterPrimaryDamage(ctx, p, target, res, finalDamage);
+        // The crit rolled above is plumbed through as one argument (Coldsight
+        // 4pc observes it; no extra roll happens anywhere downstream).
+        onHunterPrimaryDamage(ctx, p, target, res, finalDamage, crit);
         if (ability.id === 'arcane_shot') runFrenzyFellShotCleave(ctx, p, target);
         if (ability.id === 'lightning_bolt') {
           thundercallOnArcBoltImpact(ctx, p);
@@ -1006,8 +1111,19 @@ export function runEffects(
       }
       case 'enrageChance': {
         // Guaranteed Enrage consumes no RNG; probabilistic Bloodletting draws
-        // exactly once at the authored chance.
-        if (eff.chance < 1 && !ctx.rng.chance(eff.chance)) break;
+        // exactly once at the authored chance. Emberfury 4pc makes
+        // Bloodletting's Enrage GUARANTEED for the wearer: the roll is
+        // SKIPPED at chance 1, never rolled-and-passed, so wearers
+        // legitimately shift the rng stream (disclosed in
+        // docs/prd/ignivar-set-bonus-final.md for seeded suites).
+        const guaranteed =
+          eff.chance >= 1 ||
+          (ability.id === 'bloodthirst' && mods.selected[setBonusFlag('emberfury', 4)] === true);
+        if (!guaranteed && !ctx.rng.chance(eff.chance)) break;
+        // Emberfury 2pc lives UPSTREAM: durationFlat rows rewrite the
+        // RESOLVED enrageChance durations (applyTalentMods), so eff.duration
+        // already carries the wearer's +2 and the tooltip reads the same
+        // number this site applies.
         ctx.applyAura(p, {
           id: 'fury_enrage',
           name: 'Enraged',
@@ -1095,7 +1211,8 @@ export function runEffects(
         // selectCascadeTargets resolves and ORDERS the whole list (primary first,
         // then the members nearest the primary within radius, capped at maxTargets)
         // BEFORE any heal or aura is applied. Each target then takes a small initial
-        // heal (Spell-Power-scaled, can crit) and a 13% group echo; the overlap rule
+        // heal (Spell-Power-scaled, can crit, scaled by the ally's missing health via
+        // cascadeReliefMultiplier) and a 13% group echo; the overlap rule
         // in placeGroupEcho keeps a pre-existing individual mark at 40%. The Arcane
         // conversion lives in combat/chronomancy.ts. (mage-chronomancy.md Phase 4)
         const primary = target ?? p;
@@ -1112,9 +1229,15 @@ export function runEffects(
           // by the massTemporalEcho case in classes.ts, and talentHealMult reaches
           // the SP rider here too, so Chronoweave's "all healing" bonus applies to
           // Temporal Cascade's initial heal the same way it does every other heal.
-          const healAmount =
+          // The rng draw stays FIRST and unconditional: the relief multiplier is
+          // pure health arithmetic applied after it, so the global stream is
+          // untouched and the parity goldens still line up.
+          const healRoll =
             ctx.rng.range(eff.heal.min, eff.heal.max) +
-            directHealBonus(p.spellPower, res.castTime, false, talentHealMult);
+            directHealBonus(p.healPower, res.castTime, false, talentHealMult);
+          // Cast on a healthy group this is 1 and the heal is exactly what it has
+          // always been; cast into real damage it scales up to the authored ceiling.
+          const healAmount = Math.round(healRoll * cascadeReliefMultiplier(ally.hp, ally.maxHp));
           ctx.applyHeal(p, ally, healAmount, ability.name);
           if (devPlaytest) {
             const applied = ally.hp - before;
@@ -1159,7 +1282,7 @@ export function runEffects(
           type: 'spellfx',
           sourceId: p.id,
           targetId: ally.id,
-          school: 'arcane',
+          school: ability.school,
           fx: 'temporalGlyph',
           ability: ability.id,
         });
@@ -1207,10 +1330,20 @@ export function runEffects(
         // Power rider. Preserve the legacy direct-heal draw order, however:
         // Last Rite used to roll its fixed min/max and crit before this change.
         const rolledAmount = ctx.rng.range(eff.min, eff.max);
+        const baseHealAmount =
+          eff.casterMaxHpPct === undefined
+            ? rolledAmount + directHealBonus(p.healPower, res.castTime, false, talentHealMult)
+            : Math.round(p.maxHp * eff.casterMaxHpPct);
+        // The cast-scoped multiplier (see the runEffects parameter note): the
+        // === 1 guard keeps every unmarked cast's arithmetic byte-identical.
+        const castHealAmount =
+          castHealMult === 1
+            ? baseHealAmount
+            : Math.max(1, Math.round(baseHealAmount * castHealMult));
         const healAmount =
           eff.casterMaxHpPct === undefined
-            ? rolledAmount + directHealBonus(p.spellPower, res.castTime, false, talentHealMult)
-            : Math.round(p.maxHp * eff.casterMaxHpPct);
+            ? scalePrimaryHealing(castHealAmount, primaryHealMult)
+            : castHealAmount;
         if (eff.canCrit === false) ctx.rng.chance(0);
         // Only this direct-heal effect opts into Beacon transfer. Derived,
         // periodic, chained, area, and self-heal effects remain ineligible.
@@ -1224,6 +1357,16 @@ export function runEffects(
           true,
           true,
         );
+        // The hub's optional healing lesson (tutorial/hub_healing_drill.ts):
+        // one credit per effective heal, from THIS primary direct-heal
+        // resolution only, before the Power Echo repeat below runs. That
+        // ordering is what keeps an echoed copy of this same cast (and every
+        // other derived/chained/procced applyHeal call, none of which run
+        // through this case) from ever double-crediting a single real cast.
+        creditHubHealingDrill(ctx, p, healTarget, healed, ability.id);
+        if (ability.id === 'scouring_mercy') {
+          doctrineScouringMercyRescue(ctx, p, meta, healTarget, healed);
+        }
         if (ability.id === 'healing_wave' || ability.id === 'tidecall') {
           depositMendingCurrent(ctx, p, healTarget, healAmount, ability.id);
         }
@@ -1294,11 +1437,21 @@ export function runEffects(
         // Selection and the per-hop spellfx arc adopted from Blaine1705's #1434.
         const first = target ?? p;
         if (first !== p && ctx.isHostileTo(p, first)) break;
-        const baseAmount =
+        const baseAmount = scalePrimaryHealing(
           ctx.rng.range(eff.min, eff.max) +
-          directHealBonus(p.spellPower, res.castTime, false, talentHealMult);
+            directHealBonus(p.healPower, res.castTime, false, talentHealMult),
+          primaryHealMult,
+        );
+        // Springmender 4pc (the Crucible set doc): Cascading Mend reaches a
+        // FOURTH ally, one extra hop past the authored jumps. Bespoke: no
+        // talent primitive reaches chainHeal's jump count, so the bend lives
+        // at this dispatch, gated on the wearer flag. Wearer-only rng note,
+        // disclosed: the extra hop draws its own heal-crit roll below;
+        // non-wearers build the exact chain and draws they always did.
+        const jumps =
+          eff.jumps + (wearsSetBonus(ctx, p, 'springmender', 4) ? SPRINGMENDER_4PC_BONUS_JUMPS : 0);
         const chain: Entity[] = [first];
-        while (chain.length <= eff.jumps) {
+        while (chain.length <= jumps) {
           const from = chain[chain.length - 1];
           let best: Entity | null = null;
           let bestFrac = Infinity;
@@ -1386,7 +1539,7 @@ export function runEffects(
         const hotSp = hybridHeal
           ? 0
           : hotTickBonus(
-              p.spellPower,
+              p.healPower,
               eff.duration,
               eff.interval,
               talentHealMult * (1 + mods.global.hotHealPct),
@@ -1397,7 +1550,10 @@ export function runEffects(
           kind: 'hot',
           remaining: eff.duration,
           duration: eff.duration,
-          value: hotBase + hotSp,
+          value:
+            eff.pctOfMax === undefined
+              ? scalePrimaryHealing(hotBase + hotSp, primaryHealMult)
+              : hotBase + hotSp,
           tickInterval: eff.interval,
           tickTimer: eff.interval,
           sourceId: p.id,
@@ -1408,11 +1564,8 @@ export function runEffects(
       }
       case 'absorb': {
         const shieldTarget = target ?? p;
-        const hasStasisSelfBuff = ability.effects.some(
-          (effect) => effect.type === 'selfBuff' && effect.kind === 'stasis',
-        );
         ctx.applyAura(shieldTarget, {
-          id: eff.auraId ?? (hasStasisSelfBuff ? `${ability.id}_absorb` : ability.id),
+          id: absorbAuraId(ability, eff),
           name: ability.name,
           kind: 'absorb',
           remaining: eff.duration,
@@ -1421,7 +1574,7 @@ export function runEffects(
             eff.amount +
             Math.round(p.maxHp * (eff.casterMaxHpPct ?? 0)) +
             absorbBonus(
-              p.spellPower,
+              p.healPower,
               eff.spellPowerCoeff ?? 0,
               talentHealMult * (1 + mods.global.absorbPct),
             ),
@@ -1588,6 +1741,7 @@ export function runEffects(
           if (!ctx.hasLineOfSight(p, hostile)) continue;
           const duration = ctx.diminishedCrowdControlDuration(p, hostile, 'fear', eff.duration);
           if (duration === null) continue;
+          const warlockBreakThreshold = warlockFearBreakThreshold(ability.id, hostile.maxHp);
           feared++;
           ctx.applyAura(hostile, {
             id: 'fear_incap',
@@ -1599,9 +1753,13 @@ export function runEffects(
             sourceId: p.id,
             school: ability.school,
             breaksOnDamage: true,
-            breakChanceScale: FEAR_BREAK_CHANCE_SCALE,
+            breakChanceScale:
+              warlockBreakThreshold === undefined ? FEAR_BREAK_CHANCE_SCALE : undefined,
             breakThreshold:
-              fearBreakPct > 0 ? Math.max(1, Math.round(hostile.maxHp * fearBreakPct)) : undefined,
+              warlockBreakThreshold ??
+              (fearBreakPct > 0
+                ? Math.max(1, Math.round(hostile.maxHp * fearBreakPct))
+                : undefined),
           });
           // The shout above (fx:'nova') is the cast moment, once, at the
           // caster; this is the landed-fear moment, once per creature
@@ -1614,8 +1772,8 @@ export function runEffects(
             fx: 'fearImpact',
             ability: ability.id,
           });
-          ctx.enterCombat(p, hostile);
-          if (hostile.kind === 'mob' && hostile.hostile) {
+          const enteredCombat = ctx.enterCombat(p, hostile);
+          if (enteredCombat && hostile.kind === 'mob' && hostile.hostile) {
             addThreat(hostile, p.id, 10 * ctx.threatMod(p, ability.school));
           }
         }
@@ -1738,8 +1896,7 @@ export function runEffects(
       case 'drainTick':
         break; // handled per channel tick
       case 'buffTarget': {
-        const auraId =
-          targetBuffIndex === 0 ? ability.id : `${ability.id}_${eff.kind}_${targetBuffIndex}`;
+        const auraId = buffTargetAuraId(ability, eff, targetBuffIndex);
         targetBuffIndex += 1;
         const applyBuff = (e: Entity) => {
           const lifetime = eff.permanent ? Number.POSITIVE_INFINITY : eff.duration;
@@ -1823,6 +1980,19 @@ export function runEffects(
       }
       case 'dot': {
         if (!target || target.dead) break;
+        // Any hostile dot must not outlive a duel between its caster and its
+        // target that ended on THIS tick: see duelJustEndedBetween (social/
+        // duel.ts). The reachable case today is a dot riding the SAME cast's
+        // own direct/AoE component (Fireball, Immolate): the direct hit
+        // resolves first in this same effects[] pass, so if IT is the
+        // clamp-and-end blow, endDuel() has already stripped everything the
+        // caster inflicted by the time this case runs, and the dot below
+        // would otherwise be stamped a beat later with no clamp left to
+        // catch it. A pure DoT (Corruption, SW:P) completing or refreshing
+        // on the same ending tick from an unrelated source is equally out of
+        // scope: it was never something the end's own clear was going to
+        // touch, so it correctly gates the same way.
+        if (duelJustEndedBetween(ctx, target, p)) break;
         // Snapshot Spell Power (or Ranged AP) into the per-tick value at cast time,
         // classic-style: the total DoT coefficient spread across its ticks. A DoT
         // that RIDES a direct/AoE nuke (Fireball, Pyroblast, Immolate) does NOT also
@@ -1871,10 +2041,14 @@ export function runEffects(
               ability,
               dotDuration,
               eff.interval,
-              talentDmgMult * (1 + mods.global.dotDmgPct),
+              talentDmgMult *
+                (1 + mods.global.dotDmgPct) *
+                (ability.id === 'shadow_word_pain' ? vespersDirgeSpMultiplier(meta) : 1),
             )
           : 0;
         const dotId = eff.auraId ?? ability.id;
+        const priorDirge =
+          ability.id === 'shadow_word_pain' ? captureDirgeReapplication(target, p.id) : null;
         ctx.applyAura(target, {
           id: dotId,
           name: ABILITIES[dotId]?.name ?? ability.name,
@@ -1888,6 +2062,8 @@ export function runEffects(
           school: eff.school ?? ability.school,
           leechPct: eff.leechPct,
         });
+        if (priorDirge)
+          refreshDirgeFieldAfterReapplication(ctx, p, meta, target, priorDirge, ability.range);
         if (dotId === 'rupture') {
           ctx.emit({
             type: 'spellfx',
@@ -2076,10 +2252,16 @@ export function runEffects(
       }
       case 'incapacitate': {
         if (!target || target.dead) break;
-        const remaining = ability.fearDr
-          ? ctx.diminishedCrowdControlDuration(p, target, 'fear', eff.duration)
+        // Fear keeps its own ladder; every other incapacitate asks
+        // incapacitateDrCategory, which today diminishes Sap alone (and returns
+        // null, meaning "no ladder", for the rest). Deterministic either way:
+        // the resolver draws no rng.
+        const incapDrCategory = ability.fearDr ? 'fear' : incapacitateDrCategory(ability.id);
+        const remaining = incapDrCategory
+          ? ctx.diminishedCrowdControlDuration(p, target, incapDrCategory, eff.duration)
           : eff.duration;
         if (remaining === null) break;
+        const warlockBreakThreshold = warlockFearBreakThreshold(ability.id, target.maxHp);
         ctx.applyAura(target, {
           id: `${ability.id}_incap`,
           name: ability.name,
@@ -2090,12 +2272,17 @@ export function runEffects(
           sourceId: p.id,
           school: ability.school,
           breaksOnDamage: true,
-          // Fear-family members (fearDr: Harrow, Morrowlash) get the graded
-          // break; plain incapacitates (Eye Jab, Wyvern Sting) insta-break.
-          breakChanceScale: ability.fearDr ? FEAR_BREAK_CHANCE_SCALE : undefined,
+          // Generic fear-family members (fearDr: Harrow, Morrowlash) get the
+          // graded chance. Harrow uses the deterministic Warlock budget, while
+          // plain incapacitates (Eye Jab, Drakesting) insta-break.
+          breakChanceScale:
+            ability.fearDr && warlockBreakThreshold === undefined
+              ? FEAR_BREAK_CHANCE_SCALE
+              : undefined,
+          breakThreshold: warlockBreakThreshold,
         });
         // Fear-flavored incapacitates (Harrow) sound at the target, distinct
-        // from plain stuns/incapacitates (Eye Jab, Wyvern Sting), which have
+        // from plain stuns/incapacitates (Eye Jab, Drakesting), which have
         // no dedicated fear audio. Gated to ability.id, not the broader
         // fearDr flag: death_coil (Morrowlash) also carries fearDr for its
         // diminishing-returns/break-chance treatment but has no fear
@@ -2123,11 +2310,20 @@ export function runEffects(
             ability: ability.id,
           });
         }
+        // Eye Jab (gouge) resets the caster's own swing timer (classic WoW's
+        // Gouge does the same): otherwise the auto-attack already in flight
+        // lands on the very next tick and, being a direct hit, breaks the
+        // incapacitate this same cast just applied.
+        if (ability.id === 'gouge') resetSwingTimer(ctx, p, meta);
         if (ability.awardsCombo && !comboAwarded) {
           ctx.awardCombo(p, target, ability.awardsCombo);
           comboAwarded = true;
         }
-        ctx.enterCombat(p, target);
+        // Sap (noCombatEntry) is the classic out-of-combat setup tool: it must
+        // leave BOTH sides out of combat. Entering combat here aggroed the
+        // victim on the spot, so the moment the incapacitate expired it charged
+        // the rogue who was still standing there in Duskveil.
+        if (!ability.noCombatEntry) ctx.enterCombat(p, target);
         break;
       }
       case 'polymorph': {
@@ -2177,7 +2373,7 @@ export function runEffects(
               const source = ctx.entities.get(sourceId);
               const sourceMeta = ctx.players.get(sourceId);
               if (!source || source.dead || !sourceMeta) return;
-              runEffects(ctx, source, sourceMeta, null, res, true, true, castFacing);
+              runEffects(ctx, source, sourceMeta, null, res, true, 1, true, castFacing);
             },
           });
           break;
@@ -2373,7 +2569,8 @@ export function runEffects(
           advanceSunGodVerdictForHit(ctx, p, sunVerdictHit.target, ability.id, sunVerdictHit.mark);
         }
         if (ability.id === DAWNFALL_ID && aoeTargets.length > 0 && !dawnRhythmTriggered) {
-          triggerPaladinDawnRhythm(p, ability.id);
+          // Zealfire 2pc deepens the paired cut for wearers (dawnRhythmCutSec).
+          triggerPaladinDawnRhythm(p, ability.id, dawnRhythmCutSec(mods));
           dawnRhythmTriggered = true;
         }
         if (eff.rageOnHit && meta.cls === 'warrior' && p.resourceType === 'rage') {
@@ -2540,12 +2737,15 @@ export function runEffects(
           ability: ability.id,
         });
         // AoE heals take the same per-target coefficient penalty as AoE damage.
-        const aoeHealBonus = directHealBonus(p.spellPower, res.castTime, true, talentHealMult);
+        const aoeHealBonus = directHealBonus(p.healPower, res.castTime, true, talentHealMult);
         let effectiveHealingTargets = 0;
         for (const m of friendliesInRadius(ctx, center, eff.radius)) {
           if (eff.playersOnly && m.kind !== 'player') continue;
           if (!ctx.hasLineOfSight(center, m)) continue;
-          const healAmount = ctx.rng.range(eff.min, eff.max) + aoeHealBonus;
+          const healAmount = scalePrimaryHealing(
+            ctx.rng.range(eff.min, eff.max) + aoeHealBonus,
+            primaryHealMult,
+          );
           const missingBefore = m.maxHp - m.hp;
           const resolution = { resolved: 0 };
           const healed = ctx.applyHeal(
@@ -2579,7 +2779,7 @@ export function runEffects(
         break;
       }
       case 'frozenOrb': {
-        // Frozen Orb (combat/frozen_orb.ts): release the drifting orb from the
+        // Frostglobe (combat/frozen_orb.ts): release the drifting orb from the
         // caster, snapshotting the per-pulse spell-power rider like a groundAoE.
         spawnFrozenOrb(
           ctx,
@@ -2642,7 +2842,7 @@ export function runEffects(
                 }
               : undefined,
         };
-        // A fresh Blizzard zone gets a fresh Frozen Orb refund budget (the
+        // A fresh Blizzard zone gets a fresh Frostglobe refund budget (the
         // same per-cast budget the old channel reset at channel start).
         if (eff.orbCdr) frostMageChannelStart(p, ability.id);
         // Visual riders (owner playtest): a delayed FIRE zone is a falling
@@ -2794,8 +2994,8 @@ export function runEffects(
               school: ability.school,
             });
           }
-          ctx.enterCombat(p, m);
-          if (m.kind === 'mob' && m.hostile)
+          const enteredCombat = ctx.enterCombat(p, m);
+          if (enteredCombat && m.kind === 'mob' && m.hostile)
             addThreat(m, p.id, 10 * ctx.threatMod(p, ability.school));
         }
         break;
@@ -2825,8 +3025,8 @@ export function runEffects(
             sourceId: p.id,
             school: ability.school,
           });
-          ctx.enterCombat(p, m);
-          if (m.kind === 'mob' && m.hostile)
+          const enteredCombat = ctx.enterCombat(p, m);
+          if (enteredCombat && m.kind === 'mob' && m.hostile)
             addThreat(m, p.id, 10 * ctx.threatMod(p, ability.school));
         }
         break;
@@ -3085,6 +3285,16 @@ export function runEffects(
           sourceId: p.id,
           school: ability.school,
         });
+        // The tooltip is literally "Vanish for 20 sec", so Greater Invisibility
+        // gets the SAME hostile drop as Smokestep/Vanish: dropSelfFromHostileFocus
+        // wipes the mob hate tables and drops the mage from combat, then
+        // dropTargetsOnStealth clears the residual mob target and every enemy
+        // player's lock (pets already go blind via petCanSeeStealthedTarget).
+        // Same order and same p.stealthed gate as the selfBuff/Vanish path above.
+        if (p.stealthed) {
+          const alsoHidden = dropSelfFromHostileFocus(ctx, p);
+          dropTargetsOnStealth(ctx, p, alsoHidden);
+        }
         break;
       }
       case 'aoeAllyDamage': {
@@ -3314,9 +3524,11 @@ export function runEffects(
           );
         }
         if (eff.heal) {
-          const healAmount =
+          const healAmount = scalePrimaryHealing(
             ctx.rng.range(eff.heal.min, eff.heal.max) +
-            directHealBonus(p.spellPower, res.castTime, false, talentHealMult);
+              directHealBonus(p.healPower, res.castTime, false, talentHealMult),
+            primaryHealMult,
+          );
           ctx.applyHeal(p, target, healAmount, ability.name, ability.id);
         }
         break;
@@ -3475,16 +3687,12 @@ export function runEffects(
         }
         // An ability can grant SEVERAL self-buffs at once (Arcane Power: spell damage AND
         // haste; Metamorphosis: damage AND haste). applyAura dedups by (id, sourceId), so
-        // every companion buff needs a distinct id or the last would evict the rest. The
-        // PRIMARY self-buff (the first kind on the DEF) keeps the bare ability id (so its
-        // icon/name resolve and the form/aspect toggle-off still finds it by id); companions
-        // get a kind-suffixed id. Compare by KIND, not object identity: applyTalentMods may
-        // have replaced the resolved effect objects, so a reference check would misfire.
-        const firstSelfBuffKind = ability.effects.find((e) => e.type === 'selfBuff')?.kind;
-        const isPrimarySelfBuff = eff.kind === firstSelfBuffKind;
+        // every companion buff needs a distinct id or the last would evict the rest; the
+        // rule (primary keeps the bare id, companions are kind-suffixed, an explicit
+        // auraId wins) lives in ./aura_ids.ts, shared with the HUD's aura-track catalog.
         const lifetime = eff.permanent ? Number.POSITIVE_INFINITY : eff.duration;
         ctx.applyAura(p, {
-          id: eff.auraId ?? (isPrimarySelfBuff ? ability.id : `${ability.id}_${eff.kind}`),
+          id: selfBuffAuraId(ability, eff),
           name: eff.auraName ?? ability.name,
           kind: eff.kind,
           remaining: lifetime,
@@ -3494,7 +3702,11 @@ export function runEffects(
           // value2/value3 are shared secondary slots: the generic selfBuff
           // passthrough and the Warlock drain/disable knobs both ride them, so
           // the explicit value wins and the Warlock knob is the fallback.
-          value2: eff.value2 ?? eff.healthDrainPctMax,
+          value2:
+            eff.value2 ??
+            (ability.id === 'demon_skin' && mods.global.warlockFiendhideMagicDrPct > 0
+              ? mods.global.warlockFiendhideMagicDrPct
+              : eff.healthDrainPctMax),
           value3: eff.value3 ?? eff.disableBelowHpPct,
           tickInterval: eff.healthDrainPctMax !== undefined ? 1 : undefined,
           tickTimer: eff.healthDrainPctMax !== undefined ? 1 : undefined,
@@ -3516,8 +3728,24 @@ export function runEffects(
             ability: ability.id,
           });
         }
-        if (eff.kind === 'stealth' && dropsCombatOnStealth(ability)) {
-          dropSelfFromHostileFocus(ctx, p);
+        // Vanish (dropsCombatOnStealth) drops the rogue from combat and wipes every
+        // hostile mob's hate table, flipping a wild mob to evade the instant it
+        // dropped something. This MUST run BEFORE dropTargetsOnStealth below: that
+        // sweep clears the mob's live aggro, and running it first would starve this
+        // pass's "did I drop anything" detection so the evade / combat-exit flip
+        // would never fire (a Kidney Shot into Vanish would leave the stunned mob
+        // chasing in combat for the whole stun).
+        const alsoHidden =
+          eff.kind === 'stealth' && dropsCombatOnStealth(ability)
+            ? dropSelfFromHostileFocus(ctx, p)
+            : [];
+        // Entering stealth (Duskveil/Smokestep/Stalk/Vanish) releases every hostile
+        // hunter's live lock on the caster. Gated on p.stealthed (applyAura sets it
+        // synchronously) so an aura rejected by an early return never wipes the
+        // board while the caster never actually hid. The toggle-OFF path above
+        // breaks before this apply, so it only fires on the way IN.
+        if (eff.kind === 'stealth' && p.kind === 'player' && p.stealthed) {
+          dropTargetsOnStealth(ctx, p, alsoHidden);
         }
         recalcPlayerStats(
           p,
@@ -3713,9 +3941,15 @@ export function runEffects(
         break;
       }
       case 'selfHealPctMax': {
-        const pct = p.auras.some((a) => a.id === 'furious_mending')
-          ? Math.max(eff.pct, 0.2)
-          : eff.pct;
+        // Emberfury 4pc: Bloodletting's self-heal rises to 8 percent of max
+        // health for the wearer. The furious_mending FLOOR (max with 0.2)
+        // stays on top, so the bonus is honestly inert inside that window
+        // (0.08 < 0.2; stated in the set doc).
+        const base =
+          ability.id === 'bloodthirst' && mods.selected[setBonusFlag('emberfury', 4)] === true
+            ? EMBERFURY_4PC_BLOODLETTING_HEAL_PCT_MAX
+            : eff.pct;
+        const pct = p.auras.some((a) => a.id === 'furious_mending') ? Math.max(base, 0.2) : base;
         ctx.applyHeal(p, p, Math.round(p.maxHp * pct), ability.name);
         if (ability.id === 'wildheart') runHunterWildheart(ctx, p);
         break;
@@ -3780,7 +4014,9 @@ export function runEffects(
         break;
       }
       case 'afflictionNeedle': {
-        if (target) resolveNeedleOfFate(ctx, p, target);
+        // eff.doom is the RESOLVED payload (the Hexthread 2pc rewrite raises
+        // it for wearers), so the dispatch and the tooltip splice agree.
+        if (target) resolveNeedleOfFate(ctx, p, target, eff.doom);
         break;
       }
       case 'afflictionSentence': {
@@ -3878,30 +4114,6 @@ export function runEffects(
         ctx.enterCombat(p, target);
         break;
       }
-      // The Vale Cup sport moves (docs/prd/vale-cup.md). All three route to the
-      // vale_cup module through the seam and silently no-op unless the caster
-      // is seated in the live Sowfield match's play phase.
-      case 'ballKick': {
-        ctx.vcupBallKick(p, eff.power, eff.loft, ability.range);
-        break;
-      }
-      case 'ballPass': {
-        ctx.vcupBallPass(p, eff.power, eff.loft, ability.range);
-        break;
-      }
-      case 'ballShoot': {
-        ctx.vcupShoot(p, eff.power, eff.loft, ability.range);
-        break;
-      }
-      case 'sportDash': {
-        ctx.vcupSportDash(p, eff.distance, eff.catchBall === true);
-        break;
-      }
-      case 'sportShove': {
-        if (!target || target.dead) break;
-        ctx.vcupSportShove(p, target, eff.distance);
-        break;
-      }
       case 'sunder': {
         if (!target || target.dead) break;
         // a sunder can miss like any melee attack (and Hit rating reduces it, via
@@ -3960,11 +4172,15 @@ export function runEffects(
           });
         }
         // sunder deals no damage: its threat is the flat value, stance-scaled
+        if (questGateBlocksAggro(ctx.players, target, p)) break;
         addThreat(target, p.id, res.threatFlat * ctx.threatMod(p, 'physical'));
         ctx.enterCombat(p, target);
         break;
       }
       case 'absorbSpentResource': {
+        // Forgewall 2pc lives UPSTREAM: a buffPct row rewrites the RESOLVED
+        // mult (applyTalentMods' scaleEffect extension), so eff.mult already
+        // carries the wearer's 5-per-rage and the tooltip reads the same.
         const amount = Math.round(res.cost * eff.mult);
         if (amount <= 0) break;
         ctx.applyAura(p, {

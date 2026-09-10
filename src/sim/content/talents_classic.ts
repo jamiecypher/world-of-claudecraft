@@ -147,11 +147,11 @@ const MAGE_SPECS: SpecDef[] = [
     // bypass that learnLevel gate (grants always do).
     'pyroblast',
     'Ignition',
-    'Your spell critical strikes burn the target for 40% of the damage dealt over 6 sec, stacking. Increases critical strike chance by 2%.',
+    'Your spell critical strikes burn the target for 30% of the damage dealt over 6 sec, stacking. Increases critical strike chance by 2%.',
     // The burn fraction is the scalable mastery axis (runtime: fire_mage's
     // igniteOnCrit copies the resolved crit damage); crit chance is the static
     // secondary.
-    { global: { ignitionPct: 0.4 }, stats: { crit: 0.02 } },
+    { global: { ignitionPct: 0.3 }, stats: { crit: 0.02 } },
   ),
   spec(
     'frost',
@@ -161,7 +161,7 @@ const MAGE_SPECS: SpecDef[] = [
     '#',
     'A spellcaster who controls the battlefield with ice, slows, and freezes. They build glacial power to destroy enemies with precise attacks.',
     // Signature swapped to the proc spender (owner leveling pass 2026-07-14):
-    // Icy Veins moved into the spec kit at level 12 (see combustion above).
+    // Coldsurge moved into the spec kit at level 12 (see combustion above).
     'ice_lance',
     'Brittlebreak',
     'Increases your Frost spell damage by 25%. Increases armor by 10%.',
@@ -228,15 +228,17 @@ const ROGUE_SPECS: SpecDef[] = [
     "A stealth striker. Openers from Duskveil add Gloam; at 3 Gloam your openers work without stealth, and the next one is free and starts the Shadow Veil, doubling your first Lurker's Strike inside it.",
     'hemorrhage',
     // Balance pass (maintainer sheet): tuned down from +40% crit damage and
-    // +10% Agility; the stealth-speed identity comes in instead (the Duskveil
-    // slow eases from 50% toward 25% at full mastery).
+    // +10% Agility; the stealth-speed identity comes in instead. The buffPct
+    // scales the Duskveil aura's own move-speed multiplier (0.5 = half speed),
+    // so 1.0 lifts it to 1.0: the mastery removes the stealth slow outright
+    // rather than easing it to 75%.
     'False Face',
-    'Increases the damage of your critical strikes by 25%, and you move 50% faster while in Duskveil.',
+    'Increases the damage of your critical strikes by 25%, and you move at 100% speed while in Duskveil.',
     {
       global: { critDmgPhysPct: 0.25 },
       ability: [
-        { ability: 'stealth', buffPct: 0.5 },
-        { ability: 'vanish', buffPct: 0.5 },
+        { ability: 'stealth', buffPct: 1 },
+        { ability: 'vanish', buffPct: 1 },
       ],
     },
   ),
@@ -309,7 +311,7 @@ const SHAMAN_SPECS: SpecDef[] = [
   spec(
     'restoration',
     'shaman',
-    'Spiritmend',
+    'Spiritcall',
     'healer',
     '+',
     'A healer using ancestral waves and efficient nature magic.',

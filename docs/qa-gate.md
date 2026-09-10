@@ -128,7 +128,8 @@ deliberately wants two full suites running at once.
 that is actually the shared-host bottleneck.
 
 **Task cache (Turborepo):** pure artifact steps (`i18n:gen`, `wiki:content`, `sfx:check`,
-`check:types`, `build:env`, `build:server`, `build:bot`, `build:bundle`) run through `npx turbo run`
+`check:types`, `build:env`, `build:server`, `build:bot`, `build:bundle`) run through `turbo run`
+(the gate spawns the `node_modules/.bin/turbo` binary directly)
 with inputs/outputs in root `turbo.json`. A warm second gate on an unchanged tree
 replays those steps from `.turbo/` (often under a second). Full vitest, browser tests,
 malware, changed-file Biome, and the i18n freshness `git diff` always run (they are not
@@ -226,6 +227,80 @@ leg over the changed sources plus the floor files as self-selecting seeds (vites
 its affected set with the given paths themselves; the property is pinned by execution in
 `tests/ci_shard_plan.test.ts`). The entry regenerates the generated artifacts once per
 job before spawning, since `npx vitest` has no npm lifecycle.
+
+**The real-SQL arm.** The shard gates and nightly's full suite each carry a per-job
+Postgres service and a job-level `TEST_DATABASE_URL`, so the pg integration suites
+(which skip green without the variable) actually run at the merge bar: the
+floor-resident ones on every PR, the `graph`-classified ones whenever selection reaches
+them and always in full mode. The wiring is pinned by a complete job classification in
+`tests/ci_workflow.test.ts` (every job key is pg-wired, guarded DB-less, or test-free)
+and guarded at runtime by `tests/ci_pg_presence.test.ts` (armed by the `WOCC_EXPECT_PG`
+sentinel riding the same pinned env block, plus `GITHUB_ACTIONS`; red wherever armed and
+the variable is missing; any diff that could lose the wiring forces full mode, where that
+suite always runs). Two asymmetries to know: a LOCAL
+`gate_select`/`gate` run sets no `TEST_DATABASE_URL` itself, so a green local gate
+proves less than CI unless you export it for the run; and the shard weight table
+predates the suites running in CI (the shared-database suites were harvested at their
+skipped cost and the branch-only suites are absent from it entirely), so the packing is
+approximate until the first post-wiring harvest lands.
+
+**The shard weight table and its carried rows.** `scripts/ci_shard_weights.generated.json`
+holds one measured millisecond cost per test file; the LPT partition packs the shards from
+it, and a file with no row is planned at `MEASURED_FALLBACK_MS` (the table's own median).
+`tests/ci_shard_partition.test.ts` grades it two ways: at least 95 percent of the walked
+test tree must carry a row (below that the balance claim stops being measured, since the
+rest is planned at one shared guess), and every row the newest harvest did NOT measure must
+carry a machine-readable attribution in `__provenance.carried`. The second check prevents a
+fallback-valued guess from masquerading as a measurement. The attribution methods and the
+fabrication shape caught by the modal check live in
+`scripts/lib/ci_shard_weight_carry.mjs`. The partition pin and the harvester's
+local-missing mode both use `scripts/lib/ci_shard_walk.mjs`, so they measure the same test
+population.
+
+Two writer modes may touch the table, and neither hand-edits it. A green FULL-MODE CI run is
+harvested wholesale with `node scripts/ci_shard_weights_harvest.mjs <run-id>`, which
+declares every row it wrote as harvested. Between harvests, a test file CI has not measured
+yet (for example, one added after the run) is carried with
+`node scripts/ci_shard_weights_harvest.mjs --carry-local [--reason "<why>"] tests/<file>.test.ts=<ms>,<ms>,<ms>`,
+which takes the MEDIAN of the runs given and writes a `local-median` entry naming every run,
+the date, and the REASON the row is carried rather than harvested. All three fields are
+required: `carriedDefects` rejects a `local-median` row with a blank or missing reason, so a
+carried weight always says which harvest it is standing in for. The mode refuses to
+overwrite a harvested row and refuses to write a table failing its own contract. Measure the
+runs the way the harvest does, from the vitest reporter line
+`scripts/lib/ci_shard_weight_parse.mjs` parses, on an otherwise idle machine and on the
+merged tree: a duration measured while other work is mutating the tree is not a measurement
+of what CI will run.
+
+**Carrying newly added suites.** A change that adds enough test files can put the coverage
+floor under 0.95 because no harvest has measured them. `--carry-local-missing` enumerates
+every walked test file the table does not measure (never a hand-kept list, so a file added
+late cannot be missed), runs each `--runs` times, reads each duration from the SAME reporter line
+`scripts/lib/ci_shard_weight_parse.mjs` parses out of a CI log, and hands the medians to the
+ordinary carry path, contract check included. It refuses rather than guessing if any run
+prints no parsable duration.
+
+```
+node scripts/ci_shard_weights_harvest.mjs --carry-local-missing --runs 3
+npx vitest run tests/ci_shard_partition.test.ts tests/ci_shard_weight_carry.test.ts
+git diff --stat scripts/ci_shard_weights.generated.json
+```
+
+Run it ONCE, after all suites have landed and on an otherwise idle tree. Both conditions are
+load-bearing: a carry taken while files are still arriving is stale as soon as the next
+one appears, and a duration measured while other work is mutating the tree is not a
+measurement of what CI will run. It also
+carries any uncommitted test file present in the tree, which is another reason to wait until
+the change is complete.
+
+Acceptance, all four: the run reports the same file count it enumerated and prints the
+reason it recorded on each row; `tests/ci_shard_partition.test.ts` is fully green, which
+means both the coverage arm clears 0.95 AND the committed-table arms still pass
+(`harvestedFiles` plus the carried count equals the row count, and every carried row is
+attributed with a method, a date and a reason); `tests/ci_shard_weight_carry.test.ts` is
+green; and the diff shows only added rows plus the provenance block, never a changed
+existing row, since a local carry must never move a CI-harvested weight. Carried rows are a
+stopgap: replace them with a wholesale harvest from the next green full-mode CI run.
 
 **The long-sims lanes** (Phase 4; split in two by the lane-diet PR). The
 `CI_LONG_SUITES` files (`scripts/lib/ci_shard_plan.mjs`: the suites measured over 90
@@ -431,6 +506,17 @@ even start): `.github/workflows/ci-stall-rerun.yml` drives `scripts/ci_stall_rer
 to rerun runs killed by that narrow signature, and the driver can be invoked by hand
 for a stalled run. Triage recipes for both classes: the `ci-triage` skill.
 
+One more bounded retry lives inside a SETUP step, not a test leg: the browser jobs'
+Install Chromium step gives `playwright install-deps` one time-bounded try, then
+verifies the capability the suite demonstrably needs (CJK font coverage) directly,
+retries a targeted font install off the primary archive mirror, and fails loudly,
+still setup-class, only when no route produced the fonts (three merge-queue rejections
+on 2026-08-19 were that package-manager half dead at zero mirror throughput, and the
+first split run proved fonts were its one load-bearing effect). It can never touch a
+test result, every try is visible in the job log, and the exact block is pinned by
+`tests/helpers/playwright_install_block.ts` via `tests/ci_workflow.test.ts` and
+`tests/nightly_workflow.test.ts`.
+
 **Evidence it works.** Fault injection, 5/5 caught: a `Math.random()` in `src/sim`, a combat
 constant, a content record, a sim-emitted player string, and a deleted weapon `.glb`. In two
 of those (`Math.random` and the asset deletion) `vitest related` selected **nothing** and
@@ -498,6 +584,7 @@ before reporting readiness.
 | Privacy and security | `privacy-security-review` | `woc_security` |
 | Decisive tests | `test-coverage-auditor` | `woc_test_coverage` |
 | Frontend and graphics | `frontend-seam-reviewer` | `woc_frontend` |
+| GPU preparation | `render-performance-reviewer` | (not yet mirrored) |
 | Release malware | `release-malware-audit` | `woc_release_malware` |
 | Content same-change obligations | `content-obligations-reviewer` | (not yet mirrored) |
 | Gate/CI selection integrity | `gate-integrity-reviewer` | (not yet mirrored) |
@@ -514,7 +601,22 @@ indexes, pool pressure, locks, timeout scope, write amplification, driver/depend
 PostgreSQL engine/resource/configuration/topology changes, and production-scale observability.
 Server-hot-path review owns the non-SQL server budget: tick CPU, broadcast fan-out and
 serialization, cache seams, and retention for anything that grows (the seams in
-`server/CLAUDE.md` "Hot paths"). Dispatch every role whose set of risk applies.
+`server/CLAUDE.md` "Hot paths"). GPU-preparation review owns what the client asks the GPU to
+prepare and when: prewarm homes and twins, compile and reveal gates, program-key moves,
+post-boot lights, secondary GL contexts, the background queue and its admission budget, and
+the stand-in registry (the contract in `src/render/CLAUDE.md` "GPU work: every new producer is
+a client of the scheduler"), where frontend review keeps the presentation seams and tier
+fairness. Dispatch every role whose set of risk applies.
+
+Decisive-tests review has one dispatch trap worth stating, because its failure mode is
+silent: it resolves the diff itself, so dispatching it where `git diff` comes back empty (a
+worktree it was not pointed at, an already-committed range, a tree whose changes are staged
+elsewhere) used to return an out-of-scope sentence that reads exactly like a clean audit.
+Give it the range or the file list explicitly whenever the change is not plain unstaged
+working-tree edits, and treat a report with an empty per-behavior verdict list as a failed
+dispatch to re-run, never as coverage. Its charter now refuses both shapes: an empty diff is
+reported as an unresolved diff naming the commands tried, and an in-scope audit must emit a
+non-empty claim list with a verdict per claim as its final message.
 
 ## Keep the gate current
 

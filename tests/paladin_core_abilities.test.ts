@@ -89,7 +89,10 @@ describe('Paladin core abilities', () => {
     sim.setSpec('holy');
     const enemy = hostileNear(sim);
     enemy.swingTimer = 999;
-    sim.rng.chance = () => false;
+    // Fail every roll EXCEPT the near-certain spell-hit one: Mercy Lance is an
+    // instant hostile spell, so a blanket false resists it and nothing lands.
+    sim.player.hitBonus = 1;
+    sim.rng.chance = (chance: number) => chance >= 1;
     sim.targetEntity(enemy.id);
     sim.castAbility('mercy_lance');
 
@@ -184,7 +187,10 @@ describe('Paladin core abilities', () => {
     sim.setSpec('holy');
     const enemy = hostileNear(sim);
     enemy.swingTimer = 999;
-    sim.rng.chance = () => false;
+    // Fail every roll EXCEPT the near-certain spell-hit one: Mercy Lance is an
+    // instant hostile spell, so a blanket false resists it and nothing lands.
+    sim.player.hitBonus = 1;
+    sim.rng.chance = (chance: number) => chance >= 1;
     grantDevotion(sim.player, 20);
     activateDivineAscension(sim.player);
 
@@ -348,7 +354,7 @@ describe('Paladin core abilities', () => {
     expect(damage.player.paladinDevotion?.value).toBe(1);
   });
 
-  it('doubles Holy healing generation while Avenging Wrath is active', () => {
+  it('doubles Holy healing generation while Zealwing is active', () => {
     const sim = new Sim({ seed: 32, playerClass: 'paladin', autoEquip: true });
     sim.setPlayerLevel(20);
     sim.setSpec('holy');
@@ -363,7 +369,7 @@ describe('Paladin core abilities', () => {
     expect(sim.player.paladinDevotion?.value).toBe(14);
   });
 
-  it('doubles Protection damage generation while Avenging Wrath is active', () => {
+  it('doubles Protection damage generation while Zealwing is active', () => {
     const sim = new Sim({ seed: 33, playerClass: 'paladin', autoEquip: true });
     sim.setPlayerLevel(20);
     sim.setSpec('protection');

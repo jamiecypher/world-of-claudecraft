@@ -150,4 +150,32 @@ export const table: ReliquaryLocaleTable = {
     name: 'Rissbande',
     desc: 'Die persönlichen Rissbande, geprägt für jeden Champion der Gruppe, die den ersten Durchgang eines gewerteten Risses gewinnt. Ein Charakter kann immer nur das eigene besitzen.',
   },
+  conquerors_ignivar: {
+    name: 'Schmelztiegel der Letzten Quelle',
+    desc: 'Epische Beute von Ignivar, Herold der Letzten Flamme.',
+  },
+  conquerors_ignivar_heroic: {
+    name: 'Heroisch: Schmelztiegel der Letzten Quelle',
+    desc: 'Nur heroisch erhältliche Waffen von Ignivar, Herold der Letzten Flamme.',
+  },
+  conquerors_varkhul: {
+    name: 'Der Innere Schmelztiegel',
+    desc: 'Epische Beute von Varkhul, Schmiedevater der Letzten Flamme.',
+  },
+  conquerors_varkhul_heroic: {
+    name: 'Heroisch: Der Innere Schmelztiegel',
+    desc: 'Nur heroisch erhältliche Schilde und Waffen von Varkhul, Schmiedevater der Letzten Flamme.',
+  },
+  conquerors_set_bramblehide: {
+    name: "Roots' Dornenhaut",
+    desc: 'Die vollständige Lederfamilie Roots’ Dornenhaut.',
+  },
+  professions_crucible: {
+    name: 'Schmelztiegel-Handwerkskunst',
+    desc: 'Elf im Schlachtzug gefertigte Sammlungen, jeweils mit einem Brust-, Taillen- und Fußteil. Handbücher und Formeln sind Wissen, keine Reliquien.',
+  },
+  professions_forgebreaker: {
+    name: 'Schmiedebrecher',
+    desc: 'Die Stimme der Letzten Quelle, aus der Schmiede befreit und in einem Hammer aus eigener Hand getragen.',
+  },
 };

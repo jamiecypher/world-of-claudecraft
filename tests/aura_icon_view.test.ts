@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { POWERUPS } from '../src/sim/content/augments';
 import { CHOICE_ROWS } from '../src/sim/content/choice_rows';
+import { ITEMS } from '../src/sim/data';
 import {
   auraIconCssBackground,
   createAuraIconResolver,
@@ -13,10 +14,12 @@ import {
 import {
   AURA_IMAGE_IDS,
   abilityImageUrl,
+  auraIconRecipe,
   auraImageUrl,
   hasAbilityIconIdentity,
   hasAuraImageIdentity,
   hasAuraRecipe,
+  isUnknownIconRecipe,
 } from '../src/ui/icons';
 import { observeFiestaPowerupAuras } from './helpers/fiesta_powerup_aura_observer';
 
@@ -88,7 +91,6 @@ const GENERATED_ABILITY_AURAS = [
   ['hammer_of_justice_stun', 'hammer_of_justice'],
   ['kidney_shot_stun', 'kidney_shot'],
   ['pounce_stun', 'pounce'],
-  ['sport_shoulder_stun', 'sport_shoulder'],
   ['storm_bolt_stun', 'storm_bolt'],
 ] as const;
 
@@ -142,6 +144,8 @@ const REUSED_PAINTED_RUNTIME_AURA_SOURCES = [
 // painted ability or authored talent icon that owns the state in production.
 const POST_OVERHAUL_RUNTIME_AURA_SOURCES = [
   ['aegis_first_dawn_speed', 'aegis_first_dawn'],
+  // Benison Dawnweave 4pc mend: same icon family as the Seraphic Vigil it pays off.
+  ['benison_dawnweave_mend', 'seraphic_vigil'],
   ['bloodhook_bleed', 'bloodhook'],
   ['bloodhook_pending', 'bloodhook'],
   ['dawns_wrath', 'hammer_of_wrath'],
@@ -176,6 +180,8 @@ const POST_OVERHAUL_RUNTIME_AURA_SOURCES = [
   ['loping_stride', 'cat_form'],
   ['marrowbreak_guard', 'marrowbreak'],
   ['oath_chain_pull', 'oath_chain'],
+  // Oathpyre 4pc consume shield: same icon family as the Solar Reprisal proc.
+  ['oathpyre_bulwark', 'vowkeeper_strike'],
   ['pack_ferocity', 'pack_command'],
   ['perpetual_sun_generation', 'divine_ascension'],
   ['possess_evil_eye_sentence_echo', 'possess_evil_eye'],
@@ -196,6 +202,8 @@ const POST_OVERHAUL_RUNTIME_AURA_SOURCES = [
   ['reaping_command_graveguard', 'reaping_command'],
   ['reaping_command_gravewing', 'reaping_command'],
   ['reaping_command_warrior', 'reaping_command'],
+  // Slagsnare 4pc preserve lockout: same icon family as the Woundrend consume.
+  ['slagsnare_momentum_icd', 'mongoose_bite'],
   ['shaman_ancestral_bulwark', 'lightning_shield'],
   ['shaman_ancestral_bulwark_icd', 'lightning_shield'],
   ['shaman_echoing_elements_damage', 'chain_lightning'],
@@ -222,6 +230,8 @@ const POST_OVERHAUL_RUNTIME_AURA_SOURCES = [
   ['shaman_warded_elements', 'lightning_shield'],
   ['shaman_wayfarer_grace', 'ghost_wolf'],
   ['shaman_wayfarer_grace_icd', 'ghost_wolf'],
+  // Emberscreed 4pc instant-hymn empower: same icon family as Scouring Hymn.
+  ['set_emberscreed_4pc', 'smite'],
   ['shrapnel_wound', 'shrapnel_charge'],
   ['solar_reprisal', 'vowkeeper_strike'],
   ['solar_step_slow_immunity', 'solar_step'],
@@ -274,7 +284,7 @@ describe('resolveAuraIconId', () => {
   });
 
   it('recovers all unambiguous generated ability identities', () => {
-    expect(GENERATED_ABILITY_AURAS).toHaveLength(65);
+    expect(GENERATED_ABILITY_AURAS).toHaveLength(64);
     for (const [id, expected] of [...GENERATED_ABILITY_AURAS, ...SOURCE_DERIVED_AURAS]) {
       expect(resolve(id), id).toBe(expected);
     }
@@ -303,7 +313,7 @@ describe('resolveAuraIconId', () => {
     // ProcDef producers plus the closed semantic inventory above.
     expect(choiceSources).toHaveLength(7);
     expect(new Set(choiceSources.map(([id]) => id)).size).toBe(choiceSources.length);
-    expect(POST_OVERHAUL_RUNTIME_AURA_SOURCES).toHaveLength(99);
+    expect(POST_OVERHAUL_RUNTIME_AURA_SOURCES).toHaveLength(103);
     const expected = new Map<string, string>([
       ...choiceSources,
       ...NON_CHOICE_RUNTIME_AURA_SOURCES,
@@ -320,7 +330,7 @@ describe('resolveAuraIconId', () => {
       POWERUPS.reduce((count, definition) => count + definition.buffs.length, 0),
     );
     expect(REUSED_PAINTED_RUNTIME_AURA_SOURCES).toHaveLength(12);
-    expect(RUNTIME_AURA_ICON_SOURCE_IDS.size).toBe(139);
+    expect(RUNTIME_AURA_ICON_SOURCE_IDS.size).toBe(143);
     for (const [id, source] of expected) {
       const paintedIdentity = hasAuraImageIdentity(id) ? id : source;
       const imageUrl = auraImageUrl(paintedIdentity);
@@ -463,6 +473,18 @@ describe('resolveAuraIconId', () => {
     expect(resolve('silence_abyssal_horror', 'silence')).toBe('aura_silence');
   });
 
+  it('resolves the well-fed food buff to its own painted recipe (the 11c unification)', () => {
+    // Under the ONE unified 'well_fed' id every buff food, farm dish and
+    // apex plate alike, lands on masterwrought's dedicated AURA_RECIPES row
+    // rather than the generic aura_<kind> fallback the retired per-kind
+    // namespace fell to: a player-visible improvement of the unification,
+    // asserted as the identity recipe (never deleted back to the fallback).
+    const iconId = resolve('well_fed', 'buff_sta');
+    expect(iconId).toBe('well_fed');
+    expect(isUnknownIconRecipe(auraIconRecipe(iconId))).toBe(false);
+    expect(resolve('elixir_buff_sta', 'buff_sta')).toBe('elixir_buff_sta');
+  });
+
   it('falls back to the generic aura-kind identity when no authored identity exists', () => {
     expect(resolve('unknown_runtime_aura', 'buff_ap_pct')).toBe('aura_buff_ap_pct');
     for (const hostile of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
@@ -602,5 +624,78 @@ describe('resolveAuraIconId', () => {
     );
     expect(runtime).toContain("(id) => cachedProceduralIconDataUrl('aura', id)");
     expect(runtime).toContain("crestIconUrl('status_combat')");
+  });
+});
+
+describe('the FLASK marker picks a distinct glyph from its elixir twin', () => {
+  // A flask, an elixir and a scroll of one stat mint the SAME aura id, so the
+  // id alone can never tell them apart and all three painted the shared
+  // aura_<kind> glyph. The wire's `fl` marker is what separates them, and a
+  // flask is the one worth separating: it survives death and cannot be
+  // right-clicked off.
+  const resolve = (aura: { id: string; kind: string; flask?: boolean }): string =>
+    resolveAuraIconId(aura, hasAbilityIconIdentity, hasAuraRecipe, hasAuraImageIdentity);
+
+  it('an UNMARKED buff keeps whatever it resolved to before, byte for byte', () => {
+    // The elixir family's own id carries a dedicated recipe, so an unmarked
+    // aura answers with the id. That IS the pre-existing behavior, and it is
+    // also why the flask arm has to outrank the id arm: the id is shared.
+    expect(hasAuraImageIdentity('elixir_buff_sta')).toBe(true);
+    expect(resolve({ id: 'elixir_buff_sta', kind: 'buff_sta' })).toBe('elixir_buff_sta');
+    expect(resolve({ id: 'elixir_buff_sta', kind: 'buff_sta', flask: false })).toBe(
+      'elixir_buff_sta',
+    );
+  });
+
+  it('a MARKED buff takes its own flask glyph, on every flask stat', () => {
+    for (const kind of ['buff_sta', 'buff_ap', 'buff_int']) {
+      expect(resolve({ id: `elixir_${kind}`, kind, flask: true }), kind).toBe(`flask_${kind}`);
+    }
+  });
+
+  it('falls back to the shared glyph for a marked kind with NO flask recipe', () => {
+    // The safe direction: adding the marker can never blank an icon.
+    expect(hasAuraRecipe('flask_buff_haste')).toBe(false);
+    expect(resolve({ id: 'unknown_probe_aura', kind: 'buff_haste', flask: true })).toBe(
+      'aura_buff_haste',
+    );
+  });
+
+  it('leaves an unrelated aura alone even if something marked it', () => {
+    // The marker only ever reaches a stat that HAS a flask recipe; a dot has
+    // none, so its own art stands.
+    expect(resolve({ id: 'moonfire', kind: 'dot', flask: true })).toBe('moonfire');
+  });
+
+  it('the RESOLVER cache keys on the marker, not the id and kind alone', () => {
+    // THE trap this closes: a flask and an elixir share an aura id, so a cache
+    // keyed on id+kind would hand the second one whichever glyph the first
+    // resolved, and the order would decide what the player saw.
+    const resolver = createAuraIconResolver(
+      hasAbilityIconIdentity,
+      hasAuraRecipe,
+      hasAuraImageIdentity,
+    );
+    expect(resolver({ id: 'elixir_buff_sta', kind: 'buff_sta' })).toBe('elixir_buff_sta');
+    expect(resolver({ id: 'elixir_buff_sta', kind: 'buff_sta', flask: true })).toBe(
+      'flask_buff_sta',
+    );
+    // ...and back, so neither order poisons the other.
+    expect(resolver({ id: 'elixir_buff_sta', kind: 'buff_sta' })).toBe('elixir_buff_sta');
+  });
+
+  it('every flask kind the CATALOG ships has a recipe (the family is complete)', () => {
+    // Derived from the live flask defs rather than a literal list: a new flask
+    // whose stat has no recipe silently falls back to the shared glyph, and
+    // this reds first. Non-vacuous by its own floor.
+    const kinds = new Set(
+      Object.values(ITEMS)
+        .filter((def) => def.kind === 'flask' && def.elixir)
+        .map((def) => def.elixir?.kind as string),
+    );
+    expect(kinds.size).toBeGreaterThanOrEqual(3);
+    for (const kind of kinds) {
+      expect(hasAuraRecipe(`flask_${kind}`), kind).toBe(true);
+    }
   });
 });

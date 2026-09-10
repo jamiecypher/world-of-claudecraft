@@ -11,6 +11,10 @@
 import type { ReliquaryLocaleTable } from '../reliquary_i18n';
 
 export const table: ReliquaryLocaleTable = {
+  professions_crucible: {
+    name: '熔炉匠艺',
+    desc: '十一套团队副本制作套装，每套均包含胸甲、腰带和鞋靴。图样与配方属于知识，不列为藏品。',
+  },
   // Dungeon, delve and world-boss pages: entities.* names verbatim.
   conquerors_hollow_crypt: {
     name: '空洞墓穴',
@@ -174,5 +178,29 @@ export const table: ReliquaryLocaleTable = {
   horizons_riftbound: {
     name: '裂隙之戒',
     desc: '个人专属的裂隙之戒，为率先通关分级裂隙的队伍中每位勇士铸造。每个角色只能拥有自己的那一枚。',
+  },
+  conquerors_ignivar: {
+    name: '最后泉源熔炉',
+    desc: '来自伊格尼瓦，末焰使者的史诗战利品。',
+  },
+  conquerors_ignivar_heroic: {
+    name: '英雄：最后泉源熔炉',
+    desc: '伊格尼瓦，末焰使者身上仅限英雄难度掉落的武器。',
+  },
+  conquerors_varkhul: {
+    name: '内环熔炉',
+    desc: '来自末焰锻父瓦尔库尔的史诗战利品。',
+  },
+  conquerors_varkhul_heroic: {
+    name: '英雄：内环熔炉',
+    desc: '末焰锻父瓦尔库尔身上仅限英雄难度掉落的盾牌与武器。',
+  },
+  professions_forgebreaker: {
+    name: '碎炉者',
+    desc: '末泉的声音从锻炉中解放，寄宿在你亲手打造的战锤中。',
+  },
+  conquerors_set_bramblehide: {
+    name: '鲁茨的荆棘皮甲',
+    desc: '完整的荆棘皮甲系列。',
   },
 };
